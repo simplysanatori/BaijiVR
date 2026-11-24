@@ -60,7 +60,7 @@ tar --sort=name -cjf "$ARCHIVE" -C "$STAGE_DIR/home/steamos" baiji
 ```
 
 The archive's root entry is `baiji/`, matching the snapshot installation and upgrade
-commands in `Readme.md`. Check the archive contents and checksum before attaching it to a
+commands in `docs/UPSTREAM-README.md`. Check the archive contents and checksum before attaching it to a
 GitHub release; release upload/publication is a separate explicit step.
 
 To test an upgrade without touching a Frame install, extract the prior release and then the new

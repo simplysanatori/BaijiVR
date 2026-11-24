@@ -199,3 +199,24 @@
   contains the OpenXR loader and SDK source; use it to investigate loader behavior or
   SDK integration details, not as a substitute for checking extensions exposed by the
   Frame runtime.
+
+## Baiji VR fork
+
+Technical detail moved out of the README. The README is for players and stays short; settings and controls in full
+are in `docs/USER_GUIDE.md`; `docs/UPSTREAM-README.md` is Baiji's README as it was at 75d194fd95 and is not edited.
+
+- The fork starts at Baiji's 75d194fd95 (`develop`). The plan is to bring its changes upstream.
+- Path of Radiance had three causes: a dual-core FIFO reset beside the GPU thread (`ProcessorInterface` waits for
+  it), the game's own GPU-hang watchdog (patched off for `GFEE01` only, in `Data/Sys/GameSettings/GFEE01.ini`), and
+  CTRL turning the reads off while the GPU thread was mid-command (`FlushGpu` in `CommandProcessor`). Stopping the
+  race costs a wait at those two places; it was timed in Path of Radiance only.
+- The two screen options of Immersive are defaults, not locks, and bundled game profiles do not replace them.
+- Licences: Dolphin's files are GPL-2.0-or-later. Files that follow Azahar for Frame's say GPL-3.0-or-later in their
+  first lines (`DynamicResolutionController.h`, `WindowFit.h`, `GameModeWindows.*`, `GameMods/Install.cpp`), so a
+  build as a whole is GPL-3.0-or-later. Keep those notices when the files change.
+- Testing: unit tests (`VRFrameUITest`, `GameModsTest`, `DynamicResolutionTest`), and games on a desktop with a
+  simulated headset. Headset results are the owner's to confirm.
+
+How it was made: I started this project and used AI (Claude) to speed up development. I write, review and fix code
+by hand all the way through, keep the AI's work checked and reined in, and aim to keep the port as lightweight as
+possible. I test it on my own Steam Frame.

@@ -1,100 +1,149 @@
 # Baiji VR
 
-A personal fork of [Baiji](https://github.com/thejerf/baijiSteamVR) with fixes and optimizations for playing GameCube and Wii games on the Steam Frame.
+A personal fork of Baiji for playing GameCube and Wii games on the Steam Frame.
 
-Baiji is a Steam Frame cut of [dolphinXR](https://github.com/iChris4/dolphinXR/), a VR fork of [Dolphin](https://dolphin-emu.org). This fork's home is [simplysanatori/baijiSteamVR](https://github.com/simplysanatori/baijiSteamVR).
+Based on [Baiji](https://github.com/thejerf/baijiSteamVR), a Steam Frame version of [dolphinXR](https://github.com/iChris4/dolphinXR/), which is based on [Dolphin](https://dolphin-emu.org/).
 
-## What this is
+This is a testing area for fixes and optimizations. The plan is to bring all of them upstream. You are welcome to use it; expect rough edges. It is not official, so please don't report its problems to Dolphin.
 
-This is a testing area. New work lands here first, and the plan is to bring all of it upstream.
+## Features
 
-If you want to use it anyway, you are welcome to. Expect rough edges.
-
-It is not official, and it is not affiliated with Dolphin or Baiji's author. Please do not report problems with this fork to the Dolphin project.
-
-## How well tested is it?
-
-The new work is tested on a desktop with a simulated headset. Testing on a real Steam Frame is in progress. Nothing here comes with performance numbers from the Frame.
-
-## Extra features
-
-- In-headset VR menu with tabs for **Main**, **Screen**, **Controls**, **Mods** and **Settings**
-- Pointer beams, short on-screen messages, and moving or resizing the screen with the grips
-- Quick Save, Quick Load, and save states with pictures
-- Autosave
-- Controller diagrams that show your own bindings
-- **Stereoscopic 3D** and **Immersive**, with a shortcut to switch mid-game
-- **3D Depth** that follows the distance between your eyes
-- A **Mods** page for mods, patches, cheats and texture packs
-- Cover art for GameCube and Wii games, in the list and in Grid View
-- A dark style, and windows that fit the screen in Game Mode
-- The Frame controllers' own button names
-
-## The VR menu
-
-Hold **Menu** for one second. Everything below is also on the **Shortcuts** page of the **Controls** tab.
-
-| Do this | Press |
-| --- | --- |
-| Close Game | Hold **View** for 1.5 seconds |
-| Quick Save | **View**, then Right Bumper |
-| Quick Load | **View**, then hold Left Bumper |
-| Fast Forward | **View**, then Right Trigger |
-| Reset Screen or View | Hold Right Stick Click |
-| Stereoscopic 3D or Immersive | Both Bumpers, then **View** and **Menu** |
-| Move Screen | Grip |
-| Screen Distance and Size | Grip and Stick |
-| Nudge Screen | Grip and D-Pad Left or Right |
-
-## Mods
-
-The **Mods** tab, and the Mods page in the desktop window, list 41 mods, patches and cheats and 23 texture packs. Texture packs are downloaded from the page. Changes apply at the game's next start.
-
-## Performance switches
-
-All of these are off by default. Several only help certain games. They are experimental.
-
-- **Dynamic Resolution** goes up to two steps above Internal Resolution while the GPU has room.
-- **Pin Emulation Threads** and **Performance Hint** keep the main threads on the fastest CPU cores and ask the VR runtime for high CPU and GPU speed. They apply at the next game start.
-- **Non-Blocking EFB Copies**, **Non-Blocking Perf Queries** and **Skip Overwritten Clears** cut GPU waits. They do nothing in games that never trigger them.
-- **Performance Log** writes a line a second to `perf.csv` in the Logs folder.
-
-To compare settings, copy [docs/perf-test.example.txt](docs/perf-test.example.txt) to `~/.config/baiji/perf-test.txt` and start a game. It switches the settings in turns, puts them back, and writes the results to a file in the Logs folder.
+- A menu in the headset, with pointer beams
+- **Stereoscopic 3D** and **Immersive**, with a switch during the game
+- Move and resize the screen with the grips
+- Quick Save, Quick Load, save states with pictures, and Autosave
+- Mods, patches, cheats and texture packs for many games
+- Box art, a dark style, and windows that fit Game Mode
+- Experimental performance switches, such as **Dynamic Resolution**
 
 ## Game fixes
 
-- **Fire Emblem: Path of Radiance** froze or showed a white screen. Three separate causes are fixed: the emulator reset its command queue while the GPU thread still ran, the game's own GPU watchdog shut it down on a slow frame, and a command could be cut off when the game stopped reading. The watchdog patch is for the US version only. Tested on the desktop, not yet confirmed on the Frame.
-- Warnings and internal errors show in the headset, not in a hidden dialog.
-- Crash on exit after a VR game: fixed.
-- The screen keeps one shape when a game changes video modes.
-- **Immersive** no longer locks two settings. Your own values win.
-- In Game Mode, the game renders to the main window. On the desktop, the game list and Properties work mid-game.
-- Choose the Wii Remote's extension in the Controllers pane, even mid-game.
-- `baiji-uninstall` is included. See below.
+- **Fire Emblem: Path of Radiance**: the freeze and white screen (desktop-tested only; the Frame is next)
+- The screen keeps one shape when a game changes video modes
+- A crash on exit after a VR game
+- Warnings and errors show in the headset
+- **Immersive** no longer locks two of your settings
+- Wii Remote extensions can be chosen without the mapping window
 
-## Get it
+## How it works
 
-There is no release of this fork yet. To build it yourself, follow [docs/build-runbook.md](docs/build-runbook.md). For a normal release, use [upstream Baiji](https://github.com/thejerf/baijiSteamVR/releases).
+- The game runs on the Frame itself; nothing is streamed from a PC.
+- **Stereoscopic 3D** is a big 3D screen. **Immersive** puts you inside the game.
 
-Games are not included. Use your own legally dumped copies.
+The new work is tested on a desktop with a simulated headset. Headset testing is in progress.
+
+## Requirements
+
+- A Steam Frame with Developer Mode and SSH on
+- A Linux PC (x86_64) with Git and Podman, and Flatpak for the first build
+- Your own legally dumped games
+
+## Install
+
+This fork has no download yet. For one, use [upstream Baiji](https://github.com/thejerf/baijiSteamVR/releases). To build this fork:
+
+1. [Set up the SSH host `frame`](docs/USER_GUIDE.md#connect-to-the-frame) on your PC.
+2. Build and install:
+
+   ```bash
+   git clone --recurse-submodules https://github.com/simplysanatori/baijiSteamVR.git
+   cd baijiSteamVR
+   ./scripts/compile-cross-sdk.sh
+   ./scripts/deploy-frame.sh frame
+   ```
+
+3. Add it to Steam, the first time only:
+
+   ```bash
+   ssh frame "steamos-add-to-steam ./baiji/bin/baiji-vr"
+   ```
+
+## First run
+
+1. Start `baiji-vr` from your Non-Steam games.
+2. Add your games folder in the settings, under **Paths**.
+3. Choose **Display** in the settings, under **VR**.
+4. Start a game. Hold **Menu** for the VR menu.
+
+## Controls
+
+| Action | Press |
+| --- | --- |
+| VR menu | Hold **Menu** for 1 second |
+| Close game | Hold **View** for 1.5 seconds |
+| Quick Save | **View**, then Right Bumper |
+| Quick Load | **View**, then hold Left Bumper |
+| Fast Forward | **View**, then Right Trigger |
+| Reset screen or view | Hold Right Stick Click |
+| Stereoscopic 3D or Immersive | Both Bumpers, then **View** and **Menu** |
+| Move screen | Grip |
+
+More in the [user guide](docs/USER_GUIDE.md#controls).
+
+## Update
+
+Close Baiji, then run this in the `baijiSteamVR` folder on your PC:
+
+```bash
+git pull
+git submodule update --init --recursive
+./scripts/compile-cross-sdk.sh
+./scripts/deploy-frame.sh frame
+```
 
 ## Uninstall
 
-Close Baiji, then run `~/baiji/bin/baiji-uninstall` in a Desktop terminal. It removes the program folder and keeps your saves and settings.
+Close Baiji, then run this in a Desktop terminal on the Frame:
 
-- `--migrate` copies your GameCube memory cards and Wii saves into Dolphin's user folder. Files already there are never overwritten. Save states are not copied.
-- `--purge` also deletes Baiji's saves, settings and cache.
-- `--dry-run` shows what would happen without changing anything.
+```bash
+~/baiji/bin/baiji-uninstall
+```
 
-Remove the `baiji-vr` shortcut from your Steam library by hand.
+Remove the `baiji-vr` shortcut from Steam by hand. Moving saves to Dolphin: [user guide](docs/USER_GUIDE.md#uninstall-or-move-to-dolphin).
+
+## Troubleshooting
+
+- **The pointer is off in Stereoscopic 3D:** recenter once.
+- **A game looks wrong in 3D:** try the other **Display**, or lower **3D Depth**.
+- **Fire Emblem: Path of Radiance still goes white:** turn off **Enable Dual Core** for that game.
+- **Sound comes from the window's place:** a SteamOS limit, with no fix yet.
+
+More in the [user guide](docs/USER_GUIDE.md#troubleshooting).
+
+## Reporting a problem
+
+Turn on the detailed log, then play until the problem happens:
+
+```bash
+ssh frame "touch ~/.config/baiji/debug-logging"
+```
+
+The logs are in `~/.local/share/baiji/Logs/`. Check them before you share them. Issues are not open on this fork yet.
+
+## More
+
+- [User guide](docs/USER_GUIDE.md)
+- [AGENTS.md](AGENTS.md), for developers and AI agents
+- [Building](docs/build-runbook.md)
+- [Baiji's own README](docs/UPSTREAM-README.md), with its changelog
+
+## Support
+
+- dolphinXR: <https://github.com/sponsors/iChris4>
+- This fork: <https://ko-fi.com/sana748653>
 
 ## Credits
 
-- [Dolphin](https://dolphin-emu.org): the emulator underneath everything.
-- [dolphinXR](https://github.com/iChris4/dolphinXR/): the VR fork Baiji is built on.
-- [Baiji](https://github.com/thejerf/baijiSteamVR): the Steam Frame cut this fork is based on.
-- Azahar for Frame: the in-headset menu design.
+- [Dolphin](https://dolphin-emu.org/): the emulator
+- [dolphinXR](https://github.com/iChris4/dolphinXR/): the VR version, and some of the performance work
+- [Baiji](https://github.com/thejerf/baijiSteamVR): the Steam Frame version
+- Azahar for Frame: the VR menu, Dynamic Resolution, window fitting and mod downloads
+- [GameTDB](https://www.gametdb.com/) and [libretro-thumbnails](https://github.com/libretro-thumbnails): box art
 
 ## Licence
 
-Dolphin is GPL-2.0-or-later. Files that come from Azahar for Frame are GPL-3.0-or-later, so builds of this fork as a whole are GPL-3.0-or-later. See [COPYING](COPYING) and [LICENSES](LICENSES).
+GPL-3.0-or-later as a whole; see [COPYING](COPYING) and [LICENSES](LICENSES).
+
+## How this was made
+
+I started this project and used AI (Claude) to speed up development. I write, review and fix code by hand all the way through, keep the AI's work checked and reined in, and aim to keep the port as lightweight as possible. I test it on my own Steam Frame.
