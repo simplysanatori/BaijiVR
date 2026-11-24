@@ -3,15 +3,19 @@
 
 #include "DolphinQt/Settings/VRPane.h"
 
+#include <cmath>
+#include <map>
+
 #include <QCheckBox>
-#include <QGroupBox>
+#include <QEvent>
 #include <QGridLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
-#include <QTabWidget>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include "Common/Config/Config.h"
@@ -22,633 +26,724 @@
 #include "Core/System.h"
 
 #include "DolphinQt/Config/HideObjectAddEditDialog.h"
-#include "DolphinQt/Config/ConfigControls/ConfigBool.h"
-#include "DolphinQt/Config/ConfigControls/ConfigChoice.h"
-#include "DolphinQt/Config/ConfigControls/ConfigFloatSlider.h"
-#include "DolphinQt/Config/ConfigControls/ConfigSlider.h"
 #include "DolphinQt/Debugger/CullingCodeFinderWidget.h"
 #include "DolphinQt/Debugger/ShaderHunterWidget.h"
 #include "DolphinQt/Settings.h"
 #include "VideoCommon/HideObjectEngine.h"
 #include "VideoCommon/ShaderHunter.h"
 #include "VideoCommon/VideoConfig.h"
-
-VRPane::VRPane(QWidget* parent) : QWidget(parent)
-{
-  auto* main_layout = new QVBoxLayout;
-  auto* tabs = new QTabWidget(this);
-  auto* general_tab = new QWidget(this);
-  auto* general_layout = new QVBoxLayout;
-  auto* hack_tab = new QWidget(this);
-  auto* hack_layout = new QVBoxLayout;
-  auto* tools_tab = new QWidget(this);
-  auto* tools_tab_layout = new QVBoxLayout;
-
-  general_tab->setLayout(general_layout);
-  hack_tab->setLayout(hack_layout);
-  tools_tab->setLayout(tools_tab_layout);
-  tabs->addTab(general_tab, tr("General"));
-  tabs->addTab(hack_tab, tr("Advanced"));
-  tabs->addTab(tools_tab, tr("Tools"));
-
-  auto* openxr_group = new QGroupBox(tr("OpenXR"));
-  auto* openxr_layout = new QGridLayout;
-  openxr_group->setLayout(openxr_layout);
-  auto* stereo_screen_group = new QGroupBox(tr("Stereo 3D Screen"), general_tab);
-  auto* stereo_screen_layout = new QGridLayout(stereo_screen_group);
-  auto* camera_group = new QGroupBox(tr("Camera"));
-  auto* camera_layout = new QGridLayout;
-  camera_group->setLayout(camera_layout);
-  auto* virtual_screen_group = new QGroupBox(tr("Virtual Screen"));
-  auto* virtual_screen_layout = new QGridLayout;
-  virtual_screen_group->setLayout(virtual_screen_layout);
-  auto* framerate_group = new QGroupBox(tr("Framerate"));
-  auto* framerate_layout = new QGridLayout;
-  framerate_group->setLayout(framerate_layout);
-  auto* rendering_group = new QGroupBox(tr("Rendering"));
-  auto* rendering_layout = new QGridLayout;
-  rendering_group->setLayout(rendering_layout);
-  auto* passthrough_group = new QGroupBox(tr("Passthrough"));
-  auto* passthrough_layout = new QGridLayout;
-  passthrough_group->setLayout(passthrough_layout);
-
-  QString legacy_mode_name = tr("Use existing settings");
-  if (!Config::Get(Config::GFX_VR_ENABLE_OPENXR))
-    legacy_mode_name += tr(" (Vulkan flat display)");
-  else if (Config::Get(Config::GFX_VR_FLAT_SCREEN))
-    legacy_mode_name += tr(" (2D screen in VR)");
-  else if (Config::Get(Config::GFX_VR_STEREO_SCREEN))
-    legacy_mode_name += tr(" (stereo 3D screen)");
-  else
-    legacy_mode_name += tr(" (immersive VR)");
-
-  m_presentation_mode = new ConfigChoiceMap<OpenXRPresentationMode>(
-      {{legacy_mode_name, OpenXRPresentationMode::Legacy},
-       {tr("Flat Display (Vulkan)"), OpenXRPresentationMode::Vulkan},
-       {tr("Immersive VR"), OpenXRPresentationMode::Immersive},
-       {tr("Stereo 3D Screen"), OpenXRPresentationMode::StereoScreen}},
-      Config::GFX_VR_PRESENTATION_MODE);
-  m_presentation_mode->setToolTip(
-      tr("Selects standard Vulkan flat output, BaijiSteamVR immersive VR, or a stereoscopic 3D "
-         "screen in the headset. The legacy choice follows the previous Enable VR and screen "
-         "settings."));
-  connect(m_presentation_mode, &QComboBox::currentIndexChanged, this, [this](int) {
-    const OpenXRPresentationMode mode = Config::Get(Config::GFX_VR_PRESENTATION_MODE);
-    if (mode == OpenXRPresentationMode::Legacy)
-      return;
-
-    Config::ConfigChangeCallbackGuard guard;
-    Config::SetBaseOrCurrent(Config::GFX_VR_ENABLE_OPENXR,
-                             mode != OpenXRPresentationMode::Vulkan);
-    Config::SetBaseOrCurrent(Config::GFX_VR_FLAT_SCREEN, false);
-    Config::SetBaseOrCurrent(Config::GFX_VR_STEREO_SCREEN,
-                             mode == OpenXRPresentationMode::StereoScreen);
-  });
-  m_reference_space_mode = new ConfigChoiceMap<OpenXRReferenceSpaceMode>(
-      {{tr("LOCAL"), OpenXRReferenceSpaceMode::Local},
-       {tr("STAGE + Height"), OpenXRReferenceSpaceMode::StageHeight},
-       {tr("STAGE"), OpenXRReferenceSpaceMode::Stage}},
-      Config::GFX_VR_REFERENCE_SPACE_MODE);
-  m_tracking_mode = new ConfigChoiceMap<OpenXRTrackingMode>(
-      {{tr("6DoF"), OpenXRTrackingMode::Full6DoF},
-       {tr("3DoF"), OpenXRTrackingMode::Rotation3DoF},
-       {tr("None"), OpenXRTrackingMode::None}},
-      Config::GFX_VR_TRACKING_MODE);
-  m_use_vulkan_multiview = new ConfigBool(tr("Use Vulkan Multiview"),
-                                          Config::GFX_VR_USE_VULKAN_MULTIVIEW);
-  // Exponential scale: precise near the minimum, while still reaching large values at the far end.
-  m_units_per_meter = new ConfigFloatSlider(Config::GFX_VR_UNITS_PER_METER_MIN,
-                                            Config::GFX_VR_UNITS_PER_METER_MAX,
-                                            Config::GFX_VR_UNITS_PER_METER,
-                                            Config::GFX_VR_UNITS_PER_METER_STEP, nullptr,
-                                            ConfigFloatSlider::ScaleMode::Exponential);
-  m_units_per_meter_value = new QLabel();
-  m_stereo_separation = new ConfigFloatSlider(
-      Config::GFX_VR_STEREO_SEPARATION_MIN, Config::GFX_VR_STEREO_SEPARATION_MAX,
-      Config::GFX_VR_STEREO_SEPARATION, Config::GFX_VR_STEREO_SEPARATION_STEP);
-  m_stereo_separation_value = new QLabel();
-  m_stereo_depth = new ConfigFloatSlider(0.0f, Config::GFX_STEREO_DEPTH_MAXIMUM,
-                                         Config::GFX_STEREO_DEPTH, 1.0f);
-  m_stereo_depth_value = new QLabel();
-  m_stereo_convergence = new ConfigFloatSlider(0.0f, Config::GFX_STEREO_CONVERGENCE_MAXIMUM,
-                                               Config::GFX_STEREO_CONVERGENCE, 0.01f);
-  m_stereo_convergence_value = new QLabel();
-  m_enable_lean_back_angle =
-      new ConfigBool(tr("Lean Back Angle (deg)"), Config::GFX_VR_ENABLE_LEAN_BACK_ANGLE);
-  m_enable_lean_back_angle->setToolTip(
-      tr("When unchecked, ignores the Lean Back Angle value below and applies no pitch offset."));
-  m_lean_back_angle = new ConfigFloatSlider(Config::GFX_VR_LEAN_BACK_ANGLE_MIN,
-                                            Config::GFX_VR_LEAN_BACK_ANGLE_MAX,
-                                            Config::GFX_VR_LEAN_BACK_ANGLE,
-                                            Config::GFX_VR_LEAN_BACK_ANGLE_STEP);
-  m_lean_back_angle_value = new QLabel();
-  m_enable_camera_forward =
-      new ConfigBool(tr("Camera Forward (m)"), Config::GFX_VR_ENABLE_CAMERA_FORWARD);
-  m_enable_camera_forward->setToolTip(
-      tr("When unchecked, ignores the Camera Forward value below and applies no "
-         "forward/backward offset."));
-  m_camera_forward = new ConfigFloatSlider(Config::GFX_VR_CAMERA_FORWARD_MIN,
-                                           Config::GFX_VR_CAMERA_FORWARD_MAX,
-                                           Config::GFX_VR_CAMERA_FORWARD,
-                                           Config::GFX_VR_CAMERA_FORWARD_STEP);
-  m_camera_forward_value = new QLabel();
-  m_enable_camera_height =
-      new ConfigBool(tr("Camera Height (m)"), Config::GFX_VR_ENABLE_CAMERA_HEIGHT);
-  m_enable_camera_height->setToolTip(
-      tr("When unchecked, ignores the Camera Height value below and applies no vertical "
-         "offset."));
-  m_camera_height = new ConfigFloatSlider(Config::GFX_VR_CAMERA_HEIGHT_MIN,
-                                          Config::GFX_VR_CAMERA_HEIGHT_MAX,
-                                          Config::GFX_VR_CAMERA_HEIGHT,
-                                          Config::GFX_VR_CAMERA_HEIGHT_STEP);
-  m_camera_height_value = new QLabel();
-  m_enable_camera_anchor = new ConfigBool(tr("Camera Anchor"), Config::GFX_VR_ENABLE_CAMERA_ANCHOR);
-  m_enable_camera_anchor->setToolTip(
-      tr("Let a \"Camera Anchor\" Elements Group Override move the VR camera to a game\n"
-         "element's position (e.g. a character's head for first-person view). When no\n"
-         "anchor override matches, or this is disabled, the camera stays at the default\n"
-         "position."));
-  m_camera_anchor_smoothing = new ConfigFloatSlider(Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING_MIN,
-                                                    Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING_MAX,
-                                                    Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING,
-                                                    Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING_STEP);
-  m_camera_anchor_smoothing->setToolTip(
-      tr("How much the anchored camera resists the element's movement each frame.\n"
-         "0.00 follows the element rigidly (transmits every animation bob);\n"
-         "higher values smooth the motion for comfort."));
-  m_camera_anchor_smoothing_value = new QLabel();
-  m_enable_controller_anchor =
-      new ConfigBool(tr("Controller Anchor"), Config::GFX_VR_ENABLE_CONTROLLER_ANCHOR);
-  m_enable_controller_anchor->setToolTip(
-      tr("Let \"Controller Anchor\" Elements Group Overrides reposition game elements to a\n"
-         "VR controller (e.g. a sword on the right hand). Position only; the element keeps\n"
-         "its game orientation. When no override matches, or this is disabled, elements\n"
-         "render where the game put them."));
-
-  openxr_layout->addWidget(new QLabel(tr("Presentation Mode:")), 0, 0);
-  openxr_layout->addWidget(m_presentation_mode, 0, 1, 1, 2);
-
-  m_passthrough = new ConfigBool(tr("Enable Passthrough"), Config::GFX_VR_PASSTHROUGH);
-  m_passthrough_remove_black_bg =
-      new ConfigBool(tr("Reveal Unrendered Areas"), Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_BG);
-  m_passthrough_remove_black_clears = new ConfigBool(
-      tr("Remove Black EFB Clears"), Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_CLEARS);
-  m_passthrough_scene_opacity =
-      new ConfigFloatSlider(Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY_MIN,
-                            Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY_MAX,
-                            Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY,
-                            Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY_STEP);
-  m_passthrough_scene_opacity_value = new QLabel();
-  m_passthrough_scene_opacity_value->setText(
-      QString::asprintf("%.2f", m_passthrough_scene_opacity->GetValue()));
-  connect(m_passthrough_scene_opacity, &ConfigFloatSlider::valueChanged, this, [this] {
-    m_passthrough_scene_opacity_value->setText(
-        QString::asprintf("%.2f", m_passthrough_scene_opacity->GetValue()));
-  });
-  m_passthrough_coverage_mode = new ConfigChoiceMap<VRPassthroughCoverageMode>(
-      {{tr("Exact"), VRPassthroughCoverageMode::Exact},
-       {tr("Fast"), VRPassthroughCoverageMode::Fast}},
-      Config::GFX_VR_PASSTHROUGH_COVERAGE_MODE);
-  openxr_layout->addWidget(m_passthrough, 3, 0, 1, 3);
-  const auto update_passthrough_enabled = [this] {
-    const OpenXRPresentationMode mode = Config::Get(Config::GFX_VR_PRESENTATION_MODE);
-    m_passthrough->setEnabled(mode == OpenXRPresentationMode::Legacy ?
-                                  Config::Get(Config::GFX_VR_ENABLE_OPENXR) :
-                                  mode != OpenXRPresentationMode::Vulkan);
-  };
-  connect(m_presentation_mode, &QComboBox::currentIndexChanged, this,
-          [update_passthrough_enabled](int) { update_passthrough_enabled(); });
-  update_passthrough_enabled();
-
-  openxr_layout->addWidget(new ConfigFloatLabel(tr("Units per Meter:"), m_units_per_meter), 1, 0);
-  openxr_layout->addWidget(m_units_per_meter, 1, 1);
-  openxr_layout->addWidget(m_units_per_meter_value, 1, 2);
-  openxr_layout->addWidget(
-      new ConfigFloatLabel(tr("Stereo Separation (%):"), m_stereo_separation), 2, 0);
-  openxr_layout->addWidget(m_stereo_separation, 2, 1);
-  openxr_layout->addWidget(m_stereo_separation_value, 2, 2);
-
-  stereo_screen_layout->addWidget(new ConfigFloatLabel(tr("Depth:"), m_stereo_depth), 0, 0);
-  stereo_screen_layout->addWidget(m_stereo_depth, 0, 1);
-  stereo_screen_layout->addWidget(m_stereo_depth_value, 0, 2);
-  stereo_screen_layout->addWidget(new ConfigFloatLabel(tr("Convergence:"), m_stereo_convergence),
-                                  1, 0);
-  stereo_screen_layout->addWidget(m_stereo_convergence, 1, 1);
-  stereo_screen_layout->addWidget(m_stereo_convergence_value, 1, 2);
-
-  const auto is_stereo_screen_selected = [] {
-    const OpenXRPresentationMode mode = Config::Get(Config::GFX_VR_PRESENTATION_MODE);
-    return mode == OpenXRPresentationMode::StereoScreen ||
-           (mode == OpenXRPresentationMode::Legacy &&
-            Config::Get(Config::GFX_VR_ENABLE_OPENXR) &&
-            !Config::Get(Config::GFX_VR_FLAT_SCREEN) &&
-            Config::Get(Config::GFX_VR_STEREO_SCREEN));
-  };
-  const auto update_stereo_screen_visibility = [stereo_screen_group, is_stereo_screen_selected] {
-    stereo_screen_group->setVisible(is_stereo_screen_selected());
-  };
-  connect(m_presentation_mode, &QComboBox::currentIndexChanged, this,
-          [update_stereo_screen_visibility](int) { update_stereo_screen_visibility(); });
-  connect(&Settings::Instance(), &Settings::ConfigChanged, this, update_stereo_screen_visibility);
-
-#ifndef BAIJI_STEAMVR
-  m_mirror_view = new ConfigChoiceMap<OpenXRMirrorView>(
-      {{tr("Both Eyes"), OpenXRMirrorView::BothEyes},
-       {tr("Left Eye"), OpenXRMirrorView::LeftEye},
-       {tr("Right Eye"), OpenXRMirrorView::RightEye},
-       {tr("None"), OpenXRMirrorView::None}},
-      Config::GFX_VR_MIRROR_VIEW);
-  openxr_layout->addWidget(new QLabel(tr("Desktop Mirror View:")), 4, 0);
-  openxr_layout->addWidget(m_mirror_view, 4, 1, 1, 2);
+#ifdef ENABLE_VR
+#include "VideoCommon/VR/OpenXRManager.h"
 #endif
 
-  camera_layout->addWidget(m_enable_lean_back_angle, 0, 0);
-  camera_layout->addWidget(m_lean_back_angle, 0, 1);
-  camera_layout->addWidget(m_lean_back_angle_value, 0, 2);
-  camera_layout->addWidget(m_enable_camera_forward, 1, 0);
-  camera_layout->addWidget(m_camera_forward, 1, 1);
-  camera_layout->addWidget(m_camera_forward_value, 1, 2);
-  camera_layout->addWidget(m_enable_camera_height, 2, 0);
-  camera_layout->addWidget(m_camera_height, 2, 1);
-  camera_layout->addWidget(m_camera_height_value, 2, 2);
-  camera_layout->addWidget(m_enable_camera_anchor, 3, 0);
-  camera_layout->addWidget(m_camera_anchor_smoothing, 3, 1);
-  camera_layout->addWidget(m_camera_anchor_smoothing_value, 3, 2);
-  camera_layout->addWidget(m_enable_controller_anchor, 4, 0);
+namespace
+{
+QString FormatMeters(float value)
+{
+  return QString::asprintf("%.1f m", value);
+}
 
-  // With the exponential scale, small values need more decimals to read meaningfully while large
-  // values don't; adapt the precision to the magnitude.
-  const auto units_per_meter_text = [](float value) {
-    return QString::asprintf(value < 10.0f ? "%.2f" : (value < 100.0f ? "%.1f" : "%.0f"), value);
+// The scale is exponential: small values need decimals to read meaningfully, large ones don't.
+QString FormatWorldScale(float value)
+{
+  return QString::asprintf(value < 10.0f ? "%.2f" : (value < 100.0f ? "%.1f" : "%.0f"), value);
+}
+
+// As few decimals as it takes.
+QString FormatPlain(float value)
+{
+  return QString::number(std::round(value * 100.0) / 100.0);
+}
+}  // namespace
+
+// ---- VRSettingsPage ----------------------------------------------------------------------------
+
+// Names that the VR menu in the headset also uses have to be the same here.
+VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
+{
+  static const std::map<Config::Location, Text> texts{
+      {Config::GFX_VR_PRESENTATION_MODE.GetLocation(),
+       {tr("Display"), tr("How games are shown. During a game, change it in the VR menu.")}},
+
+      // Screen
+      {Config::GFX_VR_VIRTUAL_SCREEN.GetLocation(),
+       {tr("2D Parts on a Screen"),
+        tr("Puts menus, videos and the HUD on a screen in front of you. Turn it off for games "
+           "that look wrong with it.")}},
+      {Config::GFX_VR_SCREEN_DISTANCE.GetLocation(),
+       {tr("Distance"), tr("How far away the screen is.")}},
+      {Config::GFX_VR_SCREEN_SIZE.GetLocation(), {tr("Size"), tr("How tall the screen is.")}},
+      {Config::GFX_VR_HUD_THICKNESS.GetLocation(),
+       {tr("HUD Depth"), tr("Spreads the layers of the HUD apart in depth. Flat menus and videos "
+                            "stay flat.")}},
+      {Config::GFX_STEREO_DEPTH.GetLocation(),
+       {tr("3D Depth"), tr("How deep the picture is. Lower is easier on the eyes.")}},
+      {Config::GFX_STEREO_CONVERGENCE.GetLocation(),
+       {tr("Convergence"),
+        tr("How far things come out of the screen. Lower is easier on the eyes.")}},
+      {Config::GFX_VR_LOCK_SCREEN.GetLocation(),
+       {tr("Lock Screen"), tr("Keeps the grips from moving the screen.")}},
+
+      // Immersive
+      {Config::GFX_VR_UNITS_PER_METER.GetLocation(),
+       {tr("World Scale"), tr("Game units per meter. Higher makes the world smaller, lower makes it bigger.")}},
+      {Config::GFX_VR_STEREO_SEPARATION.GetLocation(),
+       {tr("3D Strength"), tr("How deep the world looks. 100% is natural. Lower is easier on the "
+                              "eyes.")}},
+      {Config::GFX_VR_ENABLE_LEAN_BACK_ANGLE.GetLocation(),
+       {tr("Lean Back"), tr("Tilts the camera, for games with a tilted view.")}},
+      {Config::GFX_VR_LEAN_BACK_ANGLE.GetLocation(),
+       {tr("Lean Back"), tr("Above 0 leans back, below 0 leans forward.")}},
+      {Config::GFX_VR_ENABLE_CAMERA_FORWARD.GetLocation(),
+       {tr("Camera Forward"), tr("Moves the camera forward or back.")}},
+      {Config::GFX_VR_CAMERA_FORWARD.GetLocation(),
+       {tr("Camera Forward"), tr("Above 0 is forward, below 0 is back.")}},
+      {Config::GFX_VR_ENABLE_CAMERA_HEIGHT.GetLocation(),
+       {tr("Camera Height"), tr("Moves the camera up or down.")}},
+      {Config::GFX_VR_CAMERA_HEIGHT.GetLocation(),
+       {tr("Camera Height"), tr("Above 0 is up, below 0 is down.")}},
+      {Config::GFX_VR_ENABLE_CAMERA_ANCHOR.GetLocation(),
+       {tr("Camera Anchor"),
+        tr("Puts the camera on something in the game, for example a character's head. Only in "
+           "games with an anchor set up.")}},
+      {Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING.GetLocation(),
+       {tr("Anchor Smoothing"),
+        tr("How softly the camera follows its anchor. 0 follows every movement.")}},
+      {Config::GFX_VR_ENABLE_CONTROLLER_ANCHOR.GetLocation(),
+       {tr("Controller Anchor"),
+        tr("Puts things from the game in your hands, for example a sword. Only in games with an "
+           "anchor set up.")}},
+      {Config::GFX_VR_REMOVE_BARS.GetLocation(),
+       {tr("Remove Cinematic Bars"), tr("Removes the black bars at the top and bottom.")}},
+
+      // Headset
+      {Config::GFX_VR_REQUESTED_REFRESH_RATE.GetLocation(),
+       {tr("Refresh Rate"),
+        tr("The headset's refresh rate. Auto leaves it as it is. A multiple of the game's frame "
+           "rate is smoothest, for example 120 Hz for 60 FPS. Applies from the next game.")}},
+      {Config::GFX_VR_RESOLUTION_SCALE.GetLocation(),
+       {tr("Resolution Scale"),
+        tr("Resolution of the picture in the headset. Higher is sharper and slower. Applies from "
+           "the next game.")}},
+      {Config::GFX_VR_EAGER_HEARTBEAT.GetLocation(),
+       {tr("Frame Pacing"),
+        tr("Every Refresh shows a picture at each refresh of the headset. Match Game shows one "
+           "for each frame of the game, and lets SteamVR smooth the motion.")}},
+      {Config::GFX_VR_PASSTHROUGH.GetLocation(),
+       {tr("Passthrough"), tr("Shows your room around the game, if the headset can.")}},
+      {Config::GFX_VR_GAMMA.GetLocation(),
+       {tr("Gamma"), tr("Darkens a picture that is too bright.")}},
+      {Config::GFX_VR_FOVEATION_LEVEL.GetLocation(),
+       {tr("Foveated Rendering"),
+        tr("Less detail at the edges of the view, for speed. Has to be off to change Display in "
+           "the headset. Applies from the next game.")}},
+      {Config::GFX_VR_FOVEATION_DYNAMIC.GetLocation(),
+       {tr("Dynamic Foveation"), tr("Less detail only when the headset is busy.")}},
+
+      // Menu and Pointers
+      {Config::GFX_VR_POINTER_BEAMS.GetLocation(),
+       {tr("Pointer Beams"), tr("Shows where the controllers point.")}},
+      {Config::GFX_VR_TOASTS.GetLocation(),
+       {tr("Messages"), tr("Shows short messages in the headset, for example Quick Saved.")}},
+
+      // Autosave
+      {Config::MAIN_AUTOSAVE_ENABLED.GetLocation(),
+       {tr("Autosave"), tr("Saves a state while you play and when you close the game. Load it in "
+                           "the VR menu.")}},
+      {Config::MAIN_AUTOSAVE_MINUTES.GetLocation(),
+       {tr("Autosave Every"), tr("Minutes of play between two autosaves.")}},
+      {Config::MAIN_AUTOSAVE_KEEP.GetLocation(),
+       {tr("Autosaves to Keep"), tr("Older ones are deleted.")}},
+
+      // Advanced
+      {Config::GFX_VR_REFERENCE_SPACE_MODE.GetLocation(),
+       {tr("Starting Position"),
+        tr("Where you are when a game starts: your own position, the middle of the play area at "
+           "your height, or the middle of the play area. Applies from the next game.")}},
+      {Config::GFX_VR_TRACKING_MODE.GetLocation(),
+       {tr("Head Tracking"), tr("Which head movements move the camera.")}},
+      {Config::GFX_VR_FORCED_VBI_FREQUENCY.GetLocation(),
+       {tr("Force Game Refresh"),
+        tr("Runs the game at this refresh rate. Many games then play too fast. Headset Rate is "
+           "the closest rate in the list.")}},
+      {Config::GFX_VR_USE_VULKAN_MULTIVIEW.GetLocation(),
+       {tr("Draw Both Eyes at Once"), tr("Faster. Turn it off if one eye looks wrong. Applies "
+                                         "from the next game.")}},
+      {Config::GFX_VR_EFB_FOVEATION.GetLocation(),
+       {tr("Foveate the Game's Own Picture"),
+        tr("Uses Foveated Rendering earlier in the picture too. Faster in some games, slower in "
+           "others.")}},
+#ifndef BAIJI_STEAMVR
+      {Config::GFX_VR_MIRROR_VIEW.GetLocation(),
+       {tr("Desktop Mirror View"), tr("What the window on the desktop shows.")}},
+#endif
+
+      {Config::GFX_VR_EXACT_SCREEN_DEPTH.GetLocation(),
+       {tr("Exact 2D Depth"), tr("Draws 2D parts in the game's own order. For menus that flicker "
+                                 "or a map that is missing.")}},
+      {Config::GFX_VR_AUTO_NATIVE_EFB_EFFECTS.GetLocation(),
+       {tr("Full-View Effects"),
+        tr("Blur, bloom and such fill the view and not the 2D screen. Turn it off if a 2D part "
+           "leaves the screen.")}},
+      {Config::GFX_VR_PANES_ON_SCREEN.GetLocation(),
+       {tr("Small 3D Models on the Screen"),
+        tr("Keeps 3D models in menus on the 2D screen, so that they do not sway with your "
+           "head.")}},
+      {Config::GFX_VR_HEAD_LOCKED_CURVATURE.GetLocation(),
+       {tr("Head-Locked Curve"), tr("Curves the parts that are set to follow your head.")}},
+      {Config::GFX_VR_CLEAR_EFB_COPIES.GetLocation(),
+       {tr("Remove Wide Effects"),
+        tr("Removes effects that are at least this wide, for example bloom. The whole picture "
+           "is 640 wide, so use 400 to 640.")}},
+      {Config::GFX_VR_DONT_CLEAR_SCREEN.GetLocation(),
+       {tr("Don't Clear Screen"), tr("Keeps the last picture where the game draws nothing. For "
+                                     "games that flicker.")}},
+      {Config::GFX_VR_DISABLE_CPU_CULL.GetLocation(),
+       {tr("Show Missing Objects"),
+        tr("Draws objects that are otherwise left out. A little slower.")}},
+      {Config::GFX_VR_FRAME_SIZE_FROM_XFB.GetLocation(),
+       {tr("Match Shown Picture Size"),
+        tr("Takes the size of the picture from what the game shows. Fixes Metroid Prime Trilogy "
+           "and Mario Golf.")}},
+      {Config::GFX_VR_DETECT_RENDER_TARGETS.GetLocation(),
+       {tr("Steady Shadows and Reflections"),
+        tr("Keeps shadows and reflections from moving with your head. Experimental.")}},
+      {Config::GFX_VR_ORTHO_SCISSOR_FIX.GetLocation(),
+       {tr("Fix Cut-Off 2D Parts"), tr("Shows all of 2D parts that are cut off, for example the "
+                                       "item roulette in Mario Kart: Double Dash!!.")}},
+      {Config::GFX_VR_DETECT_SKYBOX.GetLocation(),
+       {tr("Distant Sky"), tr("Puts a sky that is too close far away.")}},
+      {Config::GFX_VR_METROID_THERMAL_VISOR_FIX.GetLocation(),
+       {tr("Metroid Prime Thermal Visor Fix"),
+        tr("Shows the thermal visor in 3D in both eyes.")}},
+
+      {Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_BG.GetLocation(),
+       {tr("Show Room in Empty Areas"), tr("Shows the room where the game draws nothing.")}},
+      {Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_CLEARS.GetLocation(),
+       {tr("Show Room in Black Areas"),
+        tr("Shows the room where the game leaves the picture black.")}},
+      {Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY.GetLocation(),
+       {tr("Game Opacity"), tr("Lower shows the room through the game.")}},
+      {Config::GFX_VR_PASSTHROUGH_COVERAGE_MODE.GetLocation(),
+       {tr("Passthrough Quality"), tr("Exact keeps all effects of the game. Fast is faster.")}},
+
+      {Config::GFX_VR_LOAD_CUSTOM_SHADERS.GetLocation(),
+       {tr("Custom Shaders"), tr("Loads shaders from Load/Shaders and the game's ID.")}},
   };
-  m_units_per_meter_value->setText(units_per_meter_text(m_units_per_meter->GetValue()));
-  connect(m_units_per_meter, &ConfigFloatSlider::valueChanged, this,
-          [this, units_per_meter_text] {
-            m_units_per_meter_value->setText(units_per_meter_text(m_units_per_meter->GetValue()));
-          });
-  const auto stereo_separation_text = [](float value) {
-    return QString::asprintf("%.0f%%", value);
+
+  const auto it = texts.find(location);
+  return it != texts.end() ? it->second : Text{};
+}
+
+QLabel* VRSettingsPage::MakeLabel(const Config::Location& location)
+{
+  return new QLabel(GetText(location).label + QLatin1Char(':'));
+}
+
+VRSettingsPage::VRSettingsPage(QWidget* parent, QBoxLayout* layout, Config::Layer* layer,
+                               Config::Layer* global_layer)
+    : QObject(parent), m_layout(layout), m_layer(layer), m_global_layer(global_layer)
+{
+}
+
+bool VRSettingsPage::eventFilter(QObject* object, QEvent* event)
+{
+  // The page is long: scrolling it must not change what happens to be under the pointer.
+  if (event->type() == QEvent::Wheel && !static_cast<QWidget*>(object)->hasFocus())
+  {
+    event->ignore();
+    return true;
+  }
+  return QObject::eventFilter(object, event);
+}
+
+void VRSettingsPage::ShowOnlyIn(unsigned displays, QWidget* widget)
+{
+  if (displays != ALL)
+    m_widgets.emplace_back(displays, widget);
+}
+
+QGridLayout* VRSettingsPage::AddGroup(const QString& title, unsigned displays, QBoxLayout* layout)
+{
+  auto* const group = new QGroupBox(title);
+  (layout ? layout : m_layout)->addWidget(group);
+  ShowOnlyIn(displays, group);
+
+  auto* const grid = new QGridLayout(group);
+  grid->setColumnStretch(1, 1);
+  return grid;
+}
+
+void VRSettingsPage::AddRow(QGridLayout* layout, unsigned displays, QWidget* label,
+                            QWidget* control, QWidget* value)
+{
+  const int row = layout->rowCount();
+  if (label)
+  {
+    layout->addWidget(label, row, 0);
+    ShowOnlyIn(displays, label);
+  }
+  layout->addWidget(control, row, label ? 1 : 0, 1, (label ? 2 : 3) - (value ? 1 : 0));
+  ShowOnlyIn(displays, control);
+  if (value)
+  {
+    layout->addWidget(value, row, 2);
+    ShowOnlyIn(displays, value);
+  }
+}
+
+ConfigBool* VRSettingsPage::AddBool(QGridLayout* layout, unsigned displays,
+                                    const Config::Info<bool>& setting)
+{
+  auto* const check = Prepare(new ConfigBool(GetText(setting.GetLocation()).label, setting, m_layer,
+                                             false, m_global_layer));
+  AddRow(layout, displays, nullptr, check);
+  return check;
+}
+
+ConfigFloatSlider* VRSettingsPage::AddSlider(QGridLayout* layout, unsigned displays,
+                                             const Config::Info<float>& setting, float minimum,
+                                             float maximum, float step,
+                                             std::function<QString(float)> format,
+                                             const Config::Info<bool>* enable,
+                                             ConfigFloatSlider::ScaleMode scale)
+{
+  auto* const slider = Prepare(
+      new ConfigFloatSlider(minimum, maximum, setting, step, m_layer, scale, m_global_layer));
+
+  auto* const value = new QLabel;
+  // So that the slider does not change its length with its value.
+  value->setMinimumWidth(value->fontMetrics().horizontalAdvance(QStringLiteral("000.00 m")));
+  const auto update = [slider, value, format = std::move(format)] {
+    value->setText(format(slider->GetValue()));
   };
-  m_stereo_separation_value->setText(
-      stereo_separation_text(m_stereo_separation->GetValue()));
-  connect(m_stereo_separation, &ConfigFloatSlider::valueChanged, this,
-          [this, stereo_separation_text] {
-            m_stereo_separation_value->setText(
-                stereo_separation_text(m_stereo_separation->GetValue()));
-          });
-  m_stereo_depth_value->setText(QString::asprintf("%.0f", m_stereo_depth->GetValue()));
-  connect(m_stereo_depth, &ConfigFloatSlider::valueChanged, this, [this] {
-    m_stereo_depth_value->setText(QString::asprintf("%.0f", m_stereo_depth->GetValue()));
-  });
-  m_stereo_convergence_value->setText(
-      QString::asprintf("%.2f", m_stereo_convergence->GetValue()));
-  connect(m_stereo_convergence, &ConfigFloatSlider::valueChanged, this, [this] {
-    m_stereo_convergence_value->setText(
-        QString::asprintf("%.2f", m_stereo_convergence->GetValue()));
-  });
-  m_lean_back_angle_value->setText(QString::asprintf("%.1f", m_lean_back_angle->GetValue()));
-  connect(m_lean_back_angle, &ConfigFloatSlider::valueChanged, this, [this] {
-    m_lean_back_angle_value->setText(QString::asprintf("%.1f", m_lean_back_angle->GetValue()));
-  });
-  m_camera_forward_value->setText(QString::asprintf("%.1f", m_camera_forward->GetValue()));
-  connect(m_camera_forward, &ConfigFloatSlider::valueChanged, this, [this] {
-    m_camera_forward_value->setText(QString::asprintf("%.1f", m_camera_forward->GetValue()));
-  });
-  m_camera_height_value->setText(QString::asprintf("%.1f", m_camera_height->GetValue()));
-  connect(m_camera_height, &ConfigFloatSlider::valueChanged, this, [this] {
-    m_camera_height_value->setText(QString::asprintf("%.1f", m_camera_height->GetValue()));
-  });
-  m_camera_anchor_smoothing_value->setText(
-      QString::asprintf("%.2f", m_camera_anchor_smoothing->GetValue()));
-  connect(m_camera_anchor_smoothing, &ConfigFloatSlider::valueChanged, this, [this] {
-    m_camera_anchor_smoothing_value->setText(
-        QString::asprintf("%.2f", m_camera_anchor_smoothing->GetValue()));
-  });
+  update();
+  connect(slider, &ConfigFloatSlider::valueChanged, slider, update);
 
-  // Virtual screen settings
-  m_virtual_screen =
-      new ConfigBool(tr("Virtual Screen for 2D Content"), Config::GFX_VR_VIRTUAL_SCREEN);
-  virtual_screen_layout->addWidget(m_virtual_screen, 0, 0, 1, 3);
+  QWidget* label;
+  if (enable)
+  {
+    label = Prepare(new ConfigBool(GetText(enable->GetLocation()).label, *enable, m_layer, false,
+                                   m_global_layer));
+  }
+  else
+  {
+    label = new ConfigFloatLabel(GetText(setting.GetLocation()).label + QLatin1Char(':'), slider);
+  }
+  AddRow(layout, displays, label, slider, value);
+  return slider;
+}
 
-  m_screen_distance = new ConfigFloatSlider(Config::GFX_VR_SCREEN_DISTANCE_MIN,
-                                            Config::GFX_VR_SCREEN_DISTANCE_MAX,
-                                            Config::GFX_VR_SCREEN_DISTANCE,
-                                            Config::GFX_VR_SCREEN_DISTANCE_STEP);
-  m_screen_distance_value = new QLabel();
-  m_screen_size = new ConfigFloatSlider(Config::GFX_VR_SCREEN_SIZE_MIN,
-                                        Config::GFX_VR_SCREEN_SIZE_MAX,
-                                        Config::GFX_VR_SCREEN_SIZE,
-                                        Config::GFX_VR_SCREEN_SIZE_STEP);
-  m_screen_size_value = new QLabel();
-  m_head_locked_curvature =
-      new ConfigFloatSlider(Config::GFX_VR_HEAD_LOCKED_CURVATURE_MIN,
-                            Config::GFX_VR_HEAD_LOCKED_CURVATURE_MAX,
-                            Config::GFX_VR_HEAD_LOCKED_CURVATURE,
-                            Config::GFX_VR_HEAD_LOCKED_CURVATURE_STEP);
-  m_head_locked_curvature_value = new QLabel();
+void VRSettingsPage::AddDisplay()
+{
+  auto* const layout = AddGroup(tr("Display"), ALL);
 
-  virtual_screen_layout->addWidget(
-      new ConfigFloatLabel(tr("Screen Distance (m):"), m_screen_distance), 3, 0);
-  virtual_screen_layout->addWidget(m_screen_distance, 3, 1);
-  virtual_screen_layout->addWidget(m_screen_distance_value, 3, 2);
-  virtual_screen_layout->addWidget(new ConfigFloatLabel(tr("Screen Size (m):"), m_screen_size), 4,
-                                   0);
-  virtual_screen_layout->addWidget(m_screen_size, 4, 1);
-  virtual_screen_layout->addWidget(m_screen_size_value, 4, 2);
-  virtual_screen_layout->addWidget(
-      new ConfigFloatLabel(tr("Head Locked Curvature:"), m_head_locked_curvature), 6, 0);
-  virtual_screen_layout->addWidget(m_head_locked_curvature, 6, 1);
-  virtual_screen_layout->addWidget(m_head_locked_curvature_value, 6, 2);
+  // An old config can hold OpenXRPresentationMode::Legacy, which is not a choice here. It is shown
+  // as the display it gives (UpdateDisplay), and only another choice replaces it.
+  m_display = Prepare(new ConfigChoiceMap<OpenXRPresentationMode>(
+      {{tr("3D Screen"), OpenXRPresentationMode::StereoScreen},
+       {tr("Immersive"), OpenXRPresentationMode::Immersive},
+       {tr("Flat"), OpenXRPresentationMode::Vulkan}},
+      Config::GFX_VR_PRESENTATION_MODE, m_layer, m_global_layer));
+  m_display->setPlaceholderText(tr("2D Screen"));
+  connect(m_display, &QComboBox::currentIndexChanged, this, &VRSettingsPage::OnDisplayChosen);
+  layout->addWidget(m_display, 0, 0, 1, 3);
 
-  m_screen_distance_value->setText(QString::asprintf("%.1f", m_screen_distance->GetValue()));
-  connect(m_screen_distance, &ConfigFloatSlider::valueChanged, this, [this] {
-    m_screen_distance_value->setText(QString::asprintf("%.1f", m_screen_distance->GetValue()));
-  });
-  m_screen_size_value->setText(QString::asprintf("%.1f", m_screen_size->GetValue()));
-  connect(m_screen_size, &ConfigFloatSlider::valueChanged, this, [this] {
-    m_screen_size_value->setText(QString::asprintf("%.1f", m_screen_size->GetValue()));
-  });
-  m_head_locked_curvature_value->setText(
-      QString::asprintf("%.2f", m_head_locked_curvature->GetValue()));
-  connect(m_head_locked_curvature, &ConfigFloatSlider::valueChanged, this, [this] {
-    m_head_locked_curvature_value->setText(
-        QString::asprintf("%.2f", m_head_locked_curvature->GetValue()));
-  });
+  m_display_text = new QLabel;
+  m_display_text->setWordWrap(true);
+  layout->addWidget(m_display_text, 1, 0, 1, 3);
+}
 
-  // Sub-refresh-rate games are paced by the XR pacing thread, which re-submits the
-  // last frame at HMD cadence for ATW reprojection (replaced the legacy Opcode Replay).
-  m_forced_vbi_frequency = new ConfigChoiceMap<int>(
-      {{tr("Auto"), Config::GFX_VR_FORCED_VBI_FREQUENCY_AUTO},
-       {tr("Off"), Config::GFX_VR_FORCED_VBI_FREQUENCY_OFF},
-       {tr("72 Hz"), Config::GFX_VR_FORCED_VBI_FREQUENCY_72},
-       {tr("90 Hz"), Config::GFX_VR_FORCED_VBI_FREQUENCY_90},
-       {tr("120 Hz"), Config::GFX_VR_FORCED_VBI_FREQUENCY_120}},
-      Config::GFX_VR_FORCED_VBI_FREQUENCY);
-  framerate_layout->addWidget(new QLabel(tr("Forced VBI Frequency:")), 2, 0);
-  framerate_layout->addWidget(m_forced_vbi_frequency, 2, 1, 1, 2);
-  connect(m_forced_vbi_frequency, &QComboBox::currentIndexChanged, this,
-          [](int) { Config::SetBaseOrCurrent(Config::GFX_VR_AUTO_VBI_FROM_HMD, false); });
+void VRSettingsPage::OnDisplayChosen()
+{
+  const OpenXRPresentationMode mode = Read(Config::GFX_VR_PRESENTATION_MODE);
+  if (mode != OpenXRPresentationMode::Legacy)
+  {
+    const auto set = [this](const Config::Info<bool>& setting, bool value) {
+      if (m_layer)
+        m_layer->Set(setting, value);
+      else
+        Config::SetBaseOrCurrent(setting, value);
+    };
+    Config::ConfigChangeCallbackGuard guard;
+    set(Config::GFX_VR_ENABLE_OPENXR, mode != OpenXRPresentationMode::Vulkan);
+    set(Config::GFX_VR_FLAT_SCREEN, false);
+    set(Config::GFX_VR_STEREO_SCREEN, mode == OpenXRPresentationMode::StereoScreen);
+  }
+  UpdateDisplay();
+}
 
-  m_requested_refresh_rate = new ConfigChoiceMap<int>(
-      {{tr("Auto"), Config::GFX_VR_REQUESTED_REFRESH_RATE_AUTO},
-       {tr("60 Hz"), Config::GFX_VR_REQUESTED_REFRESH_RATE_60},
-       {tr("72 Hz"), Config::GFX_VR_REQUESTED_REFRESH_RATE_72},
-       {tr("90 Hz"), Config::GFX_VR_REQUESTED_REFRESH_RATE_90},
-       {tr("120 Hz"), Config::GFX_VR_REQUESTED_REFRESH_RATE_120}},
-      Config::GFX_VR_REQUESTED_REFRESH_RATE);
-  framerate_layout->addWidget(new QLabel(tr("Requested Refresh Rate:")), 3, 0);
-  framerate_layout->addWidget(m_requested_refresh_rate, 3, 1, 1, 2);
+// As VideoConfig::Refresh resolves it.
+VRSettingsPage::Display VRSettingsPage::GetDisplay() const
+{
+  switch (Read(Config::GFX_VR_PRESENTATION_MODE))
+  {
+  case OpenXRPresentationMode::Vulkan:
+    return Flat;
+  case OpenXRPresentationMode::Immersive:
+    return Immersive;
+  case OpenXRPresentationMode::StereoScreen:
+    return Screen3D;
+  case OpenXRPresentationMode::Legacy:
+    break;
+  }
 
-  m_eager_heartbeat =
-      new ConfigBool(tr("Eager Frame Heartbeat"), Config::GFX_VR_EAGER_HEARTBEAT);
-  m_eager_heartbeat->setToolTip(
-      tr("Controls how the VR pacing thread fills the headset's refresh rate when the game "
-         "renders slower than the display.<br><br>"
-         "<b>On</b> resubmits the last frame every headset refresh so every slot is filled. "
-         "Best for standalone runtimes with no motion smoothing (Quest). On PC, this also "
-         "prevents the runtime's own motion smoothing (SteamVR reprojection, Virtual Desktop "
-         "SSW, Meta Link ASW) from engaging in the first place, which avoids that smoothing's "
-         "own warping/ghosting artifacts — useful if you find those more distracting than the "
-         "judder it's meant to hide.<br><br>"
-         "<b>Off</b> paces submissions to the game's real frame rate so the PC runtime's own "
-         "motion smoothing can engage — this removes head-tracking judder on PC at the cost of "
-         "possible smoothing artifacts.<br><br>"
-         "Can be toggled while a game is running."));
-  framerate_layout->addWidget(m_eager_heartbeat, 3, 1, 1, 2);
+  if (!Read(Config::GFX_VR_ENABLE_OPENXR))
+    return Flat;
+  if (Read(Config::GFX_VR_FLAT_SCREEN))
+    return Screen2D;
+  return Read(Config::GFX_VR_STEREO_SCREEN) ? Screen3D : Immersive;
+}
 
-  m_clear_efb_slider = new ConfigSlider(Config::GFX_VR_CLEAR_EFB_MIN,
-                                        Config::GFX_VR_CLEAR_EFB_MAX,
-                                        Config::GFX_VR_CLEAR_EFB_COPIES,
-                                        Config::GFX_VR_CLEAR_EFB_STEP);
-  m_clear_efb_value = new QLabel();
-  rendering_layout->addWidget(
-      new ConfigSliderLabel(tr("Clear EFB (min width):"), m_clear_efb_slider), 0, 0);
-  rendering_layout->addWidget(m_clear_efb_slider, 0, 1);
-  rendering_layout->addWidget(m_clear_efb_value, 0, 2);
+void VRSettingsPage::UpdateDisplay()
+{
+  const Display display = GetDisplay();
 
-  auto update_clear_efb_label = [this] {
-    const int val = m_clear_efb_slider->value();
-    m_clear_efb_value->setText(val == 0 ? tr("Off") : QString::number(val));
-  };
-  update_clear_efb_label();
-  connect(m_clear_efb_slider, &ConfigSlider::valueChanged, this, update_clear_efb_label);
+  int index = -1;
+  switch (display)
+  {
+  case Screen3D:
+    index = 0;
+    m_display_text->setText(tr("The game is on a 3D screen in the room."));
+    break;
+  case Immersive:
+    index = 1;
+    m_display_text->setText(tr("The game world is all around you."));
+    break;
+  case Flat:
+    index = 2;
+    m_display_text->setText(tr("The game is in a normal window, without VR."));
+    break;
+  case Screen2D:
+    m_display_text->setText(tr("The game is on a 2D screen in the room."));
+    break;
+  }
+  {
+    const QSignalBlocker blocker(m_display);
+    m_display->setCurrentIndex(index);
+  }
 
-  // VR Gamma
-  m_vr_gamma = new ConfigFloatSlider(Config::GFX_VR_GAMMA_MIN, Config::GFX_VR_GAMMA_MAX,
-                                     Config::GFX_VR_GAMMA, Config::GFX_VR_GAMMA_STEP);
-  m_vr_gamma_value = new QLabel();
-  rendering_layout->addWidget(new ConfigFloatLabel(tr("VR Gamma:"), m_vr_gamma), 1, 0);
-  rendering_layout->addWidget(m_vr_gamma, 1, 1);
-  rendering_layout->addWidget(m_vr_gamma_value, 1, 2);
+  for (const auto& [displays, widget] : m_widgets)
+    widget->setVisible((displays & display) != 0);
+}
 
-  auto update_gamma_label = [this] {
-    const float val = m_vr_gamma->GetValue();
-    m_vr_gamma_value->setText(val <= 1.01f ? tr("Off") : QString::asprintf("%.1f", val));
-  };
-  update_gamma_label();
-  connect(m_vr_gamma, &ConfigFloatSlider::valueChanged, this, update_gamma_label);
+void VRSettingsPage::Finish()
+{
+  m_layout->addStretch();
 
-  // Eye buffer resolution scale (applied at session start)
-  m_resolution_scale = new ConfigFloatSlider(Config::GFX_VR_RESOLUTION_SCALE_MIN,
-                                             Config::GFX_VR_RESOLUTION_SCALE_MAX,
-                                             Config::GFX_VR_RESOLUTION_SCALE,
-                                             Config::GFX_VR_RESOLUTION_SCALE_STEP);
-  m_resolution_scale_value = new QLabel();
-  rendering_layout->addWidget(new ConfigFloatLabel(tr("Resolution Scale:"), m_resolution_scale),
-                              2, 0);
-  rendering_layout->addWidget(m_resolution_scale, 2, 1);
-  rendering_layout->addWidget(m_resolution_scale_value, 2, 2);
+  // After the controls' own handlers, as m_display's index is one of the things updated.
+  connect(&Settings::Instance(), &Settings::ConfigChanged, this, &VRSettingsPage::UpdateDisplay);
+  UpdateDisplay();
+}
 
-  auto update_resolution_scale_label = [this] {
-    m_resolution_scale_value->setText(
-        QString::asprintf("%.2fx", m_resolution_scale->GetValue()));
-  };
-  update_resolution_scale_label();
-  connect(m_resolution_scale, &ConfigFloatSlider::valueChanged, this,
-          update_resolution_scale_label);
+QGridLayout* VRSettingsPage::AddScreen()
+{
+  auto* const layout = AddGroup(tr("Screen"), HEADSET);
 
-  // Fixed foveated rendering (XR_FB_foveation; needs a runtime that exposes it, applied
-  // at session start)
-  m_foveation_level = new ConfigChoiceMap<int>(
-      {{tr("Off"), 0}, {tr("Low"), 1}, {tr("Medium"), 2}, {tr("High"), 3}},
-      Config::GFX_VR_FOVEATION_LEVEL);
-  m_dynamic_foveation = new ConfigBool(tr("Dynamic"), Config::GFX_VR_FOVEATION_DYNAMIC);
-  rendering_layout->addWidget(new QLabel(tr("Foveated Rendering:")), 3, 0);
-  rendering_layout->addWidget(m_foveation_level, 3, 1);
-  rendering_layout->addWidget(m_dynamic_foveation, 3, 2);
+  // In Immersive, the screen is the one for the game's 2D parts.
+  AddBool(layout, Immersive, Config::GFX_VR_VIRTUAL_SCREEN);
+  AddSlider(layout, HEADSET, Config::GFX_VR_SCREEN_DISTANCE, Config::GFX_VR_SCREEN_DISTANCE_MIN,
+            Config::GFX_VR_SCREEN_DISTANCE_MAX, Config::GFX_VR_SCREEN_DISTANCE_STEP, FormatMeters);
+  AddSlider(layout, HEADSET, Config::GFX_VR_SCREEN_SIZE, Config::GFX_VR_SCREEN_SIZE_MIN,
+            Config::GFX_VR_SCREEN_SIZE_MAX, Config::GFX_VR_SCREEN_SIZE_STEP, FormatMeters);
+  AddSlider(layout, Immersive, Config::GFX_VR_HUD_THICKNESS, Config::GFX_VR_HUD_THICKNESS_MIN,
+            Config::GFX_VR_HUD_THICKNESS_MAX, Config::GFX_VR_HUD_THICKNESS_STEP, [](float value) {
+              return value <= 0.001f ? tr("Off") : QString::asprintf("%.2f m", value);
+            });
+  return layout;
+}
 
-  m_foveate_efb = new ConfigBool(tr("Foveate Game Render (EFB)"), Config::GFX_VR_EFB_FOVEATION);
-  m_foveate_efb->setToolTip(
-      tr("Applies foveation to the game's own render pass, not just the eye buffers. Helps "
-         "games with long uninterrupted render passes, but hurts games that interrupt "
-         "rendering with many EFB copies per frame (it forces tiled GPUs out of direct "
-         "rendering mode). Leave off unless a specific game benefits."));
-  rendering_layout->addWidget(m_foveate_efb, 4, 1, 1, 2);
+void VRSettingsPage::AddImmersive()
+{
+  auto* const layout = AddGroup(tr("Immersive"), Immersive);
 
-  // Exact Screen Depth
-  m_exact_screen_depth =
-      new ConfigBool(tr("Exact Screen Depth"), Config::GFX_VR_EXACT_SCREEN_DEPTH);
-  m_exact_screen_depth->setToolTip(
-      tr("Writes the game's original depth values on the 2D Virtual Screen instead of "
-         "synthesized per-draw layers.<br><br>"
-         "This restores the console's exact depth-test behavior for menus and HUDs, which "
-         "eliminates z-fighting between overlapping 2D elements by construction. With this "
-         "enabled, Auto Layer Spread / Layer Offset / Element Depth are no longer needed for "
-         "correctness.<br><br>"
-         "Disable only to fall back to the legacy layer system for troubleshooting.<br><br>"
-         "Immersive VR turns this off unless you set it here or in a game's VR settings. "
-         "Some games need it on in places, for example a pause-screen map."));
-  virtual_screen_layout->addWidget(m_exact_screen_depth, 1, 0, 1, 3);
+  AddSlider(layout, ALL, Config::GFX_VR_UNITS_PER_METER, Config::GFX_VR_UNITS_PER_METER_MIN,
+            Config::GFX_VR_UNITS_PER_METER_MAX, Config::GFX_VR_UNITS_PER_METER_STEP,
+            FormatWorldScale, nullptr, ConfigFloatSlider::ScaleMode::Exponential);
+  AddSlider(layout, ALL, Config::GFX_VR_STEREO_SEPARATION, Config::GFX_VR_STEREO_SEPARATION_MIN,
+            Config::GFX_VR_STEREO_SEPARATION_MAX, Config::GFX_VR_STEREO_SEPARATION_STEP,
+            [](float value) { return QString::asprintf("%.0f%%", value); });
+  AddSlider(layout, ALL, Config::GFX_VR_LEAN_BACK_ANGLE, Config::GFX_VR_LEAN_BACK_ANGLE_MIN,
+            Config::GFX_VR_LEAN_BACK_ANGLE_MAX, Config::GFX_VR_LEAN_BACK_ANGLE_STEP,
+            [](float value) { return QString::asprintf("%.1f°", value); },
+            &Config::GFX_VR_ENABLE_LEAN_BACK_ANGLE);
+  AddSlider(layout, ALL, Config::GFX_VR_CAMERA_FORWARD, Config::GFX_VR_CAMERA_FORWARD_MIN,
+            Config::GFX_VR_CAMERA_FORWARD_MAX, Config::GFX_VR_CAMERA_FORWARD_STEP, FormatMeters,
+            &Config::GFX_VR_ENABLE_CAMERA_FORWARD);
+  AddSlider(layout, ALL, Config::GFX_VR_CAMERA_HEIGHT, Config::GFX_VR_CAMERA_HEIGHT_MIN,
+            Config::GFX_VR_CAMERA_HEIGHT_MAX, Config::GFX_VR_CAMERA_HEIGHT_STEP, FormatMeters,
+            &Config::GFX_VR_ENABLE_CAMERA_HEIGHT);
+  AddBool(layout, ALL, Config::GFX_VR_ENABLE_CAMERA_ANCHOR);
+  AddSlider(layout, ALL, Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING,
+            Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING_MIN, Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING_MAX,
+            Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING_STEP,
+            [](float value) { return QString::asprintf("%.2f", value); });
+  AddBool(layout, ALL, Config::GFX_VR_ENABLE_CONTROLLER_ANCHOR);
+  AddBool(layout, ALL, Config::GFX_VR_REMOVE_BARS);
+}
 
-  // Auto-Exclude EFB Effects
-  m_auto_native_efb_effects =
-      new ConfigBool(tr("Auto-Exclude EFB Effects"), Config::GFX_VR_AUTO_NATIVE_EFB_EFFECTS);
-  m_auto_native_efb_effects->setToolTip(
-      tr("Automatically keeps full-screen EFB effects (bloom, motion blur, heat distortion and "
-         "other post-processing) off the 2D Virtual Screen.<br><br>"
-         "These effects draw as 2D quads sampling a copy of the rendered frame, so the virtual "
-         "screen would otherwise capture them and smear the whole-scene effect across the 2D "
-         "screen. Detected draws render natively over each eye instead, exactly as if they had "
-         "a manual Fullscreen override.<br><br>"
-         "Genuine 2D content that samples a frame copy opaquely (e.g. a frozen pause-menu "
-         "background) stays on the virtual screen. Disable this if a game's 2D element is "
-         "misdetected and leaves the screen.<br><br>"
-         "Immersive VR turns this on unless you set it here or in a game's VR settings."));
-  virtual_screen_layout->addWidget(m_auto_native_efb_effects, 2, 0, 1, 3);
-  // Immersive VR only changes these two options' defaults (see GetVRExactScreenDepth). Show the
-  // value in effect; the options stay editable, and a change here is saved.
-  const auto update_immersive_screen_options = [this] {
-    const bool immersive_vr =
-        Config::Get(Config::GFX_VR_PRESENTATION_MODE) == OpenXRPresentationMode::Immersive;
-    const QSignalBlocker exact_screen_depth_blocker(m_exact_screen_depth);
-    const QSignalBlocker auto_native_efb_effects_blocker(m_auto_native_efb_effects);
-    m_exact_screen_depth->setChecked(GetVRExactScreenDepth(immersive_vr));
-    m_auto_native_efb_effects->setChecked(GetVRAutoNativeEfbEffects(immersive_vr));
-  };
-  connect(m_presentation_mode, &QComboBox::currentIndexChanged, this,
-          [update_immersive_screen_options](int) { update_immersive_screen_options(); });
-  connect(&Settings::Instance(), &Settings::ConfigChanged, this,
-          update_immersive_screen_options);
-  update_immersive_screen_options();
+void VRSettingsPage::AddHeadset()
+{
+  auto* const layout = AddGroup(tr("Headset"), HEADSET);
 
-  m_hud_thickness = new ConfigFloatSlider(Config::GFX_VR_HUD_THICKNESS_MIN,
-                                          Config::GFX_VR_HUD_THICKNESS_MAX,
-                                          Config::GFX_VR_HUD_THICKNESS,
-                                          Config::GFX_VR_HUD_THICKNESS_STEP);
-  m_hud_thickness_value = new QLabel();
-  virtual_screen_layout->addWidget(new ConfigFloatLabel(tr("Screen Depth:"), m_hud_thickness), 5,
-                                   0);
-  virtual_screen_layout->addWidget(m_hud_thickness, 5, 1);
-  virtual_screen_layout->addWidget(m_hud_thickness_value, 5, 2);
-
-  auto update_hud_thickness_label = [this] {
-    const float val = m_hud_thickness->GetValue();
-    m_hud_thickness_value->setText(val <= 0.001f ? tr("Off") : QString::asprintf("%.2f m", val));
-  };
-  update_hud_thickness_label();
-  connect(m_hud_thickness, &ConfigFloatSlider::valueChanged, this, update_hud_thickness_label);
-
-  general_layout->addWidget(openxr_group);
-  general_layout->addWidget(stereo_screen_group);
-  update_stereo_screen_visibility();
-  general_layout->addWidget(camera_group);
-  general_layout->addWidget(virtual_screen_group);
-  general_layout->addWidget(rendering_group);
-  auto* general_actions_layout = new QHBoxLayout;
-  general_actions_layout->addStretch();
-  m_reset_general_settings = new QPushButton(tr("Reset VR Settings"));
-  connect(m_reset_general_settings, &QPushButton::clicked, this, &VRPane::ResetGeneralSettings);
-  general_actions_layout->addWidget(m_reset_general_settings);
-  general_layout->addLayout(general_actions_layout);
-
-  auto* hacks_group = new QGroupBox(tr("VR Hacks"));
-  auto* hacks_group_layout = new QVBoxLayout;
-  hacks_group->setLayout(hacks_group_layout);
-
-  m_dont_clear_screen =
-      new ConfigBool(tr("Don't Clear Screen"), Config::GFX_VR_DONT_CLEAR_SCREEN);
-  m_disable_cpu_cull =
-      new ConfigBool(tr("Disable CPU Culling in VR"), Config::GFX_VR_DISABLE_CPU_CULL);
-  m_remove_bars = new ConfigBool(tr("Remove Cinematic Bars"), Config::GFX_VR_REMOVE_BARS);
-  m_frame_size_from_xfb =
-      new ConfigBool(tr("Frame Size from XFB Copy"), Config::GFX_VR_FRAME_SIZE_FROM_XFB);
-  m_frame_size_from_xfb->setToolTip(
-      tr("Match the composed scene to the EFB-to-XFB display copy without changing the game's\n"
-         "EFB viewport. This preserves Metroid Prime Trilogy blur/visor effects and corrects\n"
-         "Mario Golf's 480-line scene to 448-line display mismatch. Turn off for the legacy\n"
-         "clear-based behavior."));
-  m_panes_on_screen =
-      new ConfigBool(tr("Small 3D Viewports on Screen"), Config::GFX_VR_PANES_ON_SCREEN);
-  m_panes_on_screen->setToolTip(
-      tr("Draw 3D models rendered into small menu panes (e.g. the Mario Kart: Double Dash!!\n"
-         "character select boxes) on the 2D virtual screen instead of head-tracking them.\n"
-         "Stops them swaying and stretching when you move your head."));
-  m_detect_render_targets =
-      new ConfigBool(tr("Detect Render-to-Texture Viewports"), Config::GFX_VR_DETECT_RENDER_TARGETS);
-  m_detect_render_targets->setToolTip(
-      tr("Exclude square render-to-texture passes (shadow/environment maps) from VR\n"
-         "reprojection so their output textures don't bake in the head pose. Experimental."));
-  m_ortho_scissor_fix =
-      new ConfigBool(tr("Ortho Scissor Fix"), Config::GFX_VR_ORTHO_SCISSOR_FIX);
-  m_detect_skybox = new ConfigBool(tr("Detect Skybox"), Config::GFX_VR_DETECT_SKYBOX);
-  m_layered_palette_conversion_path =
-      new ConfigBool(tr("Layered Palette Conversion Path"),
-                     Config::GFX_VR_METROID_THERMAL_VISOR_FIX);
-  const auto update_layered_palette_conversion_path = [](bool checked) {
-    if (Config::Get(Config::GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX) != checked)
-      Config::SetBaseOrCurrent(Config::GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX, checked);
-  };
-  connect(m_layered_palette_conversion_path, &QCheckBox::toggled, this,
-          [update_layered_palette_conversion_path](bool checked) {
-            update_layered_palette_conversion_path(checked);
-          });
-  update_layered_palette_conversion_path(m_layered_palette_conversion_path->isChecked());
-
-  hacks_group_layout->addWidget(m_use_vulkan_multiview);
-  hacks_group_layout->addWidget(m_dont_clear_screen);
-  hacks_group_layout->addWidget(m_disable_cpu_cull);
-  hacks_group_layout->addWidget(m_remove_bars);
-  hacks_group_layout->addWidget(m_frame_size_from_xfb);
-  hacks_group_layout->addWidget(m_panes_on_screen);
-  hacks_group_layout->addWidget(m_detect_render_targets);
-  hacks_group_layout->addWidget(m_ortho_scissor_fix);
-  hacks_group_layout->addWidget(m_detect_skybox);
-  hacks_group_layout->addWidget(m_layered_palette_conversion_path);
-  hack_layout->addWidget(hacks_group);
-  hack_layout->addWidget(framerate_group);
-
-  auto* shaders_group = new QGroupBox(tr("Shaders"));
-  auto* shaders_group_layout = new QVBoxLayout;
-  shaders_group->setLayout(shaders_group_layout);
-
-  m_load_custom_shaders =
-      new ConfigBool(tr("Load Custom Shaders"), Config::GFX_VR_LOAD_CUSTOM_SHADERS);
-  shaders_group_layout->addWidget(m_load_custom_shaders);
-  hack_layout->addWidget(shaders_group);
-
-  passthrough_layout->addWidget(m_passthrough_remove_black_bg, 0, 0, 1, 3);
-  passthrough_layout->addWidget(m_passthrough_remove_black_clears, 1, 0, 1, 3);
-  passthrough_layout->addWidget(
-      new ConfigFloatLabel(tr("Scene Opacity:"), m_passthrough_scene_opacity), 2, 0);
-  passthrough_layout->addWidget(m_passthrough_scene_opacity, 2, 1);
-  passthrough_layout->addWidget(m_passthrough_scene_opacity_value, 2, 2);
-  passthrough_layout->addWidget(new QLabel(tr("Coverage Mode:")), 3, 0);
-  passthrough_layout->addWidget(m_passthrough_coverage_mode, 3, 1, 1, 2);
+  m_refresh_rate =
+      AddChoice<int>(layout, ALL, Config::GFX_VR_REQUESTED_REFRESH_RATE,
+                     {{tr("Auto"), Config::GFX_VR_REQUESTED_REFRESH_RATE_AUTO},
+                      {tr("60 Hz"), Config::GFX_VR_REQUESTED_REFRESH_RATE_60},
+                      {tr("72 Hz"), Config::GFX_VR_REQUESTED_REFRESH_RATE_72},
+                      {tr("90 Hz"), Config::GFX_VR_REQUESTED_REFRESH_RATE_90},
+                      {tr("120 Hz"), Config::GFX_VR_REQUESTED_REFRESH_RATE_120}});
+  AddSlider(layout, ALL, Config::GFX_VR_RESOLUTION_SCALE, Config::GFX_VR_RESOLUTION_SCALE_MIN,
+            Config::GFX_VR_RESOLUTION_SCALE_MAX, Config::GFX_VR_RESOLUTION_SCALE_STEP,
+            [](float value) { return QString::asprintf("%.2fx", value); });
+  AddChoice<bool>(layout, ALL, Config::GFX_VR_EAGER_HEARTBEAT,
+                  {{tr("Every Refresh"), true}, {tr("Match Game"), false}});
+  AddSlider(layout, TWO_EYES, Config::GFX_VR_GAMMA, Config::GFX_VR_GAMMA_MIN,
+            Config::GFX_VR_GAMMA_MAX, Config::GFX_VR_GAMMA_STEP, [](float value) {
+              return value <= 1.01f ? tr("Off") : QString::asprintf("%.1f", value);
+            });
+  AddChoice<int>(layout, Immersive, Config::GFX_VR_FOVEATION_LEVEL,
+                 {{tr("Off"), 0}, {tr("Low"), 1}, {tr("Medium"), 2}, {tr("High"), 3}});
+  AddBool(layout, Immersive, Config::GFX_VR_FOVEATION_DYNAMIC);
+  // On Linux, Immersive's picture is always opaque (VulkanOpenXR turns coverage off there), so
+  // only the room around a screen can be seen.
 #if defined(_WIN32)
+  AddBool(layout, TWO_EYES, Config::GFX_VR_PASSTHROUGH);
+#else
+  AddBool(layout, Screen3D, Config::GFX_VR_PASSTHROUGH);
+#endif
+}
+
+QVBoxLayout* VRSettingsPage::AddAdvanced()
+{
+  auto* const button = new QToolButton;
+  button->setText(tr("Advanced"));
+  button->setCheckable(true);
+  button->setAutoRaise(true);
+  button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  button->setArrowType(Qt::RightArrow);
+  m_layout->addWidget(button, 0, Qt::AlignLeft);
+
+  auto* const box = new QWidget;
+  box->hide();
+  m_layout->addWidget(box);
+  auto* const box_layout = new QVBoxLayout(box);
+  box_layout->setContentsMargins(0, 0, 0, 0);
+
+  connect(button, &QToolButton::toggled, box, [button, box](bool open) {
+    button->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
+    box->setVisible(open);
+  });
+
+  auto* const tracking = AddGroup(tr("Tracking and Speed"), HEADSET, box_layout);
+  m_reference_space_mode = AddChoice<OpenXRReferenceSpaceMode>(
+      tracking, ALL, Config::GFX_VR_REFERENCE_SPACE_MODE,
+      {{tr("Where You Are"), OpenXRReferenceSpaceMode::Local},
+       {tr("Play Area, Your Height"), OpenXRReferenceSpaceMode::StageHeight},
+       {tr("Play Area"), OpenXRReferenceSpaceMode::Stage}});
+  AddChoice<OpenXRTrackingMode>(tracking, Immersive, Config::GFX_VR_TRACKING_MODE,
+                                {{tr("Turn and Move"), OpenXRTrackingMode::Full6DoF},
+                                 {tr("Turn Only"), OpenXRTrackingMode::Rotation3DoF},
+                                 {tr("Off"), OpenXRTrackingMode::None}});
+  m_forced_vbi_frequency =
+      AddChoice<int>(tracking, ALL, Config::GFX_VR_FORCED_VBI_FREQUENCY,
+                     {{tr("Headset Rate"), Config::GFX_VR_FORCED_VBI_FREQUENCY_AUTO},
+                      {tr("Off"), Config::GFX_VR_FORCED_VBI_FREQUENCY_OFF},
+                      {tr("72 Hz"), Config::GFX_VR_FORCED_VBI_FREQUENCY_72},
+                      {tr("90 Hz"), Config::GFX_VR_FORCED_VBI_FREQUENCY_90},
+                      {tr("120 Hz"), Config::GFX_VR_FORCED_VBI_FREQUENCY_120}});
+  m_multiview = AddBool(tracking, Immersive, Config::GFX_VR_USE_VULKAN_MULTIVIEW);
+  AddBool(tracking, Immersive, Config::GFX_VR_EFB_FOVEATION);
+#ifndef BAIJI_STEAMVR
+  AddChoice<OpenXRMirrorView>(tracking, HEADSET, Config::GFX_VR_MIRROR_VIEW,
+                              {{tr("Both Eyes"), OpenXRMirrorView::BothEyes},
+                               {tr("Left Eye"), OpenXRMirrorView::LeftEye},
+                               {tr("Right Eye"), OpenXRMirrorView::RightEye},
+                               {tr("None"), OpenXRMirrorView::None}});
+#endif
+
+  auto* const fixes = AddGroup(tr("Game Fixes"), TWO_EYES, box_layout);
+  m_exact_screen_depth = AddBool(fixes, Immersive, Config::GFX_VR_EXACT_SCREEN_DEPTH);
+  m_auto_native_efb_effects = AddBool(fixes, Immersive, Config::GFX_VR_AUTO_NATIVE_EFB_EFFECTS);
+  AddBool(fixes, Immersive, Config::GFX_VR_PANES_ON_SCREEN);
+  AddBool(fixes, Immersive, Config::GFX_VR_ORTHO_SCISSOR_FIX);
+  AddBool(fixes, Immersive, Config::GFX_VR_DISABLE_CPU_CULL);
+  AddBool(fixes, Immersive, Config::GFX_VR_DETECT_SKYBOX);
+  AddBool(fixes, Immersive, Config::GFX_VR_DETECT_RENDER_TARGETS);
+  AddBool(fixes, Immersive, Config::GFX_VR_FRAME_SIZE_FROM_XFB);
+  AddBool(fixes, Immersive, Config::GFX_VR_DONT_CLEAR_SCREEN);
+  m_thermal_visor_fix = AddBool(fixes, ALL, Config::GFX_VR_METROID_THERMAL_VISOR_FIX);
+
+  auto* const clear_efb = Prepare(
+      new ConfigSlider(Config::GFX_VR_CLEAR_EFB_MIN, Config::GFX_VR_CLEAR_EFB_MAX,
+                       Config::GFX_VR_CLEAR_EFB_COPIES, m_layer, Config::GFX_VR_CLEAR_EFB_STEP,
+                       m_global_layer));
+  auto* const clear_efb_value = new QLabel;
+  const auto update_clear_efb = [clear_efb, clear_efb_value] {
+    clear_efb_value->setText(clear_efb->value() == 0 ? tr("Off") :
+                                                       QString::number(clear_efb->value()));
+  };
+  update_clear_efb();
+  connect(clear_efb, &ConfigSlider::valueChanged, clear_efb, update_clear_efb);
+  AddRow(fixes, Immersive,
+         new ConfigSliderLabel(GetText(clear_efb->GetLocation()).label + QLatin1Char(':'),
+                               clear_efb),
+         clear_efb, clear_efb_value);
+  AddSlider(fixes, Immersive, Config::GFX_VR_HEAD_LOCKED_CURVATURE,
+            Config::GFX_VR_HEAD_LOCKED_CURVATURE_MIN, Config::GFX_VR_HEAD_LOCKED_CURVATURE_MAX,
+            Config::GFX_VR_HEAD_LOCKED_CURVATURE_STEP, [](float value) {
+              return value <= 0.001f ? tr("Off") : QString::asprintf("%.2f", value);
+            });
+
+#if defined(_WIN32)
+  auto* const passthrough = AddGroup(tr("Passthrough"), TWO_EYES, box_layout);
+  AddBool(passthrough, ALL, Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_BG);
+  AddBool(passthrough, ALL, Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_CLEARS);
+  AddSlider(passthrough, ALL, Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY,
+            Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY_MIN,
+            Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY_MAX,
+            Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY_STEP,
+            [](float value) { return QString::asprintf("%.2f", value); });
+  AddChoice<VRPassthroughCoverageMode>(passthrough, ALL, Config::GFX_VR_PASSTHROUGH_COVERAGE_MODE,
+                                       {{tr("Exact"), VRPassthroughCoverageMode::Exact},
+                                        {tr("Fast"), VRPassthroughCoverageMode::Fast}});
+  QWidget* const passthrough_group = passthrough->parentWidget();
   const auto update_passthrough_backend = [passthrough_group] {
     passthrough_group->setEnabled(Config::Get(Config::MAIN_GFX_BACKEND) == "Vulkan");
   };
   connect(&Settings::Instance(), &Settings::ConfigChanged, passthrough_group,
           update_passthrough_backend);
   update_passthrough_backend();
-#else
-  passthrough_group->setVisible(false);
 #endif
-  hack_layout->addWidget(passthrough_group);
 
-  auto* tools_group = new QGroupBox(tr("Tools"));
-  auto* tools_layout = new QGridLayout;
-  tools_group->setLayout(tools_layout);
+  auto* const shaders = AddGroup(tr("Shaders"), ALL, box_layout);
+  AddBool(shaders, ALL, Config::GFX_VR_LOAD_CUSTOM_SHADERS);
+  return box_layout;
+}
+
+// ---- VRPane ------------------------------------------------------------------------------------
+
+VRPane::VRPane(QWidget* parent) : QWidget(parent)
+{
+  auto* const main_layout = new QVBoxLayout(this);
+
+  m_page = new VRSettingsPage(this, main_layout);
+  m_page->AddDisplay();
+  AddScreenRows(m_page->AddScreen());
+  m_page->AddImmersive();
+  m_page->AddHeadset();
+  AddMenuAndPointers();
+  AddAutosave();
+  AddTools(m_page->AddAdvanced());
+
+  connect(m_page->m_forced_vbi_frequency, &QComboBox::currentIndexChanged, this,
+          [](int) { Config::SetBaseOrCurrent(Config::GFX_VR_AUTO_VBI_FROM_HMD, false); });
+
+  const auto update_thermal_visor_fix = [](bool checked) {
+    if (Config::Get(Config::GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX) != checked)
+      Config::SetBaseOrCurrent(Config::GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX, checked);
+  };
+  connect(m_page->m_thermal_visor_fix, &QCheckBox::toggled, this, update_thermal_visor_fix);
+  update_thermal_visor_fix(m_page->m_thermal_visor_fix->isChecked());
+
+  // Immersive VR only changes these two options' defaults (see GetVRExactScreenDepth). Show the
+  // value in effect; the options stay editable, and a change here is saved.
+  const auto update_immersive_screen_options = [this] {
+    const bool immersive_vr =
+        Config::Get(Config::GFX_VR_PRESENTATION_MODE) == OpenXRPresentationMode::Immersive;
+    const QSignalBlocker exact_screen_depth_blocker(m_page->m_exact_screen_depth);
+    const QSignalBlocker auto_native_efb_effects_blocker(m_page->m_auto_native_efb_effects);
+    m_page->m_exact_screen_depth->setChecked(GetVRExactScreenDepth(immersive_vr));
+    m_page->m_auto_native_efb_effects->setChecked(GetVRAutoNativeEfbEffects(immersive_vr));
+  };
+  connect(m_page->m_display, &QComboBox::currentIndexChanged, this,
+          [update_immersive_screen_options](int) { update_immersive_screen_options(); });
+  connect(&Settings::Instance(), &Settings::ConfigChanged, this, update_immersive_screen_options);
+  update_immersive_screen_options();
+
+  auto* const actions_layout = new QHBoxLayout;
+  actions_layout->addStretch();
+  auto* const reset_settings = new QPushButton(tr("Reset VR Settings"));
+  connect(reset_settings, &QPushButton::clicked, this, &VRPane::ResetSettings);
+  actions_layout->addWidget(reset_settings);
+  main_layout->addLayout(actions_layout);
+
+  m_page->Finish();
+
+  connect(&Settings::Instance(), &Settings::EmulationStateChanged, this,
+          &VRPane::OnEmulationStateChanged);
+  OnEmulationStateChanged(Core::GetState(Core::System::GetInstance()));
+}
+
+void VRPane::AddScreenRows(QGridLayout* layout)
+{
+  m_page->AddSlider(layout, VRSettingsPage::Screen3D, Config::GFX_STEREO_DEPTH, 0.0f,
+                    Config::GFX_STEREO_DEPTH_MAXIMUM, 1.0f, [](float value) {
+                      return value < 0.5f ? tr("Off") : QString::asprintf("%.0f", value);
+                    });
+  m_page->AddSlider(layout, VRSettingsPage::Screen3D, Config::GFX_STEREO_CONVERGENCE, 0.0f,
+                    Config::GFX_STEREO_CONVERGENCE_MAXIMUM, 0.01f, FormatPlain);
+
+  constexpr unsigned screen = VRSettingsPage::Screen3D | VRSettingsPage::Screen2D;
+  m_page->AddBool(layout, screen, Config::GFX_VR_LOCK_SCREEN);
+  auto* const reset_screen = new QPushButton(tr("Reset Screen"));
+  reset_screen->setToolTip(tr("Puts the screen back in front of you, at its usual distance and size."));
+  connect(reset_screen, &QPushButton::clicked, this, &VRPane::ResetScreen);
+  m_page->AddRow(layout, screen, nullptr, reset_screen);
+}
+
+void VRPane::AddMenuAndPointers()
+{
+  auto* const layout = m_page->AddGroup(tr("Menu and Pointers"), VRSettingsPage::HEADSET);
+  m_page->AddBool(layout, VRSettingsPage::ALL, Config::GFX_VR_POINTER_BEAMS);
+  m_page->AddBool(layout, VRSettingsPage::ALL, Config::GFX_VR_TOASTS);
+}
+
+void VRPane::AddAutosave()
+{
+  auto* const group_layout = m_page->AddGroup(tr("Autosave"), VRSettingsPage::ALL);
+  auto* const enabled =
+      m_page->AddBool(group_layout, VRSettingsPage::ALL, Config::MAIN_AUTOSAVE_ENABLED);
+
+  auto* const options = new QWidget;
+  m_page->AddRow(group_layout, VRSettingsPage::ALL, nullptr, options);
+  auto* const options_layout = new QGridLayout(options);
+  options_layout->setContentsMargins(0, 0, 0, 0);
+  options_layout->setColumnStretch(1, 1);
+
+  // As the VR menu has them.
+  std::vector<std::pair<QString, u32>> minutes;
+  for (const u32 m : {1u, 2u, 5u, 10u, 15u})
+    minutes.emplace_back(tr("%1 min").arg(m), m);
+  auto* const every = m_page->AddChoice<u32>(options_layout, VRSettingsPage::ALL,
+                                             Config::MAIN_AUTOSAVE_MINUTES, minutes);
+
+  auto* const keep =
+      m_page->Prepare(new ConfigSliderU32(1, 10, Config::MAIN_AUTOSAVE_KEEP));
+  auto* const keep_value = new QLabel;
+  keep_value->setMinimumWidth(keep_value->fontMetrics().horizontalAdvance(QStringLiteral("00")));
+  const auto update_keep = [keep, keep_value] {
+    keep_value->setText(QString::number(keep->value()));
+  };
+  update_keep();
+  connect(keep, &ConfigSliderU32::valueChanged, keep, update_keep);
+  m_page->AddRow(options_layout, VRSettingsPage::ALL,
+                 VRSettingsPage::MakeLabel(keep->GetLocation()), keep, keep_value);
+
+  const auto update = [options, every] {
+    options->setVisible(Config::Get(Config::MAIN_AUTOSAVE_ENABLED));
+    // For a number of minutes from the config file that is not in the list.
+    every->setPlaceholderText(tr("%1 min").arg(Config::Get(Config::MAIN_AUTOSAVE_MINUTES)));
+  };
+  connect(enabled, &QCheckBox::toggled, this, update);
+  connect(&Settings::Instance(), &Settings::ConfigChanged, this, update);
+  update();
+}
+
+void VRPane::AddTools(QVBoxLayout* layout)
+{
+  auto* const tools_layout =
+      m_page->AddGroup(tr("Developer Tools"), VRSettingsPage::ALL, layout);
 
   auto* add_hide_object_code_btn = new QPushButton(tr("Add Hide Object Code"));
   connect(add_hide_object_code_btn, &QPushButton::clicked, this, [this] {
@@ -728,395 +823,92 @@ VRPane::VRPane(QWidget* parent) : QWidget(parent)
   });
   tools_layout->addWidget(culling_finder_btn, 2, 0);
 
-  auto* debug_group = new QGroupBox(tr("Debug"));
-  auto* debug_layout = new QGridLayout;
-  debug_group->setLayout(debug_layout);
-
-  debug_layout->addWidget(new QLabel(tr("Default VR Position:")), 0, 0);
-  debug_layout->addWidget(m_reference_space_mode, 0, 1);
-  debug_layout->addWidget(new QLabel(tr("Tracking Mode:")), 1, 0);
-  debug_layout->addWidget(m_tracking_mode, 1, 1);
-
-  m_debug_log_draws = new QCheckBox(tr("Debug Log Draws"));
-  m_debug_log_draws->setToolTip(
+  auto* const log_draws = new QCheckBox(tr("Log Draws"));
+  log_draws->setToolTip(
       tr("Log every draw call with projection, viewport, scissor, and shader hashes.\n"
          "Also logs EFB clear operations. Use to identify how visual elements are drawn.\n"
          "Open Log Configuration and enable INFO for Video to see the output.\n"
          "WARNING: generates a LOT of log output — enable briefly, then disable."));
-  m_debug_log_draws->setChecked(ShaderHunter::GetInstance().IsDebugLogging());
-  connect(m_debug_log_draws, &QCheckBox::toggled, this,
+  log_draws->setChecked(ShaderHunter::GetInstance().IsDebugLogging());
+  connect(log_draws, &QCheckBox::toggled, this,
           [](bool checked) { ShaderHunter::GetInstance().SetDebugLogging(checked); });
-  debug_layout->addWidget(m_debug_log_draws, 2, 0, 1, 2);
-
-  general_layout->addStretch();
-  hack_layout->addStretch();
-  tools_tab_layout->addWidget(tools_group);
-  tools_tab_layout->addWidget(debug_group);
-  tools_tab_layout->addStretch();
-
-  main_layout->addWidget(tabs);
-
-  setLayout(main_layout);
-
-  AddDescriptions();
-
-  connect(&Settings::Instance(), &Settings::EmulationStateChanged, this,
-          &VRPane::OnEmulationStateChanged);
-  OnEmulationStateChanged(Core::GetState(Core::System::GetInstance()));
-}
-
-void VRPane::AddDescriptions()
-{
-  static constexpr char TR_REQUESTED_REFRESH_RATE_DESCRIPTION[] = QT_TR_NOOP(
-      "Requests a specific display refresh rate from the OpenXR runtime."
-      "<br><br>Auto leaves the runtime's default unchanged. Selecting a rate that matches the "
-      "game's frame rate (e.g. 60 Hz for most Wii games, or 120 Hz to show each 60 fps frame "
-      "twice) can reduce judder compared to running a 60 fps game on a 72 Hz display."
-      "<br><br>The runtime may clamp the request to the nearest supported rate. This setting "
-      "requires restarting emulation."
-      "<br><br><dolphin_emphasis>If unsure, use Auto.</dolphin_emphasis>");
-  static constexpr char TR_USE_VULKAN_MULTIVIEW_DESCRIPTION[] = QT_TR_NOOP(
-      "Uses Vulkan multiview for OpenXR stereo rendering when the GPU and runtime support it."
-      "<br><br>This renders both eyes through a multiview render pass instead of using "
-      "geometry-shader stereo expansion, which can be much faster on Quest/Adreno."
-      "<br><br>This setting only affects the Vulkan backend and requires restarting emulation."
-      "<br><br><dolphin_emphasis>If unsure on Quest, leave this checked.</dolphin_emphasis>");
-  static constexpr char TR_UNITS_PER_METER_DESCRIPTION[] = QT_TR_NOOP(
-      "Sets game-world units per real meter. Default: 1.0. Higher values make the virtual world "
-      "smaller and increase effective stereo depth relative to game geometry; lower values make it "
-      "larger and reduce depth."
-      "<br><br>Use Stereo Separation to adjust depth without changing world scale.");
-  static constexpr char TR_STEREO_SEPARATION_DESCRIPTION[] = QT_TR_NOOP(
-      "Scales the virtual left/right eye offset while leaving world scale and head movement "
-      "unchanged. 100% preserves the current OpenXR eye spacing; lower values reduce stereo "
-      "depth and 0% approaches mono. Lower separation may make strong near-field pop-out easier "
-      "to fuse and may ease eye strain, but comfort varies. Higher values increase depth and "
-      "may increase strain. This affects Immersive VR; Stereo 3D Screen uses the Stereoscopic "
-      "Depth setting instead.");
-  static constexpr char TR_REFERENCE_SPACE_MODE_DESCRIPTION[] = QT_TR_NOOP(
-       "Selects how BaijiSteamVR sets the default VR position when OpenXR starts."
-       "<br><br>LOCAL uses OpenXR <code>LOCAL</code> space and keeps the current behavior: "
-      "sets home from the initial headset position."
-      "<br><br>STAGE + Height uses OpenXR <code>STAGE</code> space, keeps the play-space center "
-      "for horizontal position, and offsets height by the initial headset height."
-      "<br><br>STAGE uses OpenXR <code>STAGE</code> space and uses the play-space origin directly."
-       "<br><br>If <code>STAGE</code> is unavailable, BaijiSteamVR falls back to <code>LOCAL</code>."
-      "<br><br>This setting requires restarting emulation."
-      "<br><br><dolphin_emphasis>If unsure, use LOCAL.</dolphin_emphasis>");
-  static constexpr char TR_TRACKING_MODE_DESCRIPTION[] = QT_TR_NOOP(
-      "Selects how OpenXR headset tracking affects the VR camera."
-      "<br><br>6DoF uses full rotation and position tracking."
-      "<br><br>3DoF uses head rotation tracking only and ignores headset position movement."
-      "<br><br>None disables both head rotation and position tracking."
-      "<br><br>This only affects the emulated VR camera; OpenXR still receives frames normally."
-      "<br><br><dolphin_emphasis>If unsure, use 6DoF.</dolphin_emphasis>");
-  static constexpr char TR_LEAN_BACK_ANGLE_DESCRIPTION[] = QT_TR_NOOP(
-      "Applies a constant pitch offset (in degrees) to the VR camera."
-      "<br><br>Use this to compensate games where the default viewpoint feels tilted."
-      "<br><br>Positive values lean the camera back, negative values lean it forward.");
-  static constexpr char TR_CAMERA_FORWARD_DESCRIPTION[] = QT_TR_NOOP(
-      "Applies a constant forward/backward offset (in meters) to the VR camera."
-      "<br><br>Positive values move the camera forward, negative values move it backward.");
-  static constexpr char TR_CAMERA_HEIGHT_DESCRIPTION[] = QT_TR_NOOP(
-      "Applies a constant vertical offset (in meters) to the VR camera."
-      "<br><br>Positive values move the camera up, negative values move it down.");
-  static constexpr char TR_VIRTUAL_SCREEN_DESCRIPTION[] = QT_TR_NOOP(
-      "Places 2D content (menus, FMV, in-game HUD) on a virtual screen floating in 3D space."
-      "<br><br>Disable for games that rely on full-screen EFB effects that don't work with a virtual screen.");
-  static constexpr char TR_SCREEN_DISTANCE_DESCRIPTION[] = QT_TR_NOOP(
-      "Distance in meters to the virtual screen used for 2D content (menus, FMV, HUD)."
-      "<br><br>Default: 2.0 m."
-      "<br><br>The screen is fixed in space like a TV — it stays in place when you turn your head.");
-  static constexpr char TR_STEREO_DEPTH_DESCRIPTION[] = QT_TR_NOOP(
-      "Controls the separation distance between the virtual cameras. Default: 20."
-      "<br><br>A higher value creates a stronger feeling of depth while a lower value is more "
-      "comfortable.");
-  static constexpr char TR_STEREO_CONVERGENCE_DESCRIPTION[] = QT_TR_NOOP(
-      "Controls the distance of the convergence plane. Default: 20. This is the distance at which "
-      "virtual objects will appear to be in front of the screen."
-      "<br><br>A higher value creates stronger out-of-screen effects while a lower value is more "
-      "comfortable.");
-  static constexpr char TR_SCREEN_SIZE_DESCRIPTION[] = QT_TR_NOOP(
-      "Height in meters of the virtual screen used for 2D content."
-      "<br><br>Larger values make the screen bigger, smaller values make it more compact.");
-  static constexpr char TR_HEAD_LOCKED_CURVATURE_DESCRIPTION[] = QT_TR_NOOP(
-      "Curves the virtual screen used by Head Locked shader overrides."
-      "<br><br>0 keeps the screen flat. Higher values increase curvature."
-      "<br><br>This only affects shaders using Head Locked handling.");
-  static constexpr char TR_DONT_CLEAR_SCREEN_DESCRIPTION[] = QT_TR_NOOP(
-      "Prevents clearing the VR eye framebuffers before rendering each frame."
-      "<br><br>By default the screen is cleared to black, which prevents image trails when "
-      "looking outside the rendered area. Enable this if clearing causes visual glitches "
-      "in specific games."
-      "<br><br><dolphin_emphasis>If unsure, leave this unchecked.</dolphin_emphasis>");
-  static constexpr char TR_DISABLE_CPU_CULL_DESCRIPTION[] = QT_TR_NOOP(
-      "Disables CPU-side primitive culling when OpenXR VR is active."
-      "<br><br>This may fix missing geometry in some games at the cost of a small performance hit."
-       "<br><br>This only affects BaijiSteamVR's CPU culling optimization. It does not override "
-      "the game's own backface culling state.");
-#ifndef BAIJI_STEAMVR
-  static constexpr char TR_MIRROR_VIEW_DESCRIPTION[] = QT_TR_NOOP(
-      "Selects what the desktop render window shows while OpenXR is active."
-      "<br><br>Both Eyes shows the current side-by-side mirror. Left Eye and Right Eye fill the "
-      "window with a single eye. None leaves the desktop window blank while continuing to render "
-      "normally to the headset."
-      "<br><br>This only affects the desktop mirror view; it does not affect the OpenXR headset "
-      "output.");
-#endif
-  static constexpr char TR_FORCED_VBI_FREQUENCY_DESCRIPTION[] = QT_TR_NOOP(
-       "Forces BaijiSteamVR's VBI frequency to the selected rate while OpenXR VR is enabled."
-      "<br><br>Auto samples the headset refresh rate once at OpenXR session startup and uses "
-      "the closest supported value: 72, 90, or 120 Hz."
-      "<br><br>This overrides the Advanced tab's VBI percentage during VR sessions."
-      "<br><br><dolphin_emphasis>If unsure, leave this set to Off.</dolphin_emphasis>");
-  static constexpr char TR_HUD_THICKNESS_DESCRIPTION[] = QT_TR_NOOP(
-      "Gives 2D HUD/menu layers real 3D depth in VR by spreading their elements across this "
-      "much world-space thickness (in metres), instead of drawing them flat on a single plane."
-       "<br><br>Recreates the layered HUD effect from the VR Hydra project (e.g. the Metroid Prime "
-      "visor). Only affects 2D layers whose elements are drawn at different depths; flat menus "
-      "and full-motion video are unaffected. Set to 0 (Off) for a completely flat HUD."
-      "<br><br><dolphin_emphasis>If unsure, leave this at 0 (off).</dolphin_emphasis>");
-  static constexpr char TR_CLEAR_EFB_COPIES_DESCRIPTION[] = QT_TR_NOOP(
-      "Clears EFB (Embedded Framebuffer) copy textures to transparent when the copy's native "
-      "width is at or above this threshold. Set to 0 to disable."
-      "<br><br>Full-screen post-processing effects (bloom, blur) typically use full EFB width "
-      "(640). HUD and small UI elements use smaller partial copies. Increasing this value "
-      "preserves smaller EFB copies (like HUD textures) while removing large full-screen effects."
-      "<br><br>Recommended: 400-640 to clear only full-screen effects, or 0 to disable."
-      "<br><br><dolphin_emphasis>If unsure, leave this at 0 (off).</dolphin_emphasis>");
-  static constexpr char TR_REMOVE_BARS_DESCRIPTION[] = QT_TR_NOOP(
-      "Expands the scissor and viewport to fill the full active rendering area for perspective "
-      "draws, removing cinematic letterbox bars."
-      "<br><br>Some games (e.g. Metroid Prime) use GX scissor clipping to create cinematic "
-      "bars that mask the top and bottom of the screen. In VR these bars are distracting. "
-      "This option removes them by expanding the rendered area."
-      "<br><br>Disable this if it causes visual artifacts in a specific game."
-      "<br><br><dolphin_emphasis>If unsure, leave this checked.</dolphin_emphasis>");
-  static constexpr char TR_ORTHO_SCISSOR_FIX_DESCRIPTION[] = QT_TR_NOOP(
-      "Expands the scissor to the full active rendering area for orthographic VR draws."
-      "<br><br>This fixes 2D content that is reprojected onto the VR virtual screen but still "
-      "uses game-side EFB scissor coordinates, such as the item roulette in Mario Kart: "
-      "Double Dash!!."
-      "<br><br>Disable this if a game needs its original orthographic scissor clipping."
-      "<br><br><dolphin_emphasis>If unsure, leave this checked.</dolphin_emphasis>");
-  static constexpr char TR_DETECT_SKYBOX_DESCRIPTION[] = QT_TR_NOOP(
-      "Assumes any object drawn at the camera origin (translation 0,0,0) is a skybox and locks it "
-      "to head rotation only, so it renders at infinity instead of appearing too close."
-      "<br><br>Some games (e.g. Metroid Prime) draw the sky as a small box centred on the camera. "
-      "In VR the per-eye offset makes that box look only a metre or two away. This option removes "
-      "the positional/IPD offset for those draws so both eyes see the same distant sky, which "
-      "rotates with your head but does not move when you lean."
-      "<br><br>Disable this if it incorrectly affects non-sky geometry in a specific game."
-      "<br><br><dolphin_emphasis>If unsure, leave this unchecked.</dolphin_emphasis>");
-  static constexpr char TR_LAYERED_PALETTE_CONVERSION_PATH_DESCRIPTION[] = QT_TR_NOOP(
-      "Uses a layered palette conversion path for Metroid Prime's thermal visor EFB copy when "
-      "running the Vulkan or D3D11 backend in OpenXR."
-      "<br><br>This keeps the thermal source stereo during palette conversion instead of "
-      "flattening it to one eye."
-      "<br><br>This only changes palette conversion for Metroid Prime thermal-sized stereo EFB "
-      "copies. It does not change normal game shaders, X-Ray handling, or non-Metroid games."
-      "<br><br><dolphin_emphasis>If unsure, leave this checked.</dolphin_emphasis>");
-  static constexpr char TR_VR_GAMMA_DESCRIPTION[] = QT_TR_NOOP(
-      "Adjusts gamma correction for VR eye output."
-      "<br><br>1.0 = no correction (default). 2.2 = standard sRGB gamma. "
-      "Higher values darken the image further."
-      "<br><br>Some headsets expect sRGB-encoded content and appear "
-      "too bright without correction. Adjust this slider until the brightness matches "
-      "the desktop mirror."
-      "<br><br><dolphin_emphasis>If unsure, leave this at 1.0 (Off).</dolphin_emphasis>");
-  static constexpr char TR_LOAD_CUSTOM_SHADERS_DESCRIPTION[] = QT_TR_NOOP(
-      "Loads custom shader replacements from the Load/Shaders/&lt;GameID&gt;/ directory."
-      "<br><br>Place edited shader files (dumped via Shader Hunter) in this folder to override "
-      "the game's original shaders. Files must be named &lt;hash&gt;-&lt;vs|ps|gs&gt;.txt."
-      "<br><br><dolphin_emphasis>If unsure, leave this unchecked.</dolphin_emphasis>");
-  static constexpr char TR_PASSTHROUGH_DESCRIPTION[] = QT_TR_NOOP(
-      "Shows the headset camera feed behind the game. In Stereo 3D Screen mode the game remains "
-      "an opaque virtual screen while the camera view is visible around it. In immersive VR, "
-      "transparent game regions additionally require Vulkan coverage support. OpenXR runtimes "
-      "must support alpha blending or a passthrough extension."
-      "<br><br>Meta Horizon Link uses <code>XR_FB_passthrough</code> when <b>Passthrough over "
-      "Meta Horizon Link</b> is enabled. Other runtimes may use the <code>ALPHA_BLEND</code> "
-      "environment blend mode."
-      "<br><br><dolphin_emphasis>If unsure, leave this unchecked.</dolphin_emphasis>");
-  static constexpr char TR_PASSTHROUGH_REMOVE_BLACK_BG_DESCRIPTION[] = QT_TR_NOOP(
-      "Reveals only EFB regions that no accepted game color fragment or color clear touched. "
-      "Black game clears remain opaque unless <b>Remove Black EFB Clears</b> is enabled."
-      "<br><br>Disable this to keep the whole scene opaque and control passthrough "
-      "manually — only elements marked with a <b>Passthrough</b> override (Shader / "
-      "Elements Group / Texture Element tools) become camera windows. Useful for games "
-      "that explicitly draw their menu backgrounds."
-      "<br><br><dolphin_emphasis>If unsure, leave this checked.</dolphin_emphasis>");
-  static constexpr char TR_PASSTHROUGH_REMOVE_BLACK_CLEARS_DESCRIPTION[] = QT_TR_NOOP(
-      "Treats (near-)black EFB color clears as unrendered instead of covered."
-      "<br><br>Most games clear the whole screen to black every frame, which normally "
-      "marks everything as covered — the void around menus or behind a removed skybox "
-      "stays opaque black. With this enabled, those cleared regions reveal the camera "
-      "feed until the game draws over them. Colored clears (skies, white menu "
-      "backgrounds) always stay opaque."
-      "<br><br>Content the game actually draws — even pure black art, FMVs or letterbox "
-      "bars drawn as geometry — is unaffected."
-      "<br><br><dolphin_emphasis>If unsure, leave this checked.</dolphin_emphasis>");
-  static constexpr char TR_PASSTHROUGH_SCENE_OPACITY_DESCRIPTION[] = QT_TR_NOOP(
-      "Blends the entire rendered scene over the camera feed."
-      "<br><br>1.00 shows the game fully opaque; lower values make everything on screen "
-      "progressively see-through until only the real world remains at 0.00. Passthrough "
-      "windows and the black void are unaffected (they are already fully transparent)."
-      "<br><br><dolphin_emphasis>If unsure, leave this at 1.00.</dolphin_emphasis>");
-  static constexpr char TR_PASSTHROUGH_COVERAGE_MODE_DESCRIPTION[] = QT_TR_NOOP(
-      "Exact preserves game blending and logic operations by using a coverage prepass when "
-      "the draw cannot safely write the coverage MRT."
-      "<br><br>Fast may disable dual-source blending where required. Incompatible logic and "
-      "custom draws still use a prepass."
-      "<br><br><dolphin_emphasis>If unsure, select Exact.</dolphin_emphasis>");
-
-  m_use_vulkan_multiview->SetDescription(tr(TR_USE_VULKAN_MULTIVIEW_DESCRIPTION));
-  m_reference_space_mode->SetDescription(tr(TR_REFERENCE_SPACE_MODE_DESCRIPTION));
-  m_tracking_mode->SetDescription(tr(TR_TRACKING_MODE_DESCRIPTION));
-  m_units_per_meter->SetDescription(tr(TR_UNITS_PER_METER_DESCRIPTION));
-  m_stereo_depth->SetDescription(tr(TR_STEREO_DEPTH_DESCRIPTION));
-  m_stereo_convergence->SetDescription(tr(TR_STEREO_CONVERGENCE_DESCRIPTION));
-  m_stereo_separation->SetDescription(tr(TR_STEREO_SEPARATION_DESCRIPTION));
-  m_lean_back_angle->SetDescription(tr(TR_LEAN_BACK_ANGLE_DESCRIPTION));
-  m_camera_forward->SetDescription(tr(TR_CAMERA_FORWARD_DESCRIPTION));
-  m_camera_height->SetDescription(tr(TR_CAMERA_HEIGHT_DESCRIPTION));
-  m_virtual_screen->SetDescription(tr(TR_VIRTUAL_SCREEN_DESCRIPTION));
-  m_screen_distance->SetDescription(tr(TR_SCREEN_DISTANCE_DESCRIPTION));
-  m_screen_size->SetDescription(tr(TR_SCREEN_SIZE_DESCRIPTION));
-  m_head_locked_curvature->SetDescription(tr(TR_HEAD_LOCKED_CURVATURE_DESCRIPTION));
-  m_dont_clear_screen->SetDescription(tr(TR_DONT_CLEAR_SCREEN_DESCRIPTION));
-  m_disable_cpu_cull->SetDescription(tr(TR_DISABLE_CPU_CULL_DESCRIPTION));
-#ifndef BAIJI_STEAMVR
-  m_mirror_view->SetDescription(tr(TR_MIRROR_VIEW_DESCRIPTION));
-#endif
-  m_forced_vbi_frequency->SetDescription(tr(TR_FORCED_VBI_FREQUENCY_DESCRIPTION));
-  m_requested_refresh_rate->SetDescription(tr(TR_REQUESTED_REFRESH_RATE_DESCRIPTION));
-  m_clear_efb_slider->SetDescription(tr(TR_CLEAR_EFB_COPIES_DESCRIPTION));
-  m_remove_bars->SetDescription(tr(TR_REMOVE_BARS_DESCRIPTION));
-  m_ortho_scissor_fix->SetDescription(tr(TR_ORTHO_SCISSOR_FIX_DESCRIPTION));
-  m_detect_skybox->SetDescription(tr(TR_DETECT_SKYBOX_DESCRIPTION));
-  m_layered_palette_conversion_path->SetDescription(
-      tr(TR_LAYERED_PALETTE_CONVERSION_PATH_DESCRIPTION));
-  m_vr_gamma->SetDescription(tr(TR_VR_GAMMA_DESCRIPTION));
-  m_hud_thickness->SetDescription(tr(TR_HUD_THICKNESS_DESCRIPTION));
-  m_load_custom_shaders->SetDescription(tr(TR_LOAD_CUSTOM_SHADERS_DESCRIPTION));
-  m_passthrough->SetDescription(tr(TR_PASSTHROUGH_DESCRIPTION));
-  m_passthrough_remove_black_bg->SetDescription(tr(TR_PASSTHROUGH_REMOVE_BLACK_BG_DESCRIPTION));
-  m_passthrough_remove_black_clears->SetDescription(
-      tr(TR_PASSTHROUGH_REMOVE_BLACK_CLEARS_DESCRIPTION));
-  m_passthrough_scene_opacity->SetDescription(tr(TR_PASSTHROUGH_SCENE_OPACITY_DESCRIPTION));
-  m_passthrough_coverage_mode->SetDescription(
-      tr(TR_PASSTHROUGH_COVERAGE_MODE_DESCRIPTION));
+  tools_layout->addWidget(log_draws, 3, 0);
 }
 
 void VRPane::OnEmulationStateChanged(Core::State state)
 {
   const bool running = state != Core::State::Uninitialized;
-  m_presentation_mode->setEnabled(!running);
-  m_requested_refresh_rate->setEnabled(!running);
-  m_reference_space_mode->setEnabled(!running);
-  m_use_vulkan_multiview->setEnabled(!running);
+  m_page->m_display->setEnabled(!running);
+  m_page->m_refresh_rate->setEnabled(!running);
+  m_page->m_reference_space_mode->setEnabled(!running);
+  m_page->m_multiview->setEnabled(!running);
 }
 
-void VRPane::ResetGeneralSettings()
+// Reset Screen of the VR menu.
+void VRPane::ResetScreen()
+{
+  {
+    Config::ConfigChangeCallbackGuard guard;
+    for (const auto* setting : {&Config::GFX_VR_SCREEN_DISTANCE, &Config::GFX_VR_SCREEN_SIZE,
+                                &Config::GFX_VR_SCREEN_YAW, &Config::GFX_VR_SCREEN_PITCH})
+    {
+      Config::SetBaseOrCurrent(*setting, setting->GetDefaultValue());
+    }
+  }
+#ifdef ENABLE_VR
+  if (VR::g_openxr)
+    VR::g_openxr->RequestFlatScreenReanchor();
+#endif
+}
+
+void VRPane::ResetSettings()
 {
   Config::ConfigChangeCallbackGuard guard;
 
-  Config::SetBaseOrCurrent(Config::GFX_VR_ENABLE_OPENXR,
-                           Config::GFX_VR_ENABLE_OPENXR.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_FLAT_SCREEN,
-                           Config::GFX_VR_FLAT_SCREEN.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_STEREO_SCREEN,
-                           Config::GFX_VR_STEREO_SCREEN.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_PRESENTATION_MODE,
-                           Config::GFX_VR_PRESENTATION_MODE.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_REFERENCE_SPACE_MODE,
-                           Config::GFX_VR_REFERENCE_SPACE_MODE.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_TRACKING_MODE,
-                           Config::GFX_VR_TRACKING_MODE.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_UNITS_PER_METER,
-                           Config::GFX_VR_UNITS_PER_METER.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_STEREO_DEPTH, Config::GFX_STEREO_DEPTH.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_STEREO_CONVERGENCE,
-                           Config::GFX_STEREO_CONVERGENCE.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_STEREO_SEPARATION,
-                           Config::GFX_VR_STEREO_SEPARATION.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_ENABLE_LEAN_BACK_ANGLE,
-                           Config::GFX_VR_ENABLE_LEAN_BACK_ANGLE.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_LEAN_BACK_ANGLE,
-                           Config::GFX_VR_LEAN_BACK_ANGLE.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_ENABLE_CAMERA_FORWARD,
-                           Config::GFX_VR_ENABLE_CAMERA_FORWARD.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_CAMERA_FORWARD,
-                           Config::GFX_VR_CAMERA_FORWARD.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_ENABLE_CAMERA_HEIGHT,
-                           Config::GFX_VR_ENABLE_CAMERA_HEIGHT.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_CAMERA_HEIGHT,
-                           Config::GFX_VR_CAMERA_HEIGHT.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_ENABLE_CAMERA_ANCHOR,
-                           Config::GFX_VR_ENABLE_CAMERA_ANCHOR.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING,
-                           Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_ENABLE_CONTROLLER_ANCHOR,
-                           Config::GFX_VR_ENABLE_CONTROLLER_ANCHOR.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_VIRTUAL_SCREEN,
-                           Config::GFX_VR_VIRTUAL_SCREEN.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_SCREEN_DISTANCE,
-                           Config::GFX_VR_SCREEN_DISTANCE.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_SCREEN_SIZE,
-                           Config::GFX_VR_SCREEN_SIZE.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_HEAD_LOCKED_CURVATURE,
-                           Config::GFX_VR_HEAD_LOCKED_CURVATURE.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_MIRROR_VIEW,
-                           Config::GFX_VR_MIRROR_VIEW.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_FORCED_VBI_FREQUENCY,
-                           Config::GFX_VR_FORCED_VBI_FREQUENCY.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_AUTO_VBI_FROM_HMD,
-                           Config::GFX_VR_AUTO_VBI_FROM_HMD.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_CLEAR_EFB_COPIES,
-                           Config::GFX_VR_CLEAR_EFB_COPIES.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_GAMMA, Config::GFX_VR_GAMMA.GetDefaultValue());
+  const auto reset = [](const auto&... settings) {
+    (Config::SetBaseOrCurrent(settings, settings.GetDefaultValue()), ...);
+  };
+
+  // Display
+  reset(Config::GFX_VR_ENABLE_OPENXR, Config::GFX_VR_FLAT_SCREEN, Config::GFX_VR_STEREO_SCREEN,
+        Config::GFX_VR_PRESENTATION_MODE);
+
+  // Screen
+  reset(Config::GFX_VR_VIRTUAL_SCREEN, Config::GFX_VR_SCREEN_DISTANCE, Config::GFX_VR_SCREEN_SIZE,
+        Config::GFX_VR_SCREEN_YAW, Config::GFX_VR_SCREEN_PITCH, Config::GFX_VR_HUD_THICKNESS,
+        Config::GFX_STEREO_DEPTH, Config::GFX_STEREO_CONVERGENCE, Config::GFX_VR_LOCK_SCREEN);
+
+  // Immersive
+  reset(Config::GFX_VR_UNITS_PER_METER, Config::GFX_VR_STEREO_SEPARATION,
+        Config::GFX_VR_ENABLE_LEAN_BACK_ANGLE, Config::GFX_VR_LEAN_BACK_ANGLE,
+        Config::GFX_VR_ENABLE_CAMERA_FORWARD, Config::GFX_VR_CAMERA_FORWARD,
+        Config::GFX_VR_ENABLE_CAMERA_HEIGHT, Config::GFX_VR_CAMERA_HEIGHT,
+        Config::GFX_VR_ENABLE_CAMERA_ANCHOR, Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING,
+        Config::GFX_VR_ENABLE_CONTROLLER_ANCHOR, Config::GFX_VR_REMOVE_BARS);
+
+  // Headset
+  reset(Config::GFX_VR_REQUESTED_REFRESH_RATE, Config::GFX_VR_RESOLUTION_SCALE,
+        Config::GFX_VR_EAGER_HEARTBEAT, Config::GFX_VR_GAMMA, Config::GFX_VR_FOVEATION_LEVEL,
+        Config::GFX_VR_FOVEATION_DYNAMIC, Config::GFX_VR_PASSTHROUGH);
+
+  // Menu and Pointers
+  reset(Config::GFX_VR_POINTER_BEAMS, Config::GFX_VR_TOASTS);
+
+  // Advanced
+  reset(Config::GFX_VR_REFERENCE_SPACE_MODE, Config::GFX_VR_TRACKING_MODE,
+        Config::GFX_VR_FORCED_VBI_FREQUENCY, Config::GFX_VR_AUTO_VBI_FROM_HMD,
+        Config::GFX_VR_USE_VULKAN_MULTIVIEW, Config::GFX_VR_EFB_FOVEATION,
+        Config::GFX_VR_MIRROR_VIEW, Config::GFX_VR_PANES_ON_SCREEN,
+        Config::GFX_VR_ORTHO_SCISSOR_FIX, Config::GFX_VR_DISABLE_CPU_CULL,
+        Config::GFX_VR_DETECT_SKYBOX, Config::GFX_VR_DETECT_RENDER_TARGETS,
+        Config::GFX_VR_FRAME_SIZE_FROM_XFB, Config::GFX_VR_DONT_CLEAR_SCREEN,
+        Config::GFX_VR_METROID_THERMAL_VISOR_FIX, Config::GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX,
+        Config::GFX_VR_CLEAR_EFB_COPIES, Config::GFX_VR_HEAD_LOCKED_CURVATURE,
+        Config::GFX_VR_LOAD_CUSTOM_SHADERS, Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_BG,
+        Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_CLEARS, Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY,
+        Config::GFX_VR_PASSTHROUGH_COVERAGE_MODE);
   // Unset rather than written, so Immersive VR's own defaults apply again
   // (GetVRExactScreenDepth / GetVRAutoNativeEfbEffects).
   Config::DeleteKey(Config::LayerType::Base, Config::GFX_VR_EXACT_SCREEN_DEPTH);
   Config::DeleteKey(Config::LayerType::Base, Config::GFX_VR_AUTO_NATIVE_EFB_EFFECTS);
-  Config::SetBaseOrCurrent(Config::GFX_VR_HUD_THICKNESS,
-                           Config::GFX_VR_HUD_THICKNESS.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_METROID_THERMAL_VISOR_FIX,
-                           Config::GFX_VR_METROID_THERMAL_VISOR_FIX.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX,
-                           Config::GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX.GetDefaultValue());
-
-  // Advanced tab
-  Config::SetBaseOrCurrent(Config::GFX_VR_USE_VULKAN_MULTIVIEW,
-                           Config::GFX_VR_USE_VULKAN_MULTIVIEW.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_DONT_CLEAR_SCREEN,
-                           Config::GFX_VR_DONT_CLEAR_SCREEN.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_DISABLE_CPU_CULL,
-                           Config::GFX_VR_DISABLE_CPU_CULL.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_REMOVE_BARS,
-                           Config::GFX_VR_REMOVE_BARS.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_FRAME_SIZE_FROM_XFB,
-                           Config::GFX_VR_FRAME_SIZE_FROM_XFB.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_PANES_ON_SCREEN,
-                           Config::GFX_VR_PANES_ON_SCREEN.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_DETECT_RENDER_TARGETS,
-                           Config::GFX_VR_DETECT_RENDER_TARGETS.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_ORTHO_SCISSOR_FIX,
-                           Config::GFX_VR_ORTHO_SCISSOR_FIX.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_DETECT_SKYBOX,
-                           Config::GFX_VR_DETECT_SKYBOX.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_EAGER_HEARTBEAT,
-                           Config::GFX_VR_EAGER_HEARTBEAT.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_LOAD_CUSTOM_SHADERS,
-                           Config::GFX_VR_LOAD_CUSTOM_SHADERS.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_PASSTHROUGH,
-                           Config::GFX_VR_PASSTHROUGH.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_BG,
-                           Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_BG.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_CLEARS,
-                           Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_CLEARS.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY,
-                           Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY.GetDefaultValue());
-  Config::SetBaseOrCurrent(Config::GFX_VR_PASSTHROUGH_COVERAGE_MODE,
-                           Config::GFX_VR_PASSTHROUGH_COVERAGE_MODE.GetDefaultValue());
 }

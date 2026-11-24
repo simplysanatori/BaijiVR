@@ -310,7 +310,7 @@ void QueueSwitchMode(bool to_immersive)
     Config::SetCurrent(Config::GFX_VR_PRESENTATION_MODE,
                        to_immersive ? OpenXRPresentationMode::Immersive :
                                       OpenXRPresentationMode::StereoScreen);
-    VrUi::PostToast(to_immersive ? "Immersive VR" : "3D Screen", 2000);
+    VrUi::PostToast(to_immersive ? "Immersive" : "3D Screen", 2000);
   });
 }
 }  // namespace

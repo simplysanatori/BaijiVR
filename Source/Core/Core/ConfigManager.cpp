@@ -190,6 +190,7 @@ static void ClearAppliedVRSettings()
   ClearAppliedVRSetting("VirtualScreen", Config::GFX_VR_VIRTUAL_SCREEN);
   ClearAppliedVRSetting("ScreenDistance", Config::GFX_VR_SCREEN_DISTANCE);
   ClearAppliedVRSetting("ScreenSize", Config::GFX_VR_SCREEN_SIZE);
+  ClearAppliedVRSetting("RequestedRefreshRate", Config::GFX_VR_REQUESTED_REFRESH_RATE);
   ClearAppliedVRSetting("HeadLockedCurvature", Config::GFX_VR_HEAD_LOCKED_CURVATURE);
   ClearAppliedVRSetting("DontClearScreen", Config::GFX_VR_DONT_CLEAR_SCREEN);
   ClearAppliedVRSetting("LoadCustomShaders", Config::GFX_VR_LOAD_CUSTOM_SHADERS);
@@ -273,6 +274,7 @@ static void ApplyGameVRConfigOverrides(std::string_view game_id, std::optional<u
   ApplyVRSetting(values, "VirtualScreen", Config::GFX_VR_VIRTUAL_SCREEN);
   ApplyVRSetting(values, "ScreenDistance", Config::GFX_VR_SCREEN_DISTANCE);
   ApplyVRSetting(values, "ScreenSize", Config::GFX_VR_SCREEN_SIZE);
+  ApplyVRSetting(values, "RequestedRefreshRate", Config::GFX_VR_REQUESTED_REFRESH_RATE);
   ApplyVRSetting(values, "HeadLockedCurvature", Config::GFX_VR_HEAD_LOCKED_CURVATURE);
   ApplyVRSetting(values, "DontClearScreen", Config::GFX_VR_DONT_CLEAR_SCREEN);
   ApplyVRSetting(values, "LoadCustomShaders", Config::GFX_VR_LOAD_CUSTOM_SHADERS);

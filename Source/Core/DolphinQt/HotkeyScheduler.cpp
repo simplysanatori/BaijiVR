@@ -560,7 +560,7 @@ void HotkeyScheduler::Run()
           Config::SetCurrent(Config::GFX_VR_PRESENTATION_MODE,
                              to_stereo_screen ? OpenXRPresentationMode::StereoScreen :
                                                 OpenXRPresentationMode::Immersive);
-          OSD::AddMessage(to_stereo_screen ? "Stereo Screen" : "Immersive VR");
+          OSD::AddMessage(to_stereo_screen ? "3D Screen" : "Immersive");
         }
       }
 #endif

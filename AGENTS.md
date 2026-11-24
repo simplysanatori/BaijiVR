@@ -18,7 +18,14 @@
   its choices aligned with `DolphinQt/Config/VRConfigWidget.cpp` and
   `DolphinQt/Settings/VRPane.cpp`; runtime mode resolution is in
   `VideoCommon/VideoConfig.cpp`.
-- XR heartbeat is `GFX_VR_EAGER_HEARTBEAT` (`Graphics.VR.EagerHeartbeat`), declared
+- The VR UI (menu, toasts, beams, moving the screen, save-state pages) is
+  `VideoCommon/VR/FrameUI/`, from Azahar for Frame. `VrUi` lives and runs on the XR pacing
+  thread only; uploads come before `m_video_handoff_mutex`, anything for other threads is a
+  host job, and `PadFilter` takes the VR controls out of the controllers before
+  `OpenXRInputState::SetControllers`. The screen has one placement (`GetScreenQuad`). The
+  settings page (`VRPane`) and the menu use the same names. `Core/Autosave.*` has the
+  autosave rules; unit tests are `VRFrameUITest`.
+- XR heartbeat (Frame Pacing in the UI) is `GFX_VR_EAGER_HEARTBEAT` (`Graphics.VR.EagerHeartbeat`), declared
   in `GraphicsSettings.cpp` and loaded in `VideoConfig.cpp`. `true` is Eager (submit
   each HMD refresh, reusing the last frame); `false` is Lazy (pace submissions to game
   frames so PC runtime motion smoothing can engage).

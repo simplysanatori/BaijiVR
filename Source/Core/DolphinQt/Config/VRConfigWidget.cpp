@@ -4,15 +4,11 @@
 #include "DolphinQt/Config/VRConfigWidget.h"
 
 #include <fstream>
-#include <functional>
 #include <sstream>
 #include <utility>
 
 #include <fmt/format.h>
 
-#include <QCheckBox>
-#include <QFont>
-#include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
 #include <QSignalBlocker>
@@ -32,12 +28,11 @@
 #include "Core/ConfigManager.h"
 #include "DolphinQt/Config/ConfigControls/ConfigBool.h"
 #include "DolphinQt/Config/ConfigControls/ConfigChoice.h"
-#include "DolphinQt/Config/ConfigControls/ConfigFloatSlider.h"
-#include "DolphinQt/Config/ConfigControls/ConfigSlider.h"
 #include "DolphinQt/Config/GameConfigEdit.h"
 #include "DolphinQt/QtUtils/QtUtils.h"
 #include "DolphinQt/QtUtils/WrapInScrollArea.h"
 #include "DolphinQt/Settings.h"
+#include "DolphinQt/Settings/VRPane.h"
 #include "VideoCommon/VideoConfig.h"
 
 namespace
@@ -266,192 +261,21 @@ void VRConfigWidget::CreateWidgets()
 {
   Config::Layer* const layer = m_layer.get();
 
-  const auto mark_default = [this](auto* control) {
-    if (!m_global_layer->Exists(control->GetLocation()))
-      return control;
+  auto* settings_page = new QWidget;
+  auto* page = new VRSettingsPage(this, new QVBoxLayout(settings_page), layer,
+                                  m_global_layer.get());
+  page->AddDisplay();
+  page->AddScreen();
+  page->AddImmersive();
+  page->AddHeadset();
+  page->AddAdvanced();
 
-    QFont font = control->font();
-    font.setItalic(true);
-    control->setFont(font);
-    return control;
-  };
-
-  const auto make_bool = [this, layer, &mark_default](const QString& text,
-                                                      const Config::Info<bool>& setting) {
-    return mark_default(new ConfigBool(text, setting, layer, false, m_global_layer.get()));
-  };
-
-  const auto add_float =
-      [this, layer, &mark_default](
-          QGridLayout* layout, int row, const QString& text, float minimum, float maximum,
-          const Config::Info<float>& setting, float step, std::function<QString(float)> format,
-          ConfigFloatSlider::ScaleMode scale = ConfigFloatSlider::ScaleMode::Linear) {
-        auto* slider = mark_default(new ConfigFloatSlider(minimum, maximum, setting, step, layer,
-                                                          scale, m_global_layer.get()));
-        auto* value = new QLabel;
-        const auto update = [slider, value, format = std::move(format)] {
-          value->setText(format(slider->GetValue()));
-        };
-        update();
-        QObject::connect(slider, &ConfigFloatSlider::valueChanged, slider, update);
-        if (!text.isEmpty())
-          layout->addWidget(new ConfigFloatLabel(text, slider), row, 0);
-        layout->addWidget(slider, row, 1);
-        layout->addWidget(value, row, 2);
-        return slider;
-      };
-
-  const auto add_int = [this, layer, &mark_default](QGridLayout* layout, int row,
-                                                    const QString& text, int minimum, int maximum,
-                                                    const Config::Info<int>& setting, int step,
-                                                    std::function<QString(int)> format) {
-    auto* slider = mark_default(
-        new ConfigSlider(minimum, maximum, setting, layer, step, m_global_layer.get()));
-    auto* value = new QLabel;
-    const auto update = [slider, value, format = std::move(format)] {
-      value->setText(format(slider->value()));
-    };
-    update();
-    QObject::connect(slider, &ConfigSlider::valueChanged, slider, update);
-    layout->addWidget(new ConfigSliderLabel(text, slider), row, 0);
-    layout->addWidget(slider, row, 1);
-    layout->addWidget(value, row, 2);
-    return slider;
-  };
-
-  auto* general_page = new QWidget;
-  auto* general_layout = new QVBoxLayout(general_page);
-
-  auto* openxr_group = new QGroupBox(tr("OpenXR"));
-  auto* openxr_layout = new QGridLayout(openxr_group);
-  const auto get_game_or_base = [layer, this](const auto& setting) {
-    if (layer->Exists(setting.GetLocation()))
-      return layer->Get(setting);
-    if (m_global_layer->Exists(setting.GetLocation()))
-      return m_global_layer->Get(setting);
-    return Config::GetBase(setting);
-  };
-  QString legacy_mode_name = tr("Use existing settings");
-  if (!get_game_or_base(Config::GFX_VR_ENABLE_OPENXR))
-    legacy_mode_name += tr(" (Vulkan flat display)");
-  else if (get_game_or_base(Config::GFX_VR_FLAT_SCREEN))
-    legacy_mode_name += tr(" (2D screen in VR)");
-  else if (get_game_or_base(Config::GFX_VR_STEREO_SCREEN))
-    legacy_mode_name += tr(" (stereo 3D screen)");
-  else
-    legacy_mode_name += tr(" (immersive VR)");
-
-  auto* presentation_mode = mark_default(new ConfigChoiceMap<OpenXRPresentationMode>(
-      {{legacy_mode_name, OpenXRPresentationMode::Legacy},
-       {tr("Flat Display (Vulkan)"), OpenXRPresentationMode::Vulkan},
-       {tr("Immersive VR"), OpenXRPresentationMode::Immersive},
-       {tr("Stereo 3D Screen"), OpenXRPresentationMode::StereoScreen}},
-      Config::GFX_VR_PRESENTATION_MODE, layer, m_global_layer.get()));
-  presentation_mode->setToolTip(
-      tr("Selects standard Vulkan flat output, BaijiSteamVR immersive VR, or a stereoscopic 3D "
-         "screen in the headset."));
-  connect(presentation_mode, &QComboBox::currentIndexChanged, this, [layer] {
-    const OpenXRPresentationMode mode = layer->Get(Config::GFX_VR_PRESENTATION_MODE);
-    if (mode == OpenXRPresentationMode::Legacy)
-      return;
-
-    layer->Set(Config::GFX_VR_ENABLE_OPENXR.GetLocation(),
-               mode != OpenXRPresentationMode::Vulkan);
-    layer->Set(Config::GFX_VR_FLAT_SCREEN.GetLocation(), false);
-    layer->Set(Config::GFX_VR_STEREO_SCREEN.GetLocation(),
-               mode == OpenXRPresentationMode::StereoScreen);
-    Config::OnConfigChanged();
-  });
-  openxr_layout->addWidget(new QLabel(tr("Presentation Mode:")), 0, 0);
-  openxr_layout->addWidget(presentation_mode, 0, 1, 1, 2);
-  auto* units_per_meter = add_float(
-      openxr_layout, 1, tr("Units per Meter:"), Config::GFX_VR_UNITS_PER_METER_MIN,
-      Config::GFX_VR_UNITS_PER_METER_MAX, Config::GFX_VR_UNITS_PER_METER,
-      Config::GFX_VR_UNITS_PER_METER_STEP,
-      [](float value) {
-        return QString::asprintf(value < 10.0f ? "%.2f" : (value < 100.0f ? "%.1f" : "%.0f"),
-                                 value);
-      },
-      ConfigFloatSlider::ScaleMode::Exponential);
-  units_per_meter->setToolTip(
-      tr("Default: 1.0. Sets game-world units per real meter. "
-         "Higher values make the world smaller and "
-         "increase effective stereo depth relative to game geometry; lower values make it "
-         "larger and reduce depth. Use Stereo Separation to adjust depth without changing "
-         "world scale."));
-  auto* stereo_separation = add_float(
-      openxr_layout, 2, tr("Stereo Separation (%):"),
-      Config::GFX_VR_STEREO_SEPARATION_MIN, Config::GFX_VR_STEREO_SEPARATION_MAX,
-      Config::GFX_VR_STEREO_SEPARATION, Config::GFX_VR_STEREO_SEPARATION_STEP,
-      [](float value) { return QString::asprintf("%.0f%%", value); });
-  stereo_separation->setToolTip(
-      tr("Scales the virtual left/right eye offset while leaving world scale and head movement "
-         "unchanged. 100% preserves the current OpenXR eye spacing; lower values reduce stereo "
-         "depth and 0% approaches mono. Lower separation may make strong near-field pop-out "
-         "easier to fuse and may ease eye strain, but comfort varies. Higher values increase "
-         "depth and may increase strain. This affects Immersive VR; Stereo 3D Screen uses the "
-         "Stereoscopic Depth setting instead."));
-
-#ifndef BAIJI_STEAMVR
-  auto* mirror_view = mark_default(new ConfigChoiceMap<OpenXRMirrorView>(
-      {{tr("Both Eyes"), OpenXRMirrorView::BothEyes},
-       {tr("Left Eye"), OpenXRMirrorView::LeftEye},
-       {tr("Right Eye"), OpenXRMirrorView::RightEye},
-       {tr("None"), OpenXRMirrorView::None}},
-      Config::GFX_VR_MIRROR_VIEW, layer, m_global_layer.get()));
-  openxr_layout->addWidget(new QLabel(tr("Desktop Mirror View:")), 3, 0);
-  openxr_layout->addWidget(mirror_view, 3, 1, 1, 2);
-#endif
-  auto* camera_group = new QGroupBox(tr("Camera"));
-  auto* camera_layout = new QGridLayout(camera_group);
-  camera_layout->addWidget(
-      make_bool(tr("Lean Back Angle (deg)"), Config::GFX_VR_ENABLE_LEAN_BACK_ANGLE), 0, 0);
-  add_float(camera_layout, 0, QString{}, Config::GFX_VR_LEAN_BACK_ANGLE_MIN,
-            Config::GFX_VR_LEAN_BACK_ANGLE_MAX, Config::GFX_VR_LEAN_BACK_ANGLE,
-            Config::GFX_VR_LEAN_BACK_ANGLE_STEP,
-            [](float value) { return QString::asprintf("%.1f", value); });
-  camera_layout->addWidget(
-      make_bool(tr("Camera Forward (m)"), Config::GFX_VR_ENABLE_CAMERA_FORWARD), 1, 0);
-  add_float(camera_layout, 1, QString{}, Config::GFX_VR_CAMERA_FORWARD_MIN,
-            Config::GFX_VR_CAMERA_FORWARD_MAX, Config::GFX_VR_CAMERA_FORWARD,
-            Config::GFX_VR_CAMERA_FORWARD_STEP,
-            [](float value) { return QString::asprintf("%.1f", value); });
-  camera_layout->addWidget(
-      make_bool(tr("Camera Height (m)"), Config::GFX_VR_ENABLE_CAMERA_HEIGHT), 2, 0);
-  add_float(camera_layout, 2, QString{}, Config::GFX_VR_CAMERA_HEIGHT_MIN,
-            Config::GFX_VR_CAMERA_HEIGHT_MAX, Config::GFX_VR_CAMERA_HEIGHT,
-            Config::GFX_VR_CAMERA_HEIGHT_STEP,
-            [](float value) { return QString::asprintf("%.1f", value); });
-  camera_layout->addWidget(make_bool(tr("Camera Anchor"), Config::GFX_VR_ENABLE_CAMERA_ANCHOR), 3,
-                           0);
-  add_float(camera_layout, 3, QString{}, Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING_MIN,
-            Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING_MAX, Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING,
-            Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING_STEP,
-            [](float value) { return QString::asprintf("%.2f", value); });
-  camera_layout->addWidget(
-      make_bool(tr("Controller Anchor"), Config::GFX_VR_ENABLE_CONTROLLER_ANCHOR), 4, 0, 1, 3);
-
-  auto* virtual_screen_group = new QGroupBox(tr("Virtual Screen"));
-  auto* virtual_screen_layout = new QGridLayout(virtual_screen_group);
-  virtual_screen_layout->addWidget(
-      make_bool(tr("Virtual Screen for 2D Content"), Config::GFX_VR_VIRTUAL_SCREEN), 0, 0, 1, 3);
-  auto* exact_screen_depth = make_bool(tr("Exact Screen Depth"), Config::GFX_VR_EXACT_SCREEN_DEPTH);
-  exact_screen_depth->setToolTip(
-      tr("Immersive VR turns this off unless it is set here or in the VR settings. Turn it on "
-         "for a game that needs it."));
-  virtual_screen_layout->addWidget(exact_screen_depth, 1, 0, 1, 3);
-  auto* auto_native_efb_effects =
-      make_bool(tr("Auto-Exclude EFB Effects"), Config::GFX_VR_AUTO_NATIVE_EFB_EFFECTS);
-  auto_native_efb_effects->setToolTip(
-      tr("Immersive VR turns this on unless it is set here or in the VR settings."));
-  virtual_screen_layout->addWidget(auto_native_efb_effects, 2, 0, 1, 3);
   // Immersive VR only changes these two options' defaults (see GetVRExactScreenDepth): when
   // neither this game's own file nor GFX.ini sets one, show the Immersive default. The options
   // stay editable, and a change here is saved for this game.
-  const auto update_immersive_screen_options = [layer, get_game_or_base,
-                                                exact_screen_depth, auto_native_efb_effects] {
+  const auto update_immersive_screen_options = [layer, page] {
     const bool immersive_vr =
-        get_game_or_base(Config::GFX_VR_PRESENTATION_MODE) == OpenXRPresentationMode::Immersive;
+        page->Read(Config::GFX_VR_PRESENTATION_MODE) == OpenXRPresentationMode::Immersive;
     if (!immersive_vr)
       return;
     // A bundled profile's value does not count in Immersive VR (ApplyGameVRConfigOverrides
@@ -463,171 +287,22 @@ void VRConfigWidget::CreateWidgets()
     };
     if (inherits_default(Config::GFX_VR_EXACT_SCREEN_DEPTH))
     {
-      const QSignalBlocker blocker(exact_screen_depth);
-      exact_screen_depth->setChecked(false);
+      const QSignalBlocker blocker(page->m_exact_screen_depth);
+      page->m_exact_screen_depth->setChecked(false);
     }
     if (inherits_default(Config::GFX_VR_AUTO_NATIVE_EFB_EFFECTS))
     {
-      const QSignalBlocker blocker(auto_native_efb_effects);
-      auto_native_efb_effects->setChecked(true);
+      const QSignalBlocker blocker(page->m_auto_native_efb_effects);
+      page->m_auto_native_efb_effects->setChecked(true);
     }
   };
-  connect(presentation_mode, &QComboBox::currentIndexChanged, this,
+  connect(page->m_display, &QComboBox::currentIndexChanged, this,
           [update_immersive_screen_options](int) { update_immersive_screen_options(); });
   connect(&Settings::Instance(), &Settings::ConfigChanged, this,
           update_immersive_screen_options);
   update_immersive_screen_options();
-  auto* screen_distance = add_float(
-      virtual_screen_layout, 3, tr("Screen Distance (m):"), Config::GFX_VR_SCREEN_DISTANCE_MIN,
-      Config::GFX_VR_SCREEN_DISTANCE_MAX, Config::GFX_VR_SCREEN_DISTANCE,
-      Config::GFX_VR_SCREEN_DISTANCE_STEP,
-      [](float value) { return QString::asprintf("%.1f", value); });
-  screen_distance->setToolTip(
-      tr("Default: 2.0 m. Distance in meters to the virtual screen used for 2D content (menus, "
-         "FMV, and HUD). The screen is fixed in space like a TV; it stays in place when you turn "
-         "your head."));
-  add_float(virtual_screen_layout, 4, tr("Screen Size (m):"), Config::GFX_VR_SCREEN_SIZE_MIN,
-            Config::GFX_VR_SCREEN_SIZE_MAX, Config::GFX_VR_SCREEN_SIZE,
-            Config::GFX_VR_SCREEN_SIZE_STEP,
-            [](float value) { return QString::asprintf("%.1f", value); });
-  add_float(virtual_screen_layout, 5, tr("Screen Depth:"), Config::GFX_VR_HUD_THICKNESS_MIN,
-            Config::GFX_VR_HUD_THICKNESS_MAX, Config::GFX_VR_HUD_THICKNESS,
-            Config::GFX_VR_HUD_THICKNESS_STEP, [this](float value) {
-              return value <= 0.001f ? tr("Off") : QString::asprintf("%.2f m", value);
-            });
-  add_float(virtual_screen_layout, 6, tr("Head Locked Curvature:"),
-            Config::GFX_VR_HEAD_LOCKED_CURVATURE_MIN, Config::GFX_VR_HEAD_LOCKED_CURVATURE_MAX,
-            Config::GFX_VR_HEAD_LOCKED_CURVATURE, Config::GFX_VR_HEAD_LOCKED_CURVATURE_STEP,
-            [](float value) { return QString::asprintf("%.2f", value); });
 
-  auto* rendering_group = new QGroupBox(tr("Rendering"));
-  auto* rendering_layout = new QGridLayout(rendering_group);
-  add_int(rendering_layout, 0, tr("Clear EFB (min width):"), Config::GFX_VR_CLEAR_EFB_MIN,
-          Config::GFX_VR_CLEAR_EFB_MAX, Config::GFX_VR_CLEAR_EFB_COPIES,
-          Config::GFX_VR_CLEAR_EFB_STEP,
-          [this](int value) { return value == 0 ? tr("Off") : QString::number(value); });
-  add_float(rendering_layout, 1, tr("VR Gamma:"), Config::GFX_VR_GAMMA_MIN,
-            Config::GFX_VR_GAMMA_MAX, Config::GFX_VR_GAMMA, Config::GFX_VR_GAMMA_STEP,
-            [this](float value) {
-              return value <= 1.01f ? tr("Off") : QString::asprintf("%.1f", value);
-            });
-  add_float(rendering_layout, 2, tr("Resolution Scale:"), Config::GFX_VR_RESOLUTION_SCALE_MIN,
-            Config::GFX_VR_RESOLUTION_SCALE_MAX, Config::GFX_VR_RESOLUTION_SCALE,
-            Config::GFX_VR_RESOLUTION_SCALE_STEP,
-            [](float value) { return QString::asprintf("%.2fx", value); });
-
-  auto* foveation_level = mark_default(
-      new ConfigChoiceMap<int>({{tr("Off"), 0}, {tr("Low"), 1}, {tr("Medium"), 2}, {tr("High"), 3}},
-                               Config::GFX_VR_FOVEATION_LEVEL, layer, m_global_layer.get()));
-  rendering_layout->addWidget(new QLabel(tr("Foveated Rendering:")), 3, 0);
-  rendering_layout->addWidget(foveation_level, 3, 1);
-  rendering_layout->addWidget(make_bool(tr("Dynamic"), Config::GFX_VR_FOVEATION_DYNAMIC), 3, 2);
-  rendering_layout->addWidget(
-      make_bool(tr("Foveate Game Render (EFB)"), Config::GFX_VR_EFB_FOVEATION), 4, 1, 1, 2);
-
-  general_layout->addWidget(openxr_group);
-  general_layout->addWidget(camera_group);
-  general_layout->addWidget(virtual_screen_group);
-  general_layout->addWidget(rendering_group);
-  general_layout->addStretch();
-
-  auto* hacks_page = new QWidget;
-  auto* hacks_layout = new QVBoxLayout(hacks_page);
-
-  auto* hacks_group = new QGroupBox(tr("VR Hacks"));
-  auto* hacks_group_layout = new QVBoxLayout(hacks_group);
-  hacks_group_layout->addWidget(
-      make_bool(tr("Use Vulkan Multiview"), Config::GFX_VR_USE_VULKAN_MULTIVIEW));
-  hacks_group_layout->addWidget(
-      make_bool(tr("Don't Clear Screen"), Config::GFX_VR_DONT_CLEAR_SCREEN));
-  hacks_group_layout->addWidget(
-      make_bool(tr("Disable CPU Culling in VR"), Config::GFX_VR_DISABLE_CPU_CULL));
-  hacks_group_layout->addWidget(make_bool(tr("Remove Cinematic Bars"), Config::GFX_VR_REMOVE_BARS));
-  hacks_group_layout->addWidget(
-      make_bool(tr("Frame Size from XFB Copy"), Config::GFX_VR_FRAME_SIZE_FROM_XFB));
-  hacks_group_layout->addWidget(
-      make_bool(tr("Small 3D Viewports on Screen"), Config::GFX_VR_PANES_ON_SCREEN));
-  hacks_group_layout->addWidget(
-      make_bool(tr("Detect Render-to-Texture Viewports"), Config::GFX_VR_DETECT_RENDER_TARGETS));
-  hacks_group_layout->addWidget(
-      make_bool(tr("Ortho Scissor Fix"), Config::GFX_VR_ORTHO_SCISSOR_FIX));
-  hacks_group_layout->addWidget(make_bool(tr("Detect Skybox"), Config::GFX_VR_DETECT_SKYBOX));
-  hacks_group_layout->addWidget(
-      make_bool(tr("Layered Palette Conversion Path"), Config::GFX_VR_METROID_THERMAL_VISOR_FIX));
-
-  auto* framerate_group = new QGroupBox(tr("Framerate"));
-  auto* framerate_layout = new QGridLayout(framerate_group);
-  auto* forced_vbi = mark_default(
-      new ConfigChoiceMap<int>({{tr("Auto"), Config::GFX_VR_FORCED_VBI_FREQUENCY_AUTO},
-                                {tr("Off"), Config::GFX_VR_FORCED_VBI_FREQUENCY_OFF},
-                                {tr("72 Hz"), Config::GFX_VR_FORCED_VBI_FREQUENCY_72},
-                                {tr("90 Hz"), Config::GFX_VR_FORCED_VBI_FREQUENCY_90},
-                                {tr("120 Hz"), Config::GFX_VR_FORCED_VBI_FREQUENCY_120}},
-                               Config::GFX_VR_FORCED_VBI_FREQUENCY, layer, m_global_layer.get()));
-  framerate_layout->addWidget(new QLabel(tr("Forced VBI Frequency:")), 0, 0);
-  framerate_layout->addWidget(forced_vbi, 0, 1);
-  auto* requested_refresh_rate = mark_default(new ConfigChoiceMap<int>(
-      {{tr("Auto"), Config::GFX_VR_REQUESTED_REFRESH_RATE_AUTO},
-       {tr("60 Hz"), Config::GFX_VR_REQUESTED_REFRESH_RATE_60},
-       {tr("72 Hz"), Config::GFX_VR_REQUESTED_REFRESH_RATE_72},
-       {tr("90 Hz"), Config::GFX_VR_REQUESTED_REFRESH_RATE_90},
-       {tr("120 Hz"), Config::GFX_VR_REQUESTED_REFRESH_RATE_120}},
-      Config::GFX_VR_REQUESTED_REFRESH_RATE, layer, m_global_layer.get()));
-  framerate_layout->addWidget(new QLabel(tr("Requested Refresh Rate:")), 1, 0);
-  framerate_layout->addWidget(requested_refresh_rate, 1, 1);
-  framerate_layout->addWidget(
-      make_bool(tr("Eager Frame Heartbeat"), Config::GFX_VR_EAGER_HEARTBEAT), 2, 0, 1, 2);
-
-  auto* shaders_group = new QGroupBox(tr("Shaders"));
-  auto* shaders_layout = new QVBoxLayout(shaders_group);
-  shaders_layout->addWidget(
-      make_bool(tr("Load Custom Shaders"), Config::GFX_VR_LOAD_CUSTOM_SHADERS));
-
-  auto* passthrough_group = new QGroupBox(tr("Passthrough"));
-  auto* passthrough_layout = new QGridLayout(passthrough_group);
-  passthrough_layout->addWidget(make_bool(tr("Enable Passthrough"), Config::GFX_VR_PASSTHROUGH), 0,
-                                0, 1, 3);
-  passthrough_layout->addWidget(
-      make_bool(tr("Reveal Unrendered Areas"), Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_BG), 1, 0, 1,
-      3);
-  passthrough_layout->addWidget(
-      make_bool(tr("Remove Black EFB Clears"), Config::GFX_VR_PASSTHROUGH_REMOVE_BLACK_CLEARS), 2,
-      0, 1, 3);
-  add_float(passthrough_layout, 3, tr("Scene Opacity:"),
-            Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY_MIN,
-            Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY_MAX, Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY,
-            Config::GFX_VR_PASSTHROUGH_SCENE_OPACITY_STEP,
-            [](float value) { return QString::asprintf("%.2f", value); });
-  auto* coverage_mode = mark_default(new ConfigChoiceMap<VRPassthroughCoverageMode>(
-      {{tr("Exact"), VRPassthroughCoverageMode::Exact},
-       {tr("Fast"), VRPassthroughCoverageMode::Fast}},
-      Config::GFX_VR_PASSTHROUGH_COVERAGE_MODE, layer, m_global_layer.get()));
-  passthrough_layout->addWidget(new QLabel(tr("Coverage Mode:")), 4, 0);
-  passthrough_layout->addWidget(coverage_mode, 4, 1, 1, 2);
-
-  auto* tracking_group = new QGroupBox(tr("Tracking"));
-  auto* tracking_layout = new QGridLayout(tracking_group);
-  auto* reference_space = mark_default(new ConfigChoiceMap<OpenXRReferenceSpaceMode>(
-      {{tr("LOCAL"), OpenXRReferenceSpaceMode::Local},
-       {tr("STAGE + Height"), OpenXRReferenceSpaceMode::StageHeight},
-       {tr("STAGE"), OpenXRReferenceSpaceMode::Stage}},
-      Config::GFX_VR_REFERENCE_SPACE_MODE, layer, m_global_layer.get()));
-  auto* tracking_mode = mark_default(new ConfigChoiceMap<OpenXRTrackingMode>(
-      {{tr("6DoF"), OpenXRTrackingMode::Full6DoF},
-       {tr("3DoF"), OpenXRTrackingMode::Rotation3DoF},
-       {tr("None"), OpenXRTrackingMode::None}},
-      Config::GFX_VR_TRACKING_MODE, layer, m_global_layer.get()));
-  tracking_layout->addWidget(new QLabel(tr("Default VR Position:")), 0, 0);
-  tracking_layout->addWidget(reference_space, 0, 1);
-  tracking_layout->addWidget(new QLabel(tr("Tracking Mode:")), 1, 0);
-  tracking_layout->addWidget(tracking_mode, 1, 1);
-
-  hacks_layout->addWidget(hacks_group);
-  hacks_layout->addWidget(framerate_group);
-  hacks_layout->addWidget(shaders_group);
-  hacks_layout->addWidget(passthrough_group);
-  hacks_layout->addWidget(tracking_group);
-  hacks_layout->addStretch();
+  page->Finish();
 
   auto* editor_page = new QWidget;
   auto* editor_layout = new QVBoxLayout(editor_page);
@@ -643,8 +318,7 @@ void VRConfigWidget::CreateWidgets()
   editor_layout->addWidget(local_group);
 
   auto* tabs = new QTabWidget;
-  tabs->addTab(GetWrappedWidget(general_page), tr("General"));
-  tabs->addTab(GetWrappedWidget(hacks_page), tr("Hacks"));
+  tabs->addTab(GetWrappedWidget(settings_page), tr("Settings"));
   const int editor_index = tabs->addTab(editor_page, tr("Editor"));
 
   connect(tabs, &QTabWidget::currentChanged, this, [this, editor_index](int index) {
@@ -663,7 +337,7 @@ void VRConfigWidget::CreateWidgets()
   const QString help_message =
       tr("Italics mark default game settings and bold marks user settings. "
          "Right-click a control to remove its user setting.");
-  auto* help_label = new QLabel(tr("These VR settings override core BaijiSteamVR settings."));
+  auto* help_label = new QLabel(tr("VR settings for this game only."));
   auto* help_widget = QtUtils::CreateIconWarning(this, QStyle::SP_MessageBoxQuestion, help_label);
   help_widget->setToolTip(help_message);
 

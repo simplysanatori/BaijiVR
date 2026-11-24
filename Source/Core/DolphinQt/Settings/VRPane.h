@@ -3,29 +3,155 @@
 
 #pragma once
 
+#include <functional>
+#include <utility>
+#include <vector>
+
+#include <QFont>
+#include <QLabel>
+#include <QObject>
 #include <QPointer>
+#include <QString>
 #include <QWidget>
 
-class ConfigBool;
-class ConfigFloatSlider;
-class ConfigSlider;
-class QCheckBox;
-class QLabel;
-class QPushButton;
+#include "Common/Config/Config.h"
+#include "Common/Config/ConfigInfo.h"
+#include "Common/Config/Layer.h"
+
+#include "DolphinQt/Config/ConfigControls/ConfigBool.h"
+#include "DolphinQt/Config/ConfigControls/ConfigChoice.h"
+#include "DolphinQt/Config/ConfigControls/ConfigFloatSlider.h"
+#include "DolphinQt/Config/ConfigControls/ConfigSlider.h"
+
 class CullingCodeFinderWidget;
+class QBoxLayout;
+class QGridLayout;
+class QVBoxLayout;
 class ShaderHunterWidget;
-template <typename T>
-class ConfigChoiceMap;
-enum class OpenXRMirrorView : int;
 enum class OpenXRReferenceSpaceMode : int;
 enum class OpenXRPresentationMode : int;
-enum class OpenXRTrackingMode : int;
-enum class VRPassthroughCoverageMode : int;
 
 namespace Core
 {
 enum class State;
 }
+
+// The VR settings as the settings window's VR page and a game's own VR page both show them. The
+// game's page gives a layer, and the settings are then that layer's.
+// Every row names the displays it applies to and is hidden in the others.
+class VRSettingsPage final : public QObject
+{
+public:
+  enum Display : unsigned
+  {
+    Flat = 1 << 0,
+    Immersive = 1 << 1,
+    Screen3D = 1 << 2,
+    // A 2D screen in the headset. Not offered, but an old config can still ask for it.
+    Screen2D = 1 << 3,
+  };
+  static constexpr unsigned TWO_EYES = Immersive | Screen3D;
+  static constexpr unsigned HEADSET = TWO_EYES | Screen2D;
+  static constexpr unsigned ALL = HEADSET | Flat;
+
+  struct Text
+  {
+    QString label;
+    QString description;
+  };
+
+  VRSettingsPage(QWidget* parent, QBoxLayout* layout, Config::Layer* layer = nullptr,
+                 Config::Layer* global_layer = nullptr);
+
+  void AddDisplay();
+  QGridLayout* AddScreen();
+  void AddImmersive();
+  void AddHeadset();
+  // Returns the layout for further groups in the collapsed part.
+  QVBoxLayout* AddAdvanced();
+  // Call once every row is there.
+  void Finish();
+
+  QGridLayout* AddGroup(const QString& title, unsigned displays, QBoxLayout* layout = nullptr);
+  void AddRow(QGridLayout* layout, unsigned displays, QWidget* label, QWidget* control,
+              QWidget* value = nullptr);
+  ConfigBool* AddBool(QGridLayout* layout, unsigned displays, const Config::Info<bool>& setting);
+  // `enable`, if given, is a checkbox in the place of the label.
+  ConfigFloatSlider*
+  AddSlider(QGridLayout* layout, unsigned displays, const Config::Info<float>& setting,
+            float minimum, float maximum, float step, std::function<QString(float)> format,
+            const Config::Info<bool>* enable = nullptr,
+            ConfigFloatSlider::ScaleMode scale = ConfigFloatSlider::ScaleMode::Linear);
+
+  template <typename T>
+  ConfigChoiceMap<T>* AddChoice(QGridLayout* layout, unsigned displays,
+                                const Config::Info<T>& setting,
+                                const std::vector<std::pair<QString, T>>& options)
+  {
+    auto* choice = Prepare(new ConfigChoiceMap<T>(options, setting, m_layer, m_global_layer));
+    AddRow(layout, displays, MakeLabel(setting.GetLocation()), choice);
+    return choice;
+  }
+
+  // Gives the control its tooltip, and keeps scrolling the page from changing it.
+  template <typename Control>
+  Control* Prepare(Control* control)
+  {
+    const Config::Location location = control->GetLocation();
+    const Text text = GetText(location);
+    control->SetTitle(text.label);
+    control->SetDescription(text.description);
+    control->setFocusPolicy(Qt::StrongFocus);
+    control->installEventFilter(this);
+
+    if (m_global_layer && m_global_layer->Exists(location))
+    {
+      QFont font = control->font();
+      font.setItalic(true);
+      control->setFont(font);
+    }
+    return control;
+  }
+
+  static Text GetText(const Config::Location& location);
+  static QLabel* MakeLabel(const Config::Location& location);
+
+  // The game's own value, then the bundled one for the game, then the base one.
+  template <typename T>
+  T Read(const Config::Info<T>& setting) const
+  {
+    if (!m_layer)
+      return Config::Get(setting);
+    if (m_layer->Exists(setting.GetLocation()))
+      return m_layer->Get(setting);
+    if (m_global_layer && m_global_layer->Exists(setting.GetLocation()))
+      return m_global_layer->Get(setting);
+    return Config::GetBase(setting);
+  }
+
+  ConfigChoiceMap<OpenXRPresentationMode>* m_display = nullptr;
+  ConfigChoiceMap<int>* m_refresh_rate = nullptr;
+  ConfigChoiceMap<OpenXRReferenceSpaceMode>* m_reference_space_mode = nullptr;
+  ConfigChoiceMap<int>* m_forced_vbi_frequency = nullptr;
+  ConfigBool* m_multiview = nullptr;
+  ConfigBool* m_exact_screen_depth = nullptr;
+  ConfigBool* m_auto_native_efb_effects = nullptr;
+  ConfigBool* m_thermal_visor_fix = nullptr;
+
+private:
+  bool eventFilter(QObject* object, QEvent* event) override;
+
+  Display GetDisplay() const;
+  void OnDisplayChosen();
+  void UpdateDisplay();
+  void ShowOnlyIn(unsigned displays, QWidget* widget);
+
+  QBoxLayout* m_layout;
+  Config::Layer* m_layer;
+  Config::Layer* m_global_layer;
+  QLabel* m_display_text = nullptr;
+  std::vector<std::pair<unsigned, QWidget*>> m_widgets;
+};
 
 class VRPane final : public QWidget
 {
@@ -34,79 +160,16 @@ public:
   explicit VRPane(QWidget* parent = nullptr);
 
 private:
-  void AddDescriptions();
-  void OnEmulationStateChanged(Core::State state);
-  void ResetGeneralSettings();
+  void AddScreenRows(QGridLayout* layout);
+  void AddMenuAndPointers();
+  void AddAutosave();
+  void AddTools(QVBoxLayout* layout);
 
-  ConfigChoiceMap<OpenXRPresentationMode>* m_presentation_mode = nullptr;
-  ConfigChoiceMap<OpenXRReferenceSpaceMode>* m_reference_space_mode = nullptr;
-  ConfigChoiceMap<OpenXRTrackingMode>* m_tracking_mode = nullptr;
-  ConfigFloatSlider* m_units_per_meter = nullptr;
-  QLabel* m_units_per_meter_value = nullptr;
-  ConfigFloatSlider* m_stereo_separation = nullptr;
-  QLabel* m_stereo_separation_value = nullptr;
-  ConfigFloatSlider* m_stereo_depth = nullptr;
-  QLabel* m_stereo_depth_value = nullptr;
-  ConfigFloatSlider* m_stereo_convergence = nullptr;
-  QLabel* m_stereo_convergence_value = nullptr;
-  ConfigBool* m_enable_lean_back_angle = nullptr;
-  ConfigFloatSlider* m_lean_back_angle = nullptr;
-  QLabel* m_lean_back_angle_value = nullptr;
-  ConfigBool* m_enable_camera_forward = nullptr;
-  ConfigFloatSlider* m_camera_forward = nullptr;
-  QLabel* m_camera_forward_value = nullptr;
-  ConfigBool* m_enable_camera_height = nullptr;
-  ConfigFloatSlider* m_camera_height = nullptr;
-  QLabel* m_camera_height_value = nullptr;
-  ConfigBool* m_enable_camera_anchor = nullptr;
-  ConfigFloatSlider* m_camera_anchor_smoothing = nullptr;
-  QLabel* m_camera_anchor_smoothing_value = nullptr;
-  ConfigBool* m_enable_controller_anchor = nullptr;
-  ConfigBool* m_virtual_screen = nullptr;
-  ConfigFloatSlider* m_screen_distance = nullptr;
-  QLabel* m_screen_distance_value = nullptr;
-  ConfigFloatSlider* m_screen_size = nullptr;
-  QLabel* m_screen_size_value = nullptr;
-  ConfigFloatSlider* m_head_locked_curvature = nullptr;
-  QLabel* m_head_locked_curvature_value = nullptr;
-  ConfigBool* m_dont_clear_screen = nullptr;
-  ConfigBool* m_disable_cpu_cull = nullptr;
-  ConfigBool* m_ortho_scissor_fix = nullptr;
-  ConfigBool* m_layered_palette_conversion_path = nullptr;
-#ifndef BAIJI_STEAMVR
-  ConfigChoiceMap<OpenXRMirrorView>* m_mirror_view = nullptr;
-#endif
-  ConfigChoiceMap<int>* m_forced_vbi_frequency = nullptr;
-  ConfigChoiceMap<int>* m_requested_refresh_rate = nullptr;
-  ConfigSlider* m_clear_efb_slider = nullptr;
-  QLabel* m_clear_efb_value = nullptr;
-  ConfigBool* m_remove_bars = nullptr;
-  ConfigBool* m_frame_size_from_xfb = nullptr;
-  ConfigBool* m_panes_on_screen = nullptr;
-  ConfigBool* m_detect_render_targets = nullptr;
-  ConfigBool* m_detect_skybox = nullptr;
-  ConfigBool* m_use_vulkan_multiview = nullptr;
-  ConfigBool* m_passthrough = nullptr;
-  ConfigBool* m_passthrough_remove_black_bg = nullptr;
-  ConfigBool* m_passthrough_remove_black_clears = nullptr;
-  ConfigFloatSlider* m_passthrough_scene_opacity = nullptr;
-  QLabel* m_passthrough_scene_opacity_value = nullptr;
-  ConfigChoiceMap<VRPassthroughCoverageMode>* m_passthrough_coverage_mode = nullptr;
-  ConfigFloatSlider* m_vr_gamma = nullptr;
-  QLabel* m_vr_gamma_value = nullptr;
-  ConfigFloatSlider* m_resolution_scale = nullptr;
-  QLabel* m_resolution_scale_value = nullptr;
-  ConfigChoiceMap<int>* m_foveation_level = nullptr;
-  ConfigBool* m_dynamic_foveation = nullptr;
-  ConfigBool* m_foveate_efb = nullptr;
-  ConfigBool* m_eager_heartbeat = nullptr;
-  ConfigBool* m_exact_screen_depth = nullptr;
-  ConfigBool* m_auto_native_efb_effects = nullptr;
-  ConfigFloatSlider* m_hud_thickness = nullptr;
-  QLabel* m_hud_thickness_value = nullptr;
-  QPushButton* m_reset_general_settings = nullptr;
-  ConfigBool* m_load_custom_shaders = nullptr;
-  QCheckBox* m_debug_log_draws = nullptr;
+  void OnEmulationStateChanged(Core::State state);
+  void ResetScreen();
+  void ResetSettings();
+
+  VRSettingsPage* m_page = nullptr;
   QPointer<CullingCodeFinderWidget> m_culling_finder_widget;
   QPointer<ShaderHunterWidget> m_shader_hunter_widget;
 };
