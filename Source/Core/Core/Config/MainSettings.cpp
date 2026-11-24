@@ -425,7 +425,8 @@ const Info<bool> MAIN_USE_PANIC_HANDLERS{{System::Main, "Interface", "UsePanicHa
 const Info<bool> MAIN_ABORT_ON_PANIC_ALERT{{System::Main, "Interface", "AbortOnPanicAlert"}, false};
 const Info<bool> MAIN_OSD_MESSAGES{{System::Main, "Interface", "OnScreenDisplayMessages"}, true};
 const Info<int> MAIN_OSD_FONT_SIZE{{System::Main, "Settings", "OSDFontSize"}, 13};
-const Info<bool> MAIN_SKIP_NKIT_WARNING{{System::Main, "Interface", "SkipNKitWarning"}, false};
+// Game Mode shows one window at a time, and this is a window of its own to tick and click.
+const Info<bool> MAIN_SKIP_NKIT_WARNING{{System::Main, "Interface", "SkipNKitWarning"}, true};
 const Info<bool> MAIN_SKIP_FLAT_MODE_INPUT_WARNING{
     {System::Main, "Interface", "SkipFlatModeInputWarning"}, false};
 const Info<bool> MAIN_CONFIRM_ON_STOP{{System::Main, "Interface", "ConfirmStop"}, true};

@@ -47,9 +47,24 @@
 #include "UICommon/CommandLineParse.h"
 #include "UICommon/UICommon.h"
 
+#ifdef ENABLE_VR
+#include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/VR/OpenXRManager.h"
+#endif
+
 static bool QtMsgAlertHandler(const char* caption, const char* text, bool yes_no,
                               Common::MsgType style)
 {
+#ifdef ENABLE_VR
+  // A dialog in the window is not seen in the headset, and the game would stand until it is
+  // answered. It is in the log, too. Questions are still asked.
+  if (style != Common::MsgType::Question && VR::g_openxr && VR::g_openxr->IsSessionRunning())
+  {
+    OSD::AddMessage(text, OSD::Duration::NORMAL);
+    return true;
+  }
+#endif
+
   const bool called_from_cpu_thread = Core::IsCPUThread();
   const bool called_from_gpu_thread = Core::IsGPUThread();
 
