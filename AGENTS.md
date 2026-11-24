@@ -25,6 +25,17 @@
   `OpenXRInputState::SetControllers`. The screen has one placement (`GetScreenQuad`). The
   settings page (`VRPane`) and the menu use the same names. `Core/Autosave.*` has the
   autosave rules; unit tests are `VRFrameUITest`.
+- Display modes are called Stereoscopic 3D and Immersive. 3D Depth (`GFX_VR_SCREEN_DEPTH`) is a
+  percentage of natural 3D: the shift at infinity is eye distance / screen width
+  (`ScreenPlacement.h` `NaturalShift`), so it follows the headset's IPD and the screen's size.
+- Mods, patches, cheats and texture packs are `Core/GameMods/` (the catalogue is
+  github.com/simplysanatori/gc-wii-game-fixes, shipped in `Data/Sys/GameMods/`). The VR menu's Mods
+  tab and the Qt Mods page are its only users. `SetEnabled`/`Remove` read and write files: never call
+  them on the XR pacing thread. Tests: `GameModsTest` (two need the Sys folder).
+- Box art is `UICommon/GameCovers.*`, cached per game ID in `Cache/GameCovers/` for the list, the Grid
+  View and the VR UI.
+- In Game Mode every Qt window is fitted to the main window by `DolphinQt/GameModeWindows.*`
+  (`Common/WindowFit.h`). The default style is the dark gray Fusion one.
 - XR heartbeat (Frame Pacing in the UI) is `GFX_VR_EAGER_HEARTBEAT` (`Graphics.VR.EagerHeartbeat`), declared
   in `GraphicsSettings.cpp` and loaded in `VideoConfig.cpp`. `true` is Eager (submit
   each HMD refresh, reusing the last frame); `false` is Lazy (pace submissions to game
