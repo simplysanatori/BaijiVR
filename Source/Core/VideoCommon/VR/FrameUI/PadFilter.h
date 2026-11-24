@@ -18,7 +18,7 @@
 //   View tapped: the game's button. Held 1.5 s: stop the game.
 //   View + Right Bumper, let go: Quick Save. View + Left Bumper held half a second: Quick Load.
 //   View + Right Trigger, let go: Fast Forward on or off.
-//   Both bumpers, then View and Menu: 3D Screen or Immersive VR.
+//   Both bumpers, then View and Menu: Stereoscopic 3D or Immersive.
 //   Right Stick clicked and held 1 s: reset the screen.
 //
 // A control that did one of these, or was down when the menu closed, stays away from the game

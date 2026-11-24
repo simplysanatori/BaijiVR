@@ -1,6 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 
@@ -250,6 +251,19 @@ TEST(VRFrameUI, GrabCarriesTheScreenUnderTheBeam)
   EXPECT_NEAR(grab.Update(anchor, nudged, ray).yaw_deg, nudged.yaw_deg, 1e-2f);
 }
 
+TEST(VRFrameUI, NaturalShiftIsTheEyesApartAtInfinity)
+{
+  // 1 in NDC is half the screen. Right minus left eye, in metres on the screen.
+  constexpr float WIDTH = 2.67f, EYES = 0.063f, DISTANCE = 2.0f, CONVERGENCE = 20.0f;
+  const auto apart = [&](float w) {
+    return 2.0f * NaturalShift(EYES, WIDTH) * (1.0f - CONVERGENCE / w) * WIDTH * 0.5f;
+  };
+  EXPECT_NEAR(apart(1e9f), EYES, 1e-5f);
+  EXPECT_NEAR(apart(CONVERGENCE), 0.0f, 1e-6f);
+  for (const float w : {10.0f, 40.0f, 200.0f})
+    EXPECT_NEAR(DISTANCE / (1.0f - apart(w) / EYES), DISTANCE * w / CONVERGENCE, 1e-2f);
+}
+
 TEST(VRFrameUI, MenuFindsWhatIsOnTop)
 {
   MenuState state;
@@ -270,7 +284,7 @@ TEST(VRFrameUI, MenuFindsWhatIsOnTop)
 
   // Everything is on the panel.
   for (const MenuTab tab :
-       {MenuTab::Main, MenuTab::Screen, MenuTab::Controls, MenuTab::Settings})
+       {MenuTab::Main, MenuTab::Screen, MenuTab::Controls, MenuTab::Mods, MenuTab::Settings})
   {
     for (const int page : {0, 1})
     {
@@ -278,6 +292,9 @@ TEST(VRFrameUI, MenuFindsWhatIsOnTop)
       s.tab = tab;
       s.controls_page = page;
       s.wii = page == 1;
+      s.mods.resize(13);
+      s.mods_page = page * 2;
+      s.mods_changed = true;
       for (const MenuWidget& w : VrMenu::Layout(s))
       {
         EXPECT_GE(w.rect.x0, 0.0f);
@@ -286,6 +303,33 @@ TEST(VRFrameUI, MenuFindsWhatIsOnTop)
         EXPECT_LE(w.rect.y1, VrMenu::HEIGHT - 16.0f);
       }
     }
+  }
+}
+
+TEST(VRFrameUI, ModRows)
+{
+  MenuState s;
+  s.tab = MenuTab::Mods;
+  s.mods.resize(4);
+  s.mods[0].state = GameMods::State::On;
+  s.mods[1].downloads = true;
+  s.mods[2].downloads = true;
+  s.mods[2].state = GameMods::State::Off;
+  s.mods[3].state = GameMods::State::LinkOnly;
+  const auto widgets = VrMenu::Layout(s);
+  const auto count = [&](MenuItem item, int index) {
+    return std::ranges::count_if(
+        widgets, [&](const MenuWidget& w) { return w.item == item && w.index == index; });
+  };
+  EXPECT_EQ(count(MenuItem::ModSwitch, 0), 1);
+  EXPECT_EQ(count(MenuItem::ModGet, 1), 1);
+  EXPECT_EQ(count(MenuItem::ModSwitch, 2), 1);
+  EXPECT_EQ(count(MenuItem::ModRemove, 2), 1);
+  EXPECT_EQ(count(MenuItem::ModSwitch, 3), 0);
+  for (const MenuWidget& w : widgets)
+  {
+    if (w.kind == MenuWidget::Kind::Mod)
+      EXPECT_GT(w.control.W(), 250.0f);
   }
 }
 

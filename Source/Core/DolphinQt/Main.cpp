@@ -57,8 +57,9 @@ static bool QtMsgAlertHandler(const char* caption, const char* text, bool yes_no
 {
 #ifdef ENABLE_VR
   // A dialog in the window is not seen in the headset, and the game would stand until it is
-  // answered. It is in the log, too. Questions are still asked.
-  if (style != Common::MsgType::Question && VR::g_openxr && VR::g_openxr->IsSessionRunning())
+  // closed. The message is in the log, too. Anything with a choice, and what is fatal, still asks.
+  if (!yes_no && (style == Common::MsgType::Information || style == Common::MsgType::Warning) &&
+      VR::g_openxr && VR::g_openxr->IsSessionRunning())
   {
     OSD::AddMessage(text, OSD::Duration::NORMAL);
     return true;

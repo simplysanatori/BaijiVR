@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
+#include "Core/GameMods/GameMods.h"
 #include "VideoCommon/VR/FrameUI/PadArt.h"
 #include "VideoCommon/VR/FrameUI/md3.h"
 
@@ -22,6 +23,7 @@ enum class MenuTab
   Main,
   Screen,
   Controls,
+  Mods,
   Settings,
 };
 
@@ -31,6 +33,7 @@ enum class MenuItem
   TabMain,
   TabScreen,
   TabControls,
+  TabMods,
   TabSettings,
   Resume,
   SaveState,
@@ -46,6 +49,13 @@ enum class MenuItem
   AutosaveSettings,
   UndoLoad,
   ControlsPage,
+  ModsList,
+  ModSwitch,
+  ModGet,
+  ModCancel,
+  ModRemove,
+  ModsPrevious,
+  ModsNext,
   Autosave,
   AutosaveEvery,
   AutosaveKeep,
@@ -76,6 +86,7 @@ enum class MenuPage
 };
 
 constexpr int NUM_SLOTS = 10;
+constexpr int MODS_PER_PAGE = 5;
 
 struct MenuAutosave
 {
@@ -109,6 +120,13 @@ struct MenuState
   PadKind pad = PadKind::GameCube;
   PadLabels pad_labels;
 
+  int mods_list = 0;  // Mods, Textures
+  int mods_page = 0;
+  bool mods_ready = false;
+  bool mods_changed = false;
+  std::vector<GameMods::Item> mods;
+  GameMods::Progress mods_progress;
+
   std::string title;
   bool wii = false;
   bool immersive = false;
@@ -117,7 +135,7 @@ struct MenuState
 
   float distance = 2.0f;
   float size = 1.5f;
-  float depth = 20.0f;
+  float depth = 100.0f;  // percent of natural 3D
   float convergence = 20.0f;
   int aspect = 0;  // Auto, 16:9, 4:3, -1 something else
   bool lock_screen = false;
@@ -157,6 +175,8 @@ struct MenuWidget
     Popup,
     Snackbar,
     Pad,
+    Mod,
+    IconButton,
   };
 
   Kind kind = Kind::Text;

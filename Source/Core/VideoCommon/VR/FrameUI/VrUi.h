@@ -56,7 +56,7 @@ public:
     s64 time_ns = 0;
     bool head_valid = false;
     FrameXr::Input::Posef head;
-    // The game is on a screen in the room (Stereo 3D Screen, or the 2D screen), not around you.
+    // The game is on a screen in the room (Stereoscopic 3D, or the 2D screen), not around you.
     bool has_screen = false;
   };
 
@@ -110,6 +110,7 @@ private:
   void OpenMenu(const Frame& frame);
   void CloseMenu();
   void RefreshMenuState();
+  void ChangeMod(const MenuWidget& widget);
   void Activate(const MenuWidget& widget, int option);
   void SetSlider(const MenuWidget& widget, float t);
   void UpdatePause();
@@ -117,6 +118,9 @@ private:
   void SwitchMode();
   void LoadState(std::string path, std::string undo_label, s64 time);
   void RequestSaves();
+  void RequestMods();
+  // Says when a download is done, the menu open or not.
+  void WatchInstall();
   void ShowToast(std::string text, s64 duration_ns);
   void SaveScreenPlacement();
 
@@ -189,12 +193,17 @@ private:
   std::vector<FrameXr::LayerSlots::Map<SlotQuad>::Out> m_slot_layers;
   std::vector<XrCompositionLayerQuad> m_layers;
 
+  bool m_watch_install = false;
+  s64 m_last_watch_ns = 0;
+
   std::thread m_draw_thread;
   std::mutex m_draw_mutex;
   std::condition_variable m_draw_cv;
   bool m_draw_exit = false;
   std::optional<MenuState> m_draw_request;
   bool m_saves_request = false;
+  std::optional<GameMods::List> m_mods_request;
+  std::optional<std::pair<GameMods::List, std::vector<GameMods::Item>>> m_mods;
   std::optional<MenuSaves> m_saves;
   std::vector<u32> m_drawn;
   bool m_drawn_ready = false;

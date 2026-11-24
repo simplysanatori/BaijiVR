@@ -213,6 +213,9 @@ extern const Info<float> GFX_VR_SCREEN_SIZE;
 extern const Info<float> GFX_VR_SCREEN_YAW;
 extern const Info<float> GFX_VR_SCREEN_PITCH;
 extern const Info<bool> GFX_VR_LOCK_SCREEN;
+// Stereoscopic 3D, percent of natural 3D: at 100 the farthest things are as far apart on the screen
+// as the eyes, and depth is true to the screen's distance.
+extern const Info<float> GFX_VR_SCREEN_DEPTH;
 extern const Info<bool> GFX_VR_POINTER_BEAMS;
 extern const Info<bool> GFX_VR_TOASTS;
 extern const Info<float> GFX_VR_HEAD_LOCKED_CURVATURE;

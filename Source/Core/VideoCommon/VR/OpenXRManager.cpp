@@ -3379,6 +3379,13 @@ bool OpenXRManager::LocateViews()
     m_eye_views[i].fov = m_views[i].fov;
   }
 
+  const XrVector3f& left_eye = m_views[0].pose.position;
+  const XrVector3f& right_eye = m_views[1].pose.position;
+  const float eye_distance = std::hypot(right_eye.x - left_eye.x, right_eye.y - left_eye.y,
+                                        right_eye.z - left_eye.z);
+  if (eye_distance > 0.04f && eye_distance < 0.09f)
+    m_eye_distance.store(eye_distance, std::memory_order_relaxed);
+
   // Diagnostic: log raw xrLocateViews output every ~2 seconds.  We want to know if the
   // OpenXR runtime is actually returning different positions per eye (real IPD) or if
   // it's collapsing both eyes to the same point.  Real IPD ~ 0.060-0.070 m for adults.
@@ -3516,6 +3523,13 @@ FrameXr::Input::PanelQuad OpenXRManager::GetScreenQuad() const
   quad.width_m = placement.height * (aspect > 0.0f ? aspect : 16.0f / 9.0f);
   quad.visible = g_ActiveConfig.vr_flat_screen || g_ActiveConfig.vr_stereo_screen;
   return quad;
+}
+
+float OpenXRManager::GetNaturalScreenShift() const
+{
+  const float width = GetScreenQuad().width_m;
+  return width > 0.0f ? UI::NaturalShift(m_eye_distance.load(std::memory_order_relaxed), width) :
+                        0.0f;
 }
 
 void OpenXRManager::PlaceScreenLayer(XrCompositionLayerQuad* layer) const

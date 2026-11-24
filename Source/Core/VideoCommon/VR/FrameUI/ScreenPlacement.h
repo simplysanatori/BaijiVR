@@ -41,6 +41,14 @@ FrameXr::Input::Posef PlaceScreen(const ScreenAnchor& anchor, const ScreenPlacem
 // further away), right and left is bigger and smaller.
 ScreenPlacement MoveWithStick(ScreenPlacement placement, float stick_x, float stick_y, float dt);
 
+// Natural 3D on a screen `width` metres wide for eyes `eye_distance` metres apart: how far each
+// eye's picture moves at infinity, in NDC. With that and the projection's convergence c, a thing at
+// depth w in the game is seen w / c screen distances away.
+constexpr float NaturalShift(float eye_distance, float width)
+{
+  return eye_distance / width;
+}
+
 // A grip holding the screen: it stays under the beam, at its distance.
 class ScreenGrab
 {

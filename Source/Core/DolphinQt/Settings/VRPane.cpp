@@ -76,8 +76,10 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
       {Config::GFX_VR_HUD_THICKNESS.GetLocation(),
        {tr("HUD Depth"), tr("Spreads the layers of the HUD apart in depth. Flat menus and videos "
                             "stay flat.")}},
-      {Config::GFX_STEREO_DEPTH.GetLocation(),
-       {tr("3D Depth"), tr("How deep the picture is. Lower is easier on the eyes.")}},
+      {Config::GFX_VR_SCREEN_DEPTH.GetLocation(),
+       {tr("3D Depth"),
+        tr("How deep the picture is. Natural follows the distance between your eyes and the "
+           "screen's size. Lower is easier on the eyes.")}},
       {Config::GFX_STEREO_CONVERGENCE.GetLocation(),
        {tr("Convergence"),
         tr("How far things come out of the screen. Lower is easier on the eyes.")}},
@@ -341,7 +343,7 @@ void VRSettingsPage::AddDisplay()
   // An old config can hold OpenXRPresentationMode::Legacy, which is not a choice here. It is shown
   // as the display it gives (UpdateDisplay), and only another choice replaces it.
   m_display = Prepare(new ConfigChoiceMap<OpenXRPresentationMode>(
-      {{tr("3D Screen"), OpenXRPresentationMode::StereoScreen},
+      {{tr("Stereoscopic 3D"), OpenXRPresentationMode::StereoScreen},
        {tr("Immersive"), OpenXRPresentationMode::Immersive},
        {tr("Flat"), OpenXRPresentationMode::Vulkan}},
       Config::GFX_VR_PRESENTATION_MODE, m_layer, m_global_layer));
@@ -677,9 +679,11 @@ VRPane::VRPane(QWidget* parent) : QWidget(parent)
 
 void VRPane::AddScreenRows(QGridLayout* layout)
 {
-  m_page->AddSlider(layout, VRSettingsPage::Screen3D, Config::GFX_STEREO_DEPTH, 0.0f,
-                    Config::GFX_STEREO_DEPTH_MAXIMUM, 1.0f, [](float value) {
-                      return value < 0.5f ? tr("Off") : QString::asprintf("%.0f", value);
+  m_page->AddSlider(layout, VRSettingsPage::Screen3D, Config::GFX_VR_SCREEN_DEPTH, 0.0f, 100.0f,
+                    5.0f, [](float value) {
+                      if (value < 0.5f)
+                        return tr("Off");
+                      return value > 99.5f ? tr("Natural") : QString::asprintf("%.0f%%", value);
                     });
   m_page->AddSlider(layout, VRSettingsPage::Screen3D, Config::GFX_STEREO_CONVERGENCE, 0.0f,
                     Config::GFX_STEREO_CONVERGENCE_MAXIMUM, 0.01f, FormatPlain);
@@ -876,7 +880,7 @@ void VRPane::ResetSettings()
   // Screen
   reset(Config::GFX_VR_VIRTUAL_SCREEN, Config::GFX_VR_SCREEN_DISTANCE, Config::GFX_VR_SCREEN_SIZE,
         Config::GFX_VR_SCREEN_YAW, Config::GFX_VR_SCREEN_PITCH, Config::GFX_VR_HUD_THICKNESS,
-        Config::GFX_STEREO_DEPTH, Config::GFX_STEREO_CONVERGENCE, Config::GFX_VR_LOCK_SCREEN);
+        Config::GFX_VR_SCREEN_DEPTH, Config::GFX_STEREO_CONVERGENCE, Config::GFX_VR_LOCK_SCREEN);
 
   // Immersive
   reset(Config::GFX_VR_UNITS_PER_METER, Config::GFX_VR_STEREO_SEPARATION,

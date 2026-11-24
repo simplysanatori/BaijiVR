@@ -215,6 +215,7 @@ const Info<float> GFX_VR_SCREEN_SIZE{{System::GFX, "VR", "ScreenSize"}, 1.5f};
 const Info<float> GFX_VR_SCREEN_YAW{{System::GFX, "VR", "ScreenYaw"}, 0.0f};
 const Info<float> GFX_VR_SCREEN_PITCH{{System::GFX, "VR", "ScreenPitch"}, 0.0f};
 const Info<bool> GFX_VR_LOCK_SCREEN{{System::GFX, "VR", "LockScreen"}, false};
+const Info<float> GFX_VR_SCREEN_DEPTH{{System::GFX, "VR", "ScreenDepth"}, 100.0f};
 const Info<bool> GFX_VR_POINTER_BEAMS{{System::GFX, "VR", "PointerBeams"}, true};
 const Info<bool> GFX_VR_TOASTS{{System::GFX, "VR", "Toasts"}, true};
 const Info<float> GFX_VR_HEAD_LOCKED_CURVATURE{{System::GFX, "VR", "HeadLockedCurvature"}, 0.0f};

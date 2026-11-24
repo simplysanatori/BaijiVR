@@ -324,6 +324,9 @@ public:
 
   // As it is shown now; not visible in Immersive VR.
   FrameXr::Input::PanelQuad GetScreenQuad() const;
+  // Each eye's shift at infinity for natural 3D on that screen, in NDC: there the two pictures are
+  // the eyes' own distance apart. Any thread.
+  float GetNaturalScreenShift() const;
   UI::ScreenAnchor GetScreenAnchor() const;
   UI::ScreenPlacement GetScreenPlacement() const;
   // Until the settings change. The caller saves it to them.
@@ -810,6 +813,8 @@ private:
   // access is synchronized because OpenXR input sampling runs on the pacing thread. The
   // composition layer member gives stable storage across xrEndFrame calls that reference it.
   std::atomic<float> m_flat_screen_aspect{16.0f / 9.0f};
+  // Metres between the eyes (LocateViews).
+  std::atomic<float> m_eye_distance{0.063f};
   std::atomic<bool> m_flat_screen_reanchor_pending{false};
   mutable std::mutex m_flat_screen_pose_mutex;
   bool m_screen_anchor_valid = false;

@@ -27,6 +27,7 @@
 #include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
+#include "Core/GameMods/GameMods.h"
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/NetPlayProto.h"
 #include "Core/State.h"
@@ -90,6 +91,7 @@ std::optional<std::pair<std::string, u32>> s_toast;
 std::optional<std::pair<std::string, u32>> s_next_toast;
 // The save states on disk changed.
 std::atomic<u32> s_saves_changed{0};
+std::atomic<u32> s_mods_changed{0};
 std::atomic<bool> s_bindings_ready{false};
 std::mutex s_bindings_mutex;
 std::pair<PadKind, PadLabels> s_bindings;
@@ -310,7 +312,7 @@ void QueueSwitchMode(bool to_immersive)
     Config::SetCurrent(Config::GFX_VR_PRESENTATION_MODE,
                        to_immersive ? OpenXRPresentationMode::Immersive :
                                       OpenXRPresentationMode::StereoScreen);
-    VrUi::PostToast(to_immersive ? "Immersive" : "3D Screen", 2000);
+    VrUi::PostToast(to_immersive ? "Immersive" : "Stereoscopic 3D", 2000);
   });
 }
 }  // namespace
@@ -383,6 +385,7 @@ void VrUi::Update(const Frame& frame, Controllers* controllers)
   m_frame = frame;
 
   const Controllers raw = *controllers;
+  WatchInstall();
   UpdateMenu(frame, raw);
   UpdateGrab(frame, raw, dt);
 
@@ -489,6 +492,35 @@ void VrUi::RequestSaves()
     m_saves_request = true;
   }
   m_draw_cv.notify_one();
+}
+
+void VrUi::RequestMods()
+{
+  {
+    std::lock_guard lock(m_draw_mutex);
+    m_mods_request = m_menu.mods_list == 0 ? GameMods::List::Mods : GameMods::List::Textures;
+  }
+  m_draw_cv.notify_one();
+}
+
+void VrUi::WatchInstall()
+{
+  if (!m_watch_install || m_frame.time_ns - m_last_watch_ns < REFRESH_NS)
+    return;
+  m_last_watch_ns = m_frame.time_ns;
+  GameMods::Progress progress = GameMods::GetProgress();
+  using Phase = GameMods::Progress::Phase;
+  if (progress.phase != Phase::Downloading && progress.phase != Phase::Unpacking)
+  {
+    m_watch_install = false;
+    if (progress.phase == Phase::Done)
+      ShowToast(fmt::format("{} Installed", progress.name), ToastFit::kShortNs);
+    else if (progress.phase == Phase::Failed)
+      ShowToast(progress.error, ToastFit::kLongNs);
+    m_menu.mods_changed |= progress.phase == Phase::Done;
+    ++s_mods_changed;
+  }
+  m_menu.mods_progress = std::move(progress);
 }
 
 void VrUi::SaveScreenPlacement()
@@ -681,7 +713,7 @@ void VrUi::RefreshMenuState()
   m_menu.distance = placement.distance;
   m_menu.size = placement.height;
   if (!m_drag || m_drag->item != MenuItem::Depth)
-    m_menu.depth = Config::Get(Config::GFX_STEREO_DEPTH);
+    m_menu.depth = Config::Get(Config::GFX_VR_SCREEN_DEPTH);
   if (!m_drag || m_drag->item != MenuItem::Convergence)
     m_menu.convergence = Config::Get(Config::GFX_STEREO_CONVERGENCE);
   switch (Config::Get(Config::GFX_ASPECT_RATIO))
@@ -733,6 +765,8 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
   UpdatePause();
   if (s_saves_changed.exchange(0) != 0)
     RequestSaves();
+  if (s_mods_changed.exchange(0) != 0)
+    RequestMods();
   if (s_bindings_ready.exchange(false))
   {
     std::lock_guard lock(s_bindings_mutex);
@@ -742,6 +776,12 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
   {
     if (m_saves)
       m_menu.saves = std::move(*std::exchange(m_saves, std::nullopt));
+    if (auto mods = std::exchange(m_mods, std::nullopt);
+        mods && (mods->first == GameMods::List::Mods) == (m_menu.mods_list == 0))
+    {
+      m_menu.mods = std::move(mods->second);
+      m_menu.mods_ready = true;
+    }
     m_draw_mutex.unlock();
   }
   m_menu.autosave_list &= m_menu.saves.autosaves.size() > 1;
@@ -876,9 +916,9 @@ void VrUi::SetSlider(const MenuWidget& widget, float t)
     break;
   case MenuItem::Depth:
   {
-    const float value = std::round(t * Config::GFX_STEREO_DEPTH_MAXIMUM);
+    const float value = std::round(t * 20.0f) * 5.0f;
     if (value != m_menu.depth)
-      QueueSet(Config::GFX_STEREO_DEPTH, value);
+      QueueSet(Config::GFX_VR_SCREEN_DEPTH, value);
     m_menu.depth = value;
     break;
   }
@@ -903,6 +943,37 @@ void VrUi::SetSlider(const MenuWidget& widget, float t)
   }
 }
 
+void VrUi::ChangeMod(const MenuWidget& widget)
+{
+  const auto index = static_cast<std::size_t>(widget.index);
+  if (index >= m_menu.mods.size())
+    return;
+  GameMods::Item& item = m_menu.mods[index];
+  const GameMods::List list =
+      m_menu.mods_list == 0 ? GameMods::List::Mods : GameMods::List::Textures;
+  const std::string& game = SConfig::GetInstance().GetGameID();
+  if (widget.item == MenuItem::ModGet)
+  {
+    m_watch_install = GameMods::StartInstall(list, game, item.id);
+    m_menu.mods_progress = GameMods::GetProgress();
+    return;
+  }
+  const bool remove = widget.item == MenuItem::ModRemove;
+  const bool on = !remove && item.state != GameMods::State::On;
+  item.state = remove ? GameMods::State::Available :
+               on     ? GameMods::State::On :
+                        GameMods::State::Off;
+  m_menu.mods_changed = true;
+  // What was asked for is what the list shows, then what there is.
+  Core::QueueHostJob([list, game, id = item.id, remove, on](Core::System&) {
+    const GameMods::Result result =
+        remove ? GameMods::Remove(list, game, id) : GameMods::SetEnabled(list, game, id, on);
+    if (!result.ok)
+      VrUi::PostToast(result.error, 5000);
+    ++s_mods_changed;
+  });
+}
+
 void VrUi::Activate(const MenuWidget& widget, int option)
 {
   PadEvents events;
@@ -920,9 +991,39 @@ void VrUi::Activate(const MenuWidget& widget, int option)
     m_menu.tab = MenuTab::Controls;
     m_menu.page = MenuPage::Main;
     break;
+  case MenuItem::TabMods:
+    m_menu.tab = MenuTab::Mods;
+    m_menu.page = MenuPage::Main;
+    GameMods::RefreshCatalogAsync();
+    RequestMods();
+    break;
   case MenuItem::TabSettings:
     m_menu.tab = MenuTab::Settings;
     m_menu.page = MenuPage::Main;
+    break;
+  case MenuItem::ModsList:
+    if (option >= 0 && option != m_menu.mods_list)
+    {
+      m_menu.mods_list = option;
+      m_menu.mods_page = 0;
+      m_menu.mods_ready = false;
+      m_menu.mods.clear();
+      RequestMods();
+    }
+    break;
+  case MenuItem::ModsPrevious:
+    m_menu.mods_page = std::max(m_menu.mods_page - 1, 0);
+    break;
+  case MenuItem::ModsNext:
+    ++m_menu.mods_page;
+    break;
+  case MenuItem::ModCancel:
+    GameMods::CancelInstall();
+    break;
+  case MenuItem::ModSwitch:
+  case MenuItem::ModGet:
+  case MenuItem::ModRemove:
+    ChangeMod(widget);
     break;
   case MenuItem::Resume:
     CloseMenu();
@@ -1368,7 +1469,7 @@ void VrUi::DrawThread()
   while (true)
   {
     m_draw_cv.wait(lock, [this] {
-      return m_draw_exit || m_saves_request || m_draw_request.has_value();
+      return m_draw_exit || m_saves_request || m_mods_request || m_draw_request.has_value();
     });
     if (m_draw_exit)
       return;
@@ -1380,6 +1481,17 @@ void VrUi::DrawThread()
       pictures.clear();
       lock.lock();
       m_saves = std::move(saves);
+      continue;
+    }
+    if (m_mods_request)
+    {
+      const GameMods::List list = *std::exchange(m_mods_request, std::nullopt);
+      lock.unlock();
+      const SConfig& config = SConfig::GetInstance();
+      std::vector<GameMods::Item> items =
+          GameMods::GetItems(list, config.GetGameID(), config.GetRevision());
+      lock.lock();
+      m_mods.emplace(list, std::move(items));
       continue;
     }
     const MenuState state = std::move(*m_draw_request);

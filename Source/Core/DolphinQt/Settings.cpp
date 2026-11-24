@@ -404,7 +404,8 @@ Settings::StyleType Settings::GetStyleType() const
 
   // if the style type is unset or invalid, try the old enabled flag instead
   const bool enabled = GetQSettings().value(QStringLiteral("userstyle/enabled"), false).toBool();
-  return enabled ? StyleType::User : StyleType::System;
+  // Dark unless chosen otherwise: a white window is a lot of light in a headset.
+  return enabled ? StyleType::User : StyleType::FusionDarkGray;
 }
 
 void Settings::SetStyleType(StyleType type)

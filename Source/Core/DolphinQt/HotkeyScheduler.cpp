@@ -545,12 +545,12 @@ void HotkeyScheduler::Run()
                                 mode == OpenXRPresentationMode::StereoScreen;
         if (!VR::g_openxr || !VR::g_openxr->GetSwapchain() || !switchable)
         {
-          OSD::AddMessage("Immersive / Stereo Screen: only while a game runs in one of them");
+          OSD::AddMessage("Stereoscopic 3D or Immersive: only while a game runs in one of them");
         }
         else if (VR::g_openxr->GetSwapchain()->HasFoveatedFramebuffers() ||
                  (g_framebuffer_manager && g_framebuffer_manager->IsEFBFoveated()))
         {
-          OSD::AddMessage("Immersive / Stereo Screen: turn Foveated Rendering off to switch");
+          OSD::AddMessage("Stereoscopic 3D or Immersive: turn Foveated Rendering off to switch");
         }
         else
         {
@@ -560,7 +560,7 @@ void HotkeyScheduler::Run()
           Config::SetCurrent(Config::GFX_VR_PRESENTATION_MODE,
                              to_stereo_screen ? OpenXRPresentationMode::StereoScreen :
                                                 OpenXRPresentationMode::Immersive);
-          OSD::AddMessage(to_stereo_screen ? "3D Screen" : "Immersive");
+          OSD::AddMessage(to_stereo_screen ? "Stereoscopic 3D" : "Immersive");
         }
       }
 #endif
@@ -1116,14 +1116,20 @@ void HotkeyScheduler::Run()
       CheckGBAHotkeys();
     }
 
-    const auto stereo_depth = Config::Get(Config::GFX_STEREO_DEPTH);
+    // Stereoscopic 3D in the headset has its own depth, a percentage.
+    const bool vr_screen = g_ActiveConfig.vr_stereo_screen;
+    const auto& depth_setting = vr_screen ? Config::GFX_VR_SCREEN_DEPTH : Config::GFX_STEREO_DEPTH;
+    const float depth_step = vr_screen ? 5.0f : 1.0f;
+    const auto stereo_depth = Config::Get(depth_setting);
 
     if (IsHotkey(HK_DECREASE_DEPTH, true))
-      Config::SetCurrent(Config::GFX_STEREO_DEPTH, std::max(stereo_depth - 1, 0.0f));
+      Config::SetCurrent(depth_setting, std::max(stereo_depth - depth_step, 0.0f));
 
     if (IsHotkey(HK_INCREASE_DEPTH, true))
-      Config::SetCurrent(Config::GFX_STEREO_DEPTH,
-                         std::min(stereo_depth + 1, Config::GFX_STEREO_DEPTH_MAXIMUM));
+    {
+      Config::SetCurrent(depth_setting,
+                         std::min(stereo_depth + depth_step, Config::GFX_STEREO_DEPTH_MAXIMUM));
+    }
 
     const auto stereo_convergence = Config::Get(Config::GFX_STEREO_CONVERGENCE);
 

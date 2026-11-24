@@ -663,7 +663,11 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
 #endif
       if (xfmem.projection.type == ProjectionType::Perspective)
       {
-        const float offset = g_ActiveConfig.stereo_depth;
+        float offset = g_ActiveConfig.stereo_depth;
+#ifdef ENABLE_VR
+        if (g_ActiveConfig.vr_stereo_screen && VR::g_openxr)
+          offset = VR::g_openxr->GetNaturalScreenShift() * g_ActiveConfig.vr_screen_depth * 0.01f;
+#endif
         constants.stereoparams[0] = g_ActiveConfig.bStereoSwapEyes ? offset : -offset;
         constants.stereoparams[1] = g_ActiveConfig.bStereoSwapEyes ? -offset : offset;
         constants.stereoparams[2] = g_ActiveConfig.stereo_convergence;

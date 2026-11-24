@@ -4,6 +4,7 @@
 #include "VideoCommon/VR/FrameUI/VrMenu.h"
 
 #include <algorithm>
+#include <cmath>
 #include <ranges>
 #include <utility>
 
@@ -96,6 +97,14 @@ public:
 
   float GetY() const { return m_y; }
 
+  MenuWidget* Find(Kind kind, int index)
+  {
+    const auto it = std::ranges::find_if(m_widgets, [&](const MenuWidget& w) {
+      return w.kind == kind && w.index == index;
+    });
+    return it != m_widgets.end() ? &*it : nullptr;
+  }
+
 private:
   static constexpr float TEXT_H = 34.0f;
 
@@ -125,6 +134,7 @@ void AddRail(Builder* builder, const MenuState& state)
       {MenuTab::Main, MenuItem::TabMain, Icon::kHome, "Main"},
       {MenuTab::Screen, MenuItem::TabScreen, Icon::kTv, "Screen"},
       {MenuTab::Controls, MenuItem::TabControls, Icon::kStadiaController, "Controls"},
+      {MenuTab::Mods, MenuItem::TabMods, Icon::kExtension, "Mods"},
       {MenuTab::Settings, MenuItem::TabSettings, Icon::kSettings, "Settings"},
   };
   float y = (VrMenu::HEIGHT - RAIL_ITEM_H * std::size(ITEMS)) * 0.5f;
@@ -282,7 +292,7 @@ void AddSlots(Builder* builder, const MenuState& state)
 
 void AddScreen(Builder* builder, const MenuState& state)
 {
-  MenuWidget& mode = builder->Segmented(MenuItem::Mode, "Display", {"3D Screen", "Immersive"},
+  MenuWidget& mode = builder->Segmented(MenuItem::Mode, "Display", {"Stereoscopic 3D", "Immersive"},
                                         state.immersive ? 1 : 0);
   mode.disabled = !state.can_switch_mode;
 
@@ -299,7 +309,9 @@ void AddScreen(Builder* builder, const MenuState& state)
     return;
   }
   builder->Slider(MenuItem::Depth, "3D Depth", Fraction(state.depth, 0.0f, 100.0f),
-                  state.depth < 0.5f ? "Off" : fmt::format("{:.0f}", state.depth));
+                  state.depth < 0.5f  ? "Off" :
+                  state.depth > 99.5f ? "Natural" :
+                                        fmt::format("{:.0f}%", state.depth));
   builder->Slider(MenuItem::Convergence, "Convergence", Fraction(state.convergence, 0.0f, 200.0f),
                   fmt::format("{:.0f}", state.convergence));
   builder->Segmented(MenuItem::Aspect, "Aspect Ratio", {"Auto", "16:9", "4:3"}, state.aspect);
@@ -332,11 +344,129 @@ void AddControls(Builder* builder, const MenuState& state)
   builder->Text("Quick Load", "View, then Hold Left Bumper");
   builder->Text("Fast Forward", "View, then Right Trigger");
   builder->Text("Reset Screen or View", "Hold Right Stick Click");
-  builder->Text("3D Screen or Immersive", "Both Bumpers, then View and Menu");
+  builder->Text("Stereoscopic 3D or Immersive", "Both Bumpers, then View and Menu");
   builder->Gap(12.0f);
   builder->Text("Move Screen", "Grip");
   builder->Text("Screen Distance and Size", "Grip and Stick");
   builder->Text("Nudge Screen", "Grip and D-Pad Left or Right");
+}
+
+std::string FormatSize(u64 bytes)
+{
+  if (bytes >= 1000'000'000)
+    return fmt::format("{:.1f} GB", static_cast<double>(bytes) / 1e9);
+  return bytes > 0 ? fmt::format("{:.0f} MB", std::ceil(static_cast<double>(bytes) / 1e6)) : "";
+}
+
+bool IsInstalling(const GameMods::Progress& progress)
+{
+  return progress.phase == GameMods::Progress::Phase::Downloading ||
+         progress.phase == GameMods::Progress::Phase::Unpacking;
+}
+
+std::string FormatProgress(const GameMods::Progress& progress)
+{
+  if (progress.phase == GameMods::Progress::Phase::Unpacking)
+    return "Unpacking";
+  if (progress.bytes_total == 0)
+    return progress.bytes_done > 0 ? FormatSize(progress.bytes_done) : "Starting";
+  return fmt::format("{}%", progress.bytes_done * 100 / progress.bytes_total);
+}
+
+void AddMods(Builder* builder, const MenuState& state)
+{
+  MenuWidget& list = builder->Add(Kind::Segmented, MenuItem::ModsList);
+  list.rect = {LEFT + 136.0f, PANE.y0 + 16.0f, RIGHT - 136.0f, PANE.y0 + 64.0f};
+  list.control = list.rect;
+  list.options = {"Mods and Cheats", "Textures"};
+  list.selected = state.mods_list;
+  builder->Gap(64.0f);
+
+  const float top = builder->GetY();
+  const float footer = PANE.y1 - 16.0f - 48.0f;
+  if (state.mods.empty())
+  {
+    if (state.mods_ready)
+      builder->Text("Nothing for this game yet.", "");
+    return;
+  }
+
+  constexpr float GAP = 8.0f;
+  constexpr float PITCH = 75.0f;
+  constexpr float CARD_H = PITCH - GAP;
+  const int count = static_cast<int>(state.mods.size());
+  const int pages = (count + MODS_PER_PAGE - 1) / MODS_PER_PAGE;
+  const int page = std::clamp(state.mods_page, 0, pages - 1);
+  const bool busy = IsInstalling(state.mods_progress);
+  for (int row = 0; row < MODS_PER_PAGE; ++row)
+  {
+    const int index = page * MODS_PER_PAGE + row;
+    if (index >= count)
+      break;
+    const GameMods::Item& item = state.mods[static_cast<std::size_t>(index)];
+    const float y = top + PITCH * static_cast<float>(row);
+    MenuWidget& card = builder->Add(Kind::Mod, MenuItem::None);
+    card.index = index;
+    card.rect = {LEFT, y, RIGHT, y + CARD_H};
+    const Rect rect = card.rect;
+
+    float right = rect.x1 - 16.0f;
+    const auto control = [&](Kind kind, MenuItem menu_item, float width) -> MenuWidget& {
+      MenuWidget& w = builder->Add(kind, menu_item);
+      w.index = index;
+      w.rect = {right - width, rect.Cy() - 24.0f, right, rect.Cy() + 24.0f};
+      w.control = w.rect;
+      right -= width + 8.0f;
+      return w;
+    };
+    if (busy && state.mods_progress.id == item.id)
+    {
+      control(Kind::IconButton, MenuItem::ModCancel, 48.0f).icon = Icon::kClose;
+      MenuWidget& text = control(Kind::Text, MenuItem::None, 104.0f);
+      text.value = FormatProgress(state.mods_progress);
+    }
+    else if (item.state == GameMods::State::LinkOnly)
+    {
+      control(Kind::Text, MenuItem::None, 120.0f).value = "On the Web";
+    }
+    else if (item.state == GameMods::State::Available && item.downloads)
+    {
+      MenuWidget& get = control(Kind::Button, MenuItem::ModGet, 144.0f);
+      get.icon = Icon::kDownload;
+      get.label = item.size > 0 ? FormatSize(item.size) : "Get";
+      get.disabled = busy;
+    }
+    else
+    {
+      MenuWidget& on = control(Kind::Switch, MenuItem::ModSwitch, 60.0f);
+      on.active = item.state == GameMods::State::On;
+      if (item.downloads)
+        control(Kind::IconButton, MenuItem::ModRemove, 48.0f).icon = Icon::kRemove;
+    }
+    // What is left for the text (the references above do not outlive the next Add).
+    builder->Find(Kind::Mod, index)->control = {rect.x0 + 20.0f, rect.y0, right, rect.y1};
+  }
+
+  if (pages > 1)
+  {
+    MenuWidget& next = builder->Add(Kind::IconButton, MenuItem::ModsNext);
+    next.rect = {RIGHT - 48.0f, footer, RIGHT, footer + 48.0f};
+    next.icon = Icon::kChevronRight;
+    next.disabled = page + 1 >= pages;
+    MenuWidget& text = builder->Add(Kind::Text, MenuItem::None);
+    text.rect = {RIGHT - 120.0f, footer, RIGHT - 60.0f, footer + 48.0f};
+    text.value = fmt::format("{} / {}", page + 1, pages);
+    MenuWidget& previous = builder->Add(Kind::IconButton, MenuItem::ModsPrevious);
+    previous.rect = {RIGHT - 176.0f, footer, RIGHT - 128.0f, footer + 48.0f};
+    previous.icon = Icon::kArrowBack;
+    previous.disabled = page == 0;
+  }
+  if (state.mods_changed)
+  {
+    MenuWidget& text = builder->Add(Kind::Text, MenuItem::None);
+    text.rect = {LEFT, footer, RIGHT - 200.0f, footer + 48.0f};
+    text.label = "Changes are for the game's next start.";
+  }
 }
 
 void AddSettings(Builder* builder, const MenuState& state)
@@ -379,6 +509,9 @@ std::vector<MenuWidget> VrMenu::Layout(const MenuState& state)
     break;
   case MenuTab::Controls:
     AddControls(&builder, state);
+    break;
+  case MenuTab::Mods:
+    AddMods(&builder, state);
     break;
   case MenuTab::Settings:
     AddSettings(&builder, state);
@@ -446,7 +579,7 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
     const float opacity = w.disabled ? kDisabledContent : 1.0f;
     const bool row =
         w.kind == Kind::Segmented || w.kind == Kind::Switch || w.kind == Kind::Slider;
-    if (row)
+    if (row && !w.label.empty())
       kit->TextMid(LEFT, w.rect.Cy(), Type::Body, Tok::kOnSurface, w.label, 0, opacity);
 
     switch (w.kind)
@@ -556,6 +689,49 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
       kit->StateLayer(w.rect, 8.0f, Tok::kInverseOnSurface, look);
       kit->TextMid(w.rect.x0 + 20.0f, w.rect.Cy(), Type::Body, Tok::kInverseOnSurface, w.label);
       kit->TextMid(w.rect.x1 - 20.0f, w.rect.Cy(), Type::Label, Tok::kInversePrimary, w.value, 2);
+      break;
+    case Kind::Mod:
+    {
+      const GameMods::Item& item = state.mods[static_cast<std::size_t>(w.index)];
+      const Rect& t = w.control;
+      kit->Fill(w.rect, 16.0f, Tok::kSurfaceContainerHigh);
+      // Recommended has the seal, what is only verified says so.
+      constexpr std::string_view VERIFIED = "Verified";
+      const float chip_w = kit->TextWidth(Type::Tooltip, std::string(VERIFIED)) + 16.0f;
+      const bool chip = item.verified && !item.recommended;
+      const float extra = item.recommended ? 28.0f : chip ? chip_w + 10.0f : 0.0f;
+      const std::string name = kit->Fit(Type::Label, item.name, t.W() - extra);
+      const float y = w.rect.y0 + 23.0f;
+      kit->TextMid(t.x0, y, Type::Label, Tok::kOnSurface, name);
+      const float after = t.x0 + kit->TextWidth(Type::Label, name) + 10.0f;
+      if (item.recommended)
+      {
+        kit->Icon(after + 8.0f, y, 20.0f, Icon::kVerified, true, Tok::kPrimary);
+      }
+      else if (chip)
+      {
+        kit->Fill({after, y - 11.0f, after + chip_w, y + 11.0f}, 8.0f, Tok::kSecondaryContainer);
+        kit->TextMid(after + 8.0f, y, Type::Tooltip, Tok::kOnSecondaryContainer,
+                     std::string(VERIFIED));
+      }
+      const std::string about = item.notes.empty() ? item.author : item.notes;
+      kit->TextMid(t.x0, w.rect.y1 - 20.0f, Type::Tooltip, Tok::kOnSurfaceVariant,
+                   kit->Fit(Type::Tooltip, about, t.W()));
+      if (state.mods_progress.id == item.id && IsInstalling(state.mods_progress) &&
+          state.mods_progress.bytes_total > 0)
+      {
+        const float done = static_cast<float>(state.mods_progress.bytes_done) /
+                           static_cast<float>(state.mods_progress.bytes_total);
+        const Rect bar{w.rect.x0 + 16.0f, w.rect.y1 - 5.0f, w.rect.x1 - 16.0f, w.rect.y1 - 2.0f};
+        kit->Fill(bar, 1.5f, Tok::kSurfaceContainerHighest);
+        kit->Fill({bar.x0, bar.y0, bar.x0 + bar.W() * std::min(done, 1.0f), bar.y1}, 1.5f,
+                  Tok::kPrimary);
+      }
+      break;
+    }
+    case Kind::IconButton:
+      kit->StateLayer(w.rect, 24.0f, Tok::kOnSurfaceVariant, look);
+      kit->Icon(w.rect.Cx(), w.rect.Cy(), 24.0f, w.icon, false, Tok::kOnSurfaceVariant, opacity);
       break;
     case Kind::Pad:
       DrawPad(kit, canvas, w.rect, state.pad, state.pad_labels);
