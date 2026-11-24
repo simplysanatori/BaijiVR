@@ -22,6 +22,10 @@
 #include "VideoCommon/AbstractTexture.h"
 #include "VideoCommon/Assets/CustomTextureData.h"
 #include "VideoCommon/TextureConfig.h"
+#ifdef ENABLE_VR
+#include "VideoCommon/VR/FrameUI/VrUi.h"
+#include "VideoCommon/VR/OpenXRManager.h"
+#endif
 
 namespace OSD
 {
@@ -148,6 +152,11 @@ void AddTypedMessage(MessageType type, std::string message, u32 ms, u32 argb,
 void AddMessage(std::string message, u32 ms, u32 argb,
                 const VideoCommon::CustomTextureData::ArraySlice::Level* icon)
 {
+#ifdef ENABLE_VR
+  // The window's messages are not seen in the headset.
+  if (VR::g_openxr)
+    VR::UI::VrUi::PostEmulatorMessage(message, ms);
+#endif
   std::lock_guard lock{s_messages_mutex};
   s_messages.emplace(MessageType::Typeless, Message(std::move(message), ms, argb, std::move(icon)));
 }

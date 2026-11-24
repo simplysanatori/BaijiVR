@@ -36,6 +36,7 @@
 #include "VideoBackends/Vulkan/StateTracker.h"
 #include "VideoBackends/Vulkan/VKTexture.h"
 #include "VideoBackends/Vulkan/VulkanContext.h"
+#include "VideoBackends/Vulkan/VulkanOverlay.h"
 #include "VideoCommon/AbstractGfx.h"
 #include "VideoCommon/TextureConfig.h"
 #include "VideoCommon/VideoConfig.h"
@@ -782,6 +783,14 @@ std::unique_lock<std::mutex> VulkanOpenXR::AcquireGraphicsQueueLock()
     return g_command_buffer_mgr->AcquireQueueLock();
 
   return {};
+}
+
+std::unique_ptr<VR::UI::Overlay> VulkanOpenXR::CreateUIOverlay(uint32_t width, uint32_t height)
+{
+  if (!VR::g_openxr || !g_vulkan_context)
+    return nullptr;
+  return CreateVulkanOverlay(VR::g_openxr->GetSession(), width, height,
+                             [this] { return AcquireGraphicsQueueLock(); });
 }
 
 bool VulkanOpenXR::PrepareStopConfirmationLayer(std::string_view text)

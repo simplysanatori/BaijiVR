@@ -1,0 +1,87 @@
+// Copyright 2026 AzaharFrame contributors
+// Licensed under GPLv3 or any later version
+//
+// A CPU canvas for Azahar for Frame's own panels (the in-VR application picker):
+// anti-aliased rounded shapes, scaled image blits and text from the baked
+// glyph atlas in ui_font.h, into premultiplied RGBA8 pixels (R in the low
+// byte, sRGB-encoded colours), rows top down.
+//
+// Adapted from GalaxyFrame's ui_canvas (same author), with fill, outline,
+// image blit and text-fitting helpers added.
+#pragma once
+
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <vector>
+
+namespace frame_xr::ui {
+
+enum { kFontLarge, kFontSmall };
+
+struct Color {
+    float r, g, b, a; // 0..255, alpha 0..1
+};
+inline Color rgb(int r, int g, int b, float a = 1.0f) {
+    return {static_cast<float>(r), static_cast<float>(g), static_cast<float>(b), a};
+}
+
+/// Decodes the glyph atlases; call once before drawing or measuring text.
+void InitFonts();
+/// Width of `s` in pixels. InitFonts() must have been called.
+float TextWidth(int font, const char* s);
+
+/// Breaks `s` at spaces into at most `max_lines` lines no wider than `width`.
+/// Words wider than a line are split by character. If the text does not fit,
+/// the last line is shortened and ends in "...". Returns no lines for "".
+/// The same with any text measure (a TtfFont's, frame_xr/ui/ui_ttf.h). AzaharFrame emerald
+std::vector<std::string> WrapText(const std::function<float(const std::string&)>& width_of,
+                                  const std::string& s, float width, int max_lines);
+std::vector<std::string> WrapText(int font, const std::string& s, float width, int max_lines);
+
+struct Canvas {
+    int w = 0, h = 0;
+    std::vector<uint32_t> px;
+    /// AzaharFrame tabmenu: drawing outside [clip_x0, clip_x1) x [clip_y0, clip_y1) is dropped
+    /// (a scrolled list). By default (and after Init) it is the whole canvas.
+    int clip_x0 = 0, clip_y0 = 0, clip_x1 = 1 << 30, clip_y1 = 1 << 30;
+
+    void Init(int width, int height);
+    /// The clip rectangle (pixels, rounded outwards), cut to the canvas.
+    void SetClip(float x0, float y0, float x1, float y1);
+    void ResetClip();
+    void Clear(const Color& c);
+    void Blend(int x, int y, const Color& c, float coverage);
+    void FillRect(float x0, float y0, float x1, float y1, const Color& c);
+    void RoundRect(float x0, float y0, float x1, float y1, float radius, const Color& c);
+    /// Outline of a rounded rectangle, `thickness` wide, centred on the edge.
+    void StrokeRoundRect(float x0, float y0, float x1, float y1, float radius, float thickness,
+                         const Color& c);
+    void Circle(float cx, float cy, float r, const Color& c);
+    /// AzaharFrame tabmenu: a rounded rectangle with its own radius at each corner (top left,
+    /// top right, bottom right, bottom left), for the ends of a segmented button.
+    void RoundRectCorners(float x0, float y0, float x1, float y1, float r_tl, float r_tr,
+                          float r_br, float r_bl, const Color& c);
+    /// The same as an outline, `thickness` wide, centred on the edge.
+    void StrokeRoundRectCorners(float x0, float y0, float x1, float y1, float r_tl, float r_tr,
+                                float r_br, float r_bl, float thickness, const Color& c);
+    /// A line `width` wide with round ends.
+    void Line(float x0, float y0, float x1, float y1, float width, const Color& c);
+    /// AzaharFrame tabmenu: `c` through an 8-bit coverage mask (a glyph), its top left at x, y.
+    void BlendMask(int x, int y, const uint8_t* coverage, int mw, int mh, int stride,
+                   const Color& c);
+    /// Draws straight (non-premultiplied) RGBA8 pixels `src` (sw x sh, rows top down)
+    /// scaled into the destination rectangle, bilinear when `smooth`, else nearest.
+    /// `radius` rounds the destination corners; `alpha` multiplies the image alpha.
+    void BlitRGBA(const uint8_t* src, int sw, int sh, float x0, float y0, float x1, float y1,
+                  bool smooth = true, float radius = 0.0f, float alpha = 1.0f);
+    /// Text on a baseline; align 0 = left of x, 1 = centred on it, 2 = right.
+    void Text(float x, float baseline, int font, const char* s, const Color& c, int align = 0);
+    /// Text broken into lines at spaces to fit `width`, from the baseline
+    /// `baseline` down in steps of `line_height`; returns the baseline after
+    /// the last line.
+    float TextWrapped(float x, float baseline, float width, float line_height, int font,
+                      const char* s, const Color& c);
+};
+
+} // namespace frame_xr::ui

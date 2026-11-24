@@ -398,6 +398,11 @@ struct VideoConfig final
   OpenXRPresentationMode vr_presentation_mode = OpenXRPresentationMode::Legacy;
   float vr_screen_distance = 2.0f;
   float vr_screen_size = 1.5f;
+  float vr_screen_yaw = 0.0f;
+  float vr_screen_pitch = 0.0f;
+  bool vr_lock_screen = false;
+  bool vr_pointer_beams = true;
+  bool vr_toasts = true;
   float vr_hud_thickness = 0.0f;  // World-space depth (m) spread across a 2D layer's ortho-Z (0 = flat)
   float vr_head_locked_curvature = 0.0f;
   bool vr_dont_clear_screen = false;

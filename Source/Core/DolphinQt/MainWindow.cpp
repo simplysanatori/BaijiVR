@@ -1037,7 +1037,7 @@ bool MainWindow::RequestStopInternal(bool from_emulation)
     if (from_emulation && immersive_or_stereo_screen && g_presenter)
     {
       const QString prompt =
-          message + tr("\n\nRight A: Stop emulation\nRight B: Continue playing");
+          message + tr("\n\nA: Stop\nB: Keep Playing");
       if (g_presenter->BeginOpenXRStopConfirmation(prompt.toStdString(), &temporary_frame_thread))
       {
         QEventLoop confirmation_loop;

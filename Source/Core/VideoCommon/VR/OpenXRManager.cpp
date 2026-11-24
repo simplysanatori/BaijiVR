@@ -53,9 +53,14 @@
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
+#include "Core/HW/ProcessorInterface.h"
 #include "Core/Host.h"
+#include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
+#include "VideoCommon/CommandProcessor.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/VR/FrameUI/Overlay.h"
+#include "VideoCommon/VR/FrameUI/VrUi.h"
 #include "VideoCommon/VideoConfig.h"
 
 namespace VR
@@ -1099,6 +1104,13 @@ void OpenXRManager::StartFrameThread()
 
   m_frame_thread_should_exit.store(false, std::memory_order_release);
   m_frame_thread_running.store(true, std::memory_order_release);
+  if (m_swapchain)
+  {
+    m_ui = std::make_unique<UI::VrUi>(
+        this,
+        [this](u32 width, u32 height) { return m_swapchain->CreateUIOverlay(width, height); },
+        m_max_layer_count);
+  }
   m_frame_thread = std::thread(&OpenXRManager::FrameThreadLoop, this);
   INFO_LOG_FMT(OPENXR, "OpenXR: XR pacing thread started.");
 }
@@ -1115,6 +1127,7 @@ void OpenXRManager::StopFrameThread()
   }
   m_frame_thread.join();
   m_frame_thread_running.store(false, std::memory_order_release);
+  m_ui.reset();
   INFO_LOG_FMT(OPENXR, "OpenXR: XR pacing thread stopped.");
 }
 
@@ -1168,6 +1181,12 @@ void OpenXRManager::DestroySession()
   DestroyInputActions();
   ResetInputActionsState();
   DestroyFBPassthrough();
+
+  if (m_view_space != XR_NULL_HANDLE)
+  {
+    xrDestroySpace(m_view_space);
+    m_view_space = XR_NULL_HANDLE;
+  }
 
   if (m_reference_space != XR_NULL_HANDLE)
   {
@@ -1226,8 +1245,7 @@ void OpenXRManager::DestroySession()
   m_flat_screen_reanchor_pending.store(false, std::memory_order_release);
   {
     std::lock_guard lock(m_flat_screen_pose_mutex);
-    m_flat_screen_pose_valid = false;
-    m_flat_screen_pose = {{0.f, 0.f, 0.f, 1.f}, {0.f, 0.f, 0.f}};
+    m_screen_anchor_valid = false;
   }
   m_flat_quad_layer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
   m_controller_anchor_cache_valid = {false, false};
@@ -1347,6 +1365,11 @@ void OpenXRManager::FrameThreadLoop()
   bool have_frame = false;
   uint64_t consumed_serial = 0;
 
+  // A running game that shows nothing new: its state goes to the log.
+  constexpr u64 STALL_LOG_US = 5'000'000;
+  u64 last_fresh_us = Common::Timer::NowUs();
+  u64 next_stall_log_us = STALL_LOG_US;
+
   // Rolling 5s instrumentation window.
   u64 stats_start_us = Common::Timer::NowUs();
   u32 stat_cycles = 0, stat_fresh = 0, stat_repeat = 0, stat_empty = 0;
@@ -1375,7 +1398,9 @@ void OpenXRManager::FrameThreadLoop()
 
   while (!m_frame_thread_should_exit.load(std::memory_order_acquire))
   {
-    const bool eager_heartbeat = g_ActiveConfig.vr_eager_heartbeat;
+    // The VR UI follows the head and the hands, so it needs every refresh.
+    const bool eager_heartbeat =
+        g_ActiveConfig.vr_eager_heartbeat || (m_ui && m_ui->IsActive());
     const u64 cycle_start_us = Common::Timer::NowUs();
     if (!PollEvents())
       break;
@@ -1466,6 +1491,16 @@ void OpenXRManager::FrameThreadLoop()
       }
     }
 
+    // The VR UI's uploads and swapchain calls come before the handoff lock; only its finished
+    // layers go in under it. They are there without a game frame too: a game that has drawn
+    // nothing (or hangs) still has the menu and a way out.
+    std::vector<XrCompositionLayerBaseHeader*> ui_layers;
+    if (m_ui && should_render)
+    {
+      const std::size_t game_layers = !have_frame ? 0 : last_frame.is_stereo_quad ? 2 : 1;
+      m_ui->BuildLayers(m_reference_space, game_layers, &ui_layers);
+    }
+
 #ifdef BAIJI_STEAMVR
     // Checking the flag below is not mutual exclusion: a video handoff can start
     // after that check but before xrEndFrame. Keep both eye releases and their
@@ -1505,14 +1540,17 @@ void OpenXRManager::FrameThreadLoop()
     const bool submit_content = should_render && have_frame;
     if (submit_content)
     {
+      // Where the screen is now, not where it was when the game drew this frame.
       if (last_frame.is_quad)
       {
+        PlaceScreenLayer(&last_frame.quad);
         layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&last_frame.quad));
       }
       else if (last_frame.is_stereo_quad)
       {
         for (uint32_t i = 0; i < last_frame.stereo_quad_count; ++i)
         {
+          PlaceScreenLayer(&last_frame.stereo_quads[i]);
           layers.push_back(
               reinterpret_cast<XrCompositionLayerBaseHeader*>(&last_frame.stereo_quads[i]));
         }
@@ -1526,6 +1564,8 @@ void OpenXRManager::FrameThreadLoop()
         layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&projection_layer));
       }
     }
+
+    layers.insert(layers.end(), ui_layers.begin(), ui_layers.end());
 
     EndFrameDetached(m_frame_state.predictedDisplayTime, GetActiveBlendMode(), should_render,
                      layers);
@@ -1548,6 +1588,17 @@ void OpenXRManager::FrameThreadLoop()
     stat_end_ms += (t4 - t3) / 1000.0;
 
     const u64 now_us = Common::Timer::NowUs();
+    if (fresh || Core::GetState(Core::System::GetInstance()) != Core::State::Running)
+    {
+      last_fresh_us = now_us;
+      next_stall_log_us = STALL_LOG_US;
+    }
+    else if (now_us - last_fresh_us >= next_stall_log_us)
+    {
+      LogStall(now_us - last_fresh_us);
+      next_stall_log_us *= 2;
+    }
+
     if (now_us - stats_start_us >= 5'000'000 && stat_cycles > 0)
     {
       INFO_LOG_FMT(OPENXR,
@@ -2385,11 +2436,15 @@ void OpenXRManager::UpdateInputActions()
     // XR_SESSION_NOT_FOCUSED is a success code but means input is inactive.
     // Don't reset state — keep previous connected status to avoid flicker in UI.
     SetSessionFocused(false);
+    if (m_ui)
+      m_ui->OnFocusLost();
     return;
   }
   if (XR_FAILED(sync_result))
   {
     ResetInputActionsState();
+    if (m_ui)
+      m_ui->OnFocusLost();
     return;
   }
   SetSessionFocused(true);
@@ -2580,12 +2635,64 @@ void OpenXRManager::UpdateInputActions()
   for (size_t hand = 0; hand < 2; ++hand)
     profile_strings[hand] = PathToString(m_instance, m_logged_interaction_profiles[hand]);
 
+  UpdateStopConfirmationInput(controllers);
+
+  // The controllers go to the emulated ones without what the VR UI takes. The controller binding
+  // session has no swapchain and no UI, so every button can be bound.
+  UpdateUI(&controllers);
+
   Common::VR::OpenXRInputState::SetControllers(controllers, true, head_pose,
                                                profile_strings, m_session_focused,
                                                input_time);
-  UpdateStopConfirmationInput(controllers);
 
   UpdateHaptics();
+}
+
+void OpenXRManager::UpdateUI(std::array<Common::VR::OpenXRControllerState, 2>* controllers)
+{
+  if (!m_ui || !m_swapchain ||
+      m_stop_confirmation_active.load(std::memory_order_acquire))
+  {
+    return;
+  }
+
+  UI::VrUi::Frame frame;
+  frame.time_ns = m_frame_state.predictedDisplayTime;
+  frame.has_screen = g_ActiveConfig.vr_flat_screen || g_ActiveConfig.vr_stereo_screen;
+
+  XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+  constexpr XrSpaceLocationFlags required_flags =
+      XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+  if (m_view_space != XR_NULL_HANDLE && m_reference_space != XR_NULL_HANDLE &&
+      XR_SUCCEEDED(xrLocateSpace(m_view_space, m_reference_space,
+                                 m_frame_state.predictedDisplayTime, &location)) &&
+      (location.locationFlags & required_flags) == required_flags)
+  {
+    const XrPosef& pose = location.pose;
+    frame.head_valid = true;
+    frame.head = {{pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w},
+                  {pose.position.x, pose.position.y, pose.position.z}};
+  }
+
+  m_ui->Update(frame, controllers);
+}
+
+void OpenXRManager::PulseHaptics(std::size_t hand)
+{
+  if (m_session == XR_NULL_HANDLE || m_action_haptic == XR_NULL_HANDLE ||
+      hand >= m_input_hand_paths.size())
+  {
+    return;
+  }
+  XrHapticActionInfo action_info{XR_TYPE_HAPTIC_ACTION_INFO};
+  action_info.action = m_action_haptic;
+  action_info.subactionPath = m_input_hand_paths[hand];
+  XrHapticVibration vibration{XR_TYPE_HAPTIC_VIBRATION};
+  vibration.amplitude = 0.3f;
+  vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
+  vibration.duration = 10'000'000;
+  xrApplyHapticFeedback(m_session, &action_info,
+                        reinterpret_cast<const XrHapticBaseHeader*>(&vibration));
 }
 
 void OpenXRManager::UpdateStopConfirmationInput(
@@ -2678,6 +2785,16 @@ bool OpenXRManager::CreateReferenceSpace()
     ERROR_LOG_FMT(OPENXR, "OpenXR: xrCreateReferenceSpace({}) failed: {}",
                   ReferenceSpaceTypeName(space_info.referenceSpaceType), result_string);
     return false;
+  }
+
+  // The head, for the VR UI: the video thread's view poses stop with the game.
+  if (m_view_space == XR_NULL_HANDLE)
+  {
+    XrReferenceSpaceCreateInfo view_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+    view_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+    view_info.poseInReferenceSpace.orientation.w = 1.0f;
+    if (XR_FAILED(xrCreateReferenceSpace(m_session, &view_info, &m_view_space)))
+      m_view_space = XR_NULL_HANDLE;
   }
 
   m_reference_space_type = space_info.referenceSpaceType;
@@ -3324,43 +3441,101 @@ void OpenXRManager::RefreshFlatScreenPose()
 {
   const bool reanchor = m_flat_screen_reanchor_pending.exchange(false, std::memory_order_acq_rel);
   std::lock_guard lock(m_flat_screen_pose_mutex);
-  if (!reanchor && m_flat_screen_pose_valid)
+  if (!reanchor && m_screen_anchor_valid)
     return;
-
-  const float distance = g_ActiveConfig.vr_screen_distance;
 
   // A zero orientation means xrLocateViews has not produced a valid pose yet; don't cache it.
   const XrQuaternionf& q = m_eye_views[0].pose.orientation;
   const bool have_pose = (q.x != 0.f || q.y != 0.f || q.z != 0.f || q.w != 0.f);
   if (!have_pose)
   {
-    m_flat_screen_pose_valid = false;
+    m_screen_anchor_valid = false;
     return;
   }
 
-  // Head center and yaw-only heading, so the panel sits in front of the user, upright and
-  // level (no pitch/roll), matching PPSSPP's flat-screen placement.
+  // Head center and yaw-only heading: the screen is placed from there (PlaceScreen).
   const XrVector3f& p0 = m_eye_views[0].pose.position;
   const XrVector3f& p1 = m_eye_views[1].pose.position;
-  const XrVector3f center{0.5f * (p0.x + p1.x), 0.5f * (p0.y + p1.y), 0.5f * (p0.z + p1.z)};
-  const float yaw =
+  m_screen_anchor.position = {0.5f * (p0.x + p1.x), 0.5f * (p0.y + p1.y), 0.5f * (p0.z + p1.z)};
+  m_screen_anchor.yaw =
       std::atan2(2.f * (q.x * q.z + q.w * q.y), 1.f - 2.f * (q.x * q.x + q.y * q.y));
-
-  XrPosef pose{};
-  pose.orientation = {0.f, std::sin(yaw * 0.5f), 0.f, std::cos(yaw * 0.5f)};
-  pose.position = {center.x - std::sin(yaw) * distance, center.y,
-                   center.z - std::cos(yaw) * distance};
-  m_flat_screen_pose = pose;
-  m_flat_screen_pose_valid = true;
+  m_screen_anchor_valid = true;
 }
 
-XrPosef OpenXRManager::GetFlatScreenPose() const
+UI::ScreenAnchor OpenXRManager::GetScreenAnchor() const
 {
   std::lock_guard lock(m_flat_screen_pose_mutex);
-  if (m_flat_screen_pose_valid)
-    return m_flat_screen_pose;
+  return m_screen_anchor_valid ? m_screen_anchor : UI::ScreenAnchor{};
+}
 
-  return {{0.f, 0.f, 0.f, 1.f}, {0.f, 0.f, -g_ActiveConfig.vr_screen_distance}};
+UI::ScreenPlacement OpenXRManager::GetScreenPlacement() const
+{
+  std::lock_guard lock(m_flat_screen_pose_mutex);
+  const UI::ScreenPlacement config{g_ActiveConfig.vr_screen_distance, g_ActiveConfig.vr_screen_size,
+                                   g_ActiveConfig.vr_screen_yaw, g_ActiveConfig.vr_screen_pitch};
+  if (config != m_screen_placement_config)
+  {
+    m_screen_placement_config = config;
+    m_screen_placement = config;
+  }
+  return m_screen_placement;
+}
+
+void OpenXRManager::SetScreenPlacement(const UI::ScreenPlacement& placement)
+{
+  std::lock_guard lock(m_flat_screen_pose_mutex);
+  m_screen_placement = placement;
+}
+
+void OpenXRManager::ResetScreenPlacement()
+{
+  SetScreenPlacement({Config::GFX_VR_SCREEN_DISTANCE.GetDefaultValue(),
+                      Config::GFX_VR_SCREEN_SIZE.GetDefaultValue(),
+                      Config::GFX_VR_SCREEN_YAW.GetDefaultValue(),
+                      Config::GFX_VR_SCREEN_PITCH.GetDefaultValue()});
+}
+
+FrameXr::Input::PanelQuad OpenXRManager::GetScreenQuad() const
+{
+  const UI::ScreenPlacement placement = GetScreenPlacement();
+  const float aspect = m_flat_screen_aspect.load(std::memory_order_relaxed);
+  FrameXr::Input::PanelQuad quad;
+  quad.pose = UI::PlaceScreen(GetScreenAnchor(), placement);
+  quad.height_m = placement.height;
+  quad.width_m = placement.height * (aspect > 0.0f ? aspect : 16.0f / 9.0f);
+  quad.visible = g_ActiveConfig.vr_flat_screen || g_ActiveConfig.vr_stereo_screen;
+  return quad;
+}
+
+void OpenXRManager::PlaceScreenLayer(XrCompositionLayerQuad* layer) const
+{
+  const FrameXr::Input::PanelQuad quad = GetScreenQuad();
+  const auto& [orientation, position] = quad.pose;
+  layer->pose = {{orientation.x, orientation.y, orientation.z, orientation.w},
+                 {position.x, position.y, position.z}};
+  layer->size = {quad.width_m, quad.height_m};
+}
+
+std::unique_ptr<UI::Overlay> IOpenXRSwapchain::CreateUIOverlay(uint32_t, uint32_t)
+{
+  return nullptr;
+}
+
+void OpenXRManager::LogStall(u64 stalled_us) const
+{
+  auto& system = Core::System::GetInstance();
+  const auto& ppc = system.GetPPCState();
+  const auto& fifo = system.GetCommandProcessor().GetFifo();
+  WARN_LOG_FMT(OPENXR,
+               "Nothing new from the game for {} s. PC {:08x} LR {:08x} MSR {:08x} | interrupts {:08x} "
+               "mask {:08x} | FIFO read {:08x} write {:08x} distance {:08x} breakpoint {:08x} | read "
+               "enable {} link {} BP enable {} at BP {} | dual core {}",
+               stalled_us / 1'000'000, ppc.pc, LR(ppc), ppc.msr.Hex,
+               system.GetProcessorInterface().GetCause(), system.GetProcessorInterface().GetMask(),
+               fifo.CPReadPointer.load(), fifo.CPWritePointer.load(),
+               fifo.CPReadWriteDistance.load(), fifo.CPBreakpoint.load(),
+               fifo.bFF_GPReadEnable.load(), fifo.bFF_GPLinkEnable.load(), fifo.bFF_BPEnable.load(),
+               fifo.bFF_Breakpoint.load(), system.IsDualCoreMode());
 }
 
 bool OpenXRManager::SubmitFlatQuadFrame(XrSwapchain swapchain, uint32_t width, uint32_t height)
@@ -3368,17 +3543,11 @@ bool OpenXRManager::SubmitFlatQuadFrame(XrSwapchain swapchain, uint32_t width, u
   if (swapchain == XR_NULL_HANDLE || width == 0 || height == 0)
     return IsFrameThreadActive() ? true : EndFrame({});
 
-  const float height_m = g_ActiveConfig.vr_screen_size;
-  const float configured_aspect = m_flat_screen_aspect.load(std::memory_order_relaxed);
-  const float aspect = configured_aspect > 0.f ? configured_aspect :
-                                                 static_cast<float>(width) / height;
-
   m_flat_quad_layer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
   m_flat_quad_layer.layerFlags = 0;
   m_flat_quad_layer.space = m_reference_space;
   m_flat_quad_layer.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-  m_flat_quad_layer.pose = GetFlatScreenPose();
-  m_flat_quad_layer.size = {height_m * aspect, height_m};
+  PlaceScreenLayer(&m_flat_quad_layer);
   m_flat_quad_layer.subImage.swapchain = swapchain;
   m_flat_quad_layer.subImage.imageArrayIndex = 0;
   m_flat_quad_layer.subImage.imageRect.offset = {0, 0};
@@ -3405,12 +3574,6 @@ bool OpenXRManager::SubmitStereoQuadFrame(std::array<XrSwapchain, 2> swapchains,
     return IsFrameThreadActive() ? true : EndFrame({});
   }
 
-  const float height_m = g_ActiveConfig.vr_screen_size;
-  const float configured_aspect = m_flat_screen_aspect.load(std::memory_order_relaxed);
-  const float aspect = configured_aspect > 0.f ? configured_aspect :
-                                                 static_cast<float>(width) / height;
-  const XrPosef pose = GetFlatScreenPose();
-
   std::array<XrCompositionLayerQuad, 2> quad_layers{};
   for (uint32_t eye = 0; eye < 2; ++eye)
   {
@@ -3419,8 +3582,7 @@ bool OpenXRManager::SubmitStereoQuadFrame(std::array<XrSwapchain, 2> swapchains,
     quad_layers[eye].space = m_reference_space;
     quad_layers[eye].eyeVisibility =
         eye == 0 ? XR_EYE_VISIBILITY_LEFT : XR_EYE_VISIBILITY_RIGHT;
-    quad_layers[eye].pose = pose;
-    quad_layers[eye].size = {height_m * aspect, height_m};
+    PlaceScreenLayer(&quad_layers[eye]);
     quad_layers[eye].subImage.swapchain = swapchains[eye];
     quad_layers[eye].subImage.imageArrayIndex = 0;
     quad_layers[eye].subImage.imageRect.offset = {0, 0};
@@ -3871,44 +4033,23 @@ void OpenXRManager::ComputeVirtualScreenHit(const Common::VR::OpenXRPoseState& a
 
   if (g_ActiveConfig.vr_flat_screen || g_ActiveConfig.vr_stereo_screen)
   {
-    // Flat or Stereo 3D screen: a world-locked quad in reference space (meters), yaw-only
-    // orientation.
-    // Bring the aim ray into quad-local space (quad plane is z=0, +z toward the viewer).
-    const XrPosef quad = GetFlatScreenPose();
-    const float yaw = 2.0f * std::atan2(quad.orientation.y, quad.orientation.w);
-    const float cy = std::cos(yaw), sy = std::sin(yaw);
-    const auto to_quad_local = [&](float x, float y, float z) -> std::array<float, 3> {
-      // Inverse yaw rotation about Y.
-      return {cy * x - sy * z, y, sy * x + cy * z};
-    };
-
-    const std::array<float, 3> p = to_quad_local(aim.position[0] - quad.position.x,
-                                                 aim.position[1] - quad.position.y,
-                                                 aim.position[2] - quad.position.z);
-    // Aim forward = orientation * (0,0,-1).
-    const float qx = aim.orientation[0], qy = aim.orientation[1];
-    const float qz = aim.orientation[2], qw = aim.orientation[3];
-    const float fx = -(2.0f * (qx * qz + qw * qy));
-    const float fy = -(2.0f * (qy * qz - qw * qx));
-    const float fz = -(1.0f - 2.0f * (qx * qx + qy * qy));
-    const std::array<float, 3> d = to_quad_local(fx, fy, fz);
-
-    if (std::abs(d[2]) < 1e-6f)
-      return;
-    const float t = -p[2] / d[2];
-    if (t <= 0.0f)
+    // Flat or Stereo 3D screen: the quad as it is shown.
+    const FrameXr::Input::PanelQuad quad = GetScreenQuad();
+    const FrameXr::Input::Posef pose{
+        {aim.orientation[0], aim.orientation[1], aim.orientation[2], aim.orientation[3]},
+        {aim.position[0], aim.position[1], aim.position[2]}};
+    const FrameXr::Input::QuadHit hit =
+        FrameXr::Input::IntersectQuad(FrameXr::Input::RayFromPose(pose), quad);
+    if (!hit.on_plane)
       return;
 
-    const float half_h = std::max(g_ActiveConfig.vr_screen_size * 0.5f, 1e-4f);
-    const float configured_aspect = m_flat_screen_aspect.load(std::memory_order_relaxed);
-    const float aspect = configured_aspect > 0.0f ? configured_aspect : (16.0f / 9.0f);
-    const float half_w = half_h * aspect;
     out_hit->valid = true;
-    out_hit->u = (p[0] + t * d[0]) / half_w;
-    out_hit->v = (p[1] + t * d[1]) / half_h;
+    out_hit->u = hit.u * 2.0f - 1.0f;
+    out_hit->v = 1.0f - hit.v * 2.0f;
     // Perpendicular distance, not ray length: rotating the controller must not change
     // the emulated sensor-bar distance (ray length grows toward the screen corners).
-    out_hit->distance_m = p[2];
+    out_hit->distance_m =
+        FrameXr::Input::Transform(FrameXr::Input::Inverse(quad.pose), pose.position).z;
     return;
   }
 

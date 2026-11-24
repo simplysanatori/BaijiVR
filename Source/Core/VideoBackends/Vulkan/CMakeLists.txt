@@ -65,6 +65,8 @@ if(ENABLE_VR)
   target_sources(videovulkan PRIVATE
     VulkanOpenXR.cpp
     VulkanOpenXR.h
+    VulkanOverlay.cpp
+    VulkanOverlay.h
     ${CMAKE_SOURCE_DIR}/Source/Core/VideoCommon/VR/OpenXRUtilitySession.cpp
     ${CMAKE_SOURCE_DIR}/Externals/imgui/imgui/backends/imgui_impl_vulkan.cpp
   )

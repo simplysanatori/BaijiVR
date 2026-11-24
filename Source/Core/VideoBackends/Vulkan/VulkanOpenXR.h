@@ -127,6 +127,7 @@ public:
   AbstractFramebuffer* AcquireLayeredFramebuffer() override;
   void ReleaseLayeredTexture() override;
   std::unique_lock<std::mutex> AcquireGraphicsQueueLock() override;
+  std::unique_ptr<VR::UI::Overlay> CreateUIOverlay(uint32_t width, uint32_t height) override;
   bool WaitForPendingFrameFinalization(std::string_view reason = {}) override;
 
   // Build the XrCompositionLayerProjection and call xrEndFrame.

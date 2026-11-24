@@ -26,6 +26,7 @@
 
 #include "Common/Matrix.h"
 #include "Common/VR/OpenXRInputState.h"
+#include "VideoCommon/VR/FrameUI/ScreenPlacement.h"
 #include "VideoCommon/AbstractFramebuffer.h"
 
 // OpenXRManager owns the XrInstance, XrSystemId, XrSession, and reference XrSpace.
@@ -34,6 +35,12 @@
 // Backend-specific swapchain creation (D3D11, etc.) is handled by the respective
 // backend class (e.g. D3DOpenXR), which creates the XrSession with a graphics
 // binding and then calls SetSession() + SetSwapchain() to transfer ownership here.
+
+namespace VR::UI
+{
+class Overlay;
+class VrUi;
+}  // namespace VR::UI
 
 namespace VR
 {
@@ -103,6 +110,10 @@ public:
   // Vulkan-backed OpenXR calls can touch the VkQueue bound to the XrSession. Backends that need
   // external queue synchronization return a held lock here; other backends return an empty lock.
   virtual std::unique_lock<std::mutex> AcquireGraphicsQueueLock() { return {}; }
+
+  // A layer for the VR UI (the menu, toasts, beams). Null: this backend has none, and no VR UI.
+  // Called on the XR pacing thread.
+  virtual std::unique_ptr<UI::Overlay> CreateUIOverlay(uint32_t width, uint32_t height);
 
   // Vulkan backends may provide a stable, depth-independent quad used to confirm stopping
   // emulation. The image is prepared by the presenter and remains valid until hidden.
@@ -307,6 +318,20 @@ public:
   // Places the flat screen in front of the view again on the next LocateViews, without moving
   // the VR home position (used when switching into the stereo screen mid-game).
   void RequestFlatScreenReanchor() { m_flat_screen_reanchor_pending.store(true); }
+
+  // ---- The virtual screen (vr_flat_screen, vr_stereo_screen) ----
+  // Any thread. The one description of where the screen is, for the layers and for pointing at it.
+
+  // As it is shown now; not visible in Immersive VR.
+  FrameXr::Input::PanelQuad GetScreenQuad() const;
+  UI::ScreenAnchor GetScreenAnchor() const;
+  UI::ScreenPlacement GetScreenPlacement() const;
+  // Until the settings change. The caller saves it to them.
+  void SetScreenPlacement(const UI::ScreenPlacement& placement);
+  void ResetScreenPlacement();
+
+  // A short haptic feedback pulse for the VR UI. XR pacing thread.
+  void PulseHaptics(std::size_t hand);
 
   // ---- Flat mono panel (vr_flat_screen) ----
 
@@ -514,6 +539,9 @@ private:
   bool InitializeInputActions();
   void DestroyInputActions();
   void UpdateInputActions();
+  void UpdateUI(std::array<Common::VR::OpenXRControllerState, 2>* controllers);
+  void PlaceScreenLayer(XrCompositionLayerQuad* layer) const;
+  void LogStall(u64 stalled_us) const;
   void UpdateStopConfirmationInput(
       const std::array<Common::VR::OpenXRControllerState, 2>& controllers);
   void CacheSubmittedFrame(const std::vector<XrCompositionLayerBaseHeader*>& layers);
@@ -539,7 +567,6 @@ private:
   void HandleSessionStateChange(XrSessionState new_state);
   // World-locked quad pose for the flat panel. Refresh from video-thread view data after a
   // reference-space rebase; serialize readers because input sampling also queries this pose.
-  XrPosef GetFlatScreenPose() const;
   void RefreshFlatScreenPose();
   void CaptureStartupDisplayRefreshRateFromExtension();
   void SetStartupDisplayRefreshRate(float refresh_rate_hz, std::string_view source);
@@ -553,6 +580,7 @@ private:
   XrSystemId m_system_id = XR_NULL_SYSTEM_ID;
   XrSession m_session = XR_NULL_HANDLE;
   XrSpace m_reference_space = XR_NULL_HANDLE;
+  XrSpace m_view_space = XR_NULL_HANDLE;
   XrReferenceSpaceType m_reference_space_type = XR_REFERENCE_SPACE_TYPE_LOCAL;
   uint32_t m_max_layer_count = 0;
 
@@ -689,6 +717,8 @@ private:
   };
 
   std::thread m_frame_thread;
+  // Lives as long as the pacing thread runs, and is its.
+  std::unique_ptr<UI::VrUi> m_ui;
   std::atomic<bool> m_frame_thread_running{false};
   std::atomic<bool> m_frame_thread_should_exit{false};
   std::mutex m_publish_mutex;
@@ -782,8 +812,11 @@ private:
   std::atomic<float> m_flat_screen_aspect{16.0f / 9.0f};
   std::atomic<bool> m_flat_screen_reanchor_pending{false};
   mutable std::mutex m_flat_screen_pose_mutex;
-  mutable bool m_flat_screen_pose_valid = false;
-  mutable XrPosef m_flat_screen_pose{{0.f, 0.f, 0.f, 1.f}, {0.f, 0.f, 0.f}};
+  bool m_screen_anchor_valid = false;
+  UI::ScreenAnchor m_screen_anchor;
+  // Follows the settings when they change, and a grip in between.
+  mutable UI::ScreenPlacement m_screen_placement;
+  mutable UI::ScreenPlacement m_screen_placement_config;
   XrCompositionLayerQuad m_flat_quad_layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
 };
 

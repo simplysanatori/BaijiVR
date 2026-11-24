@@ -312,9 +312,26 @@ endif()
 
 if(ENABLE_VR)
   target_sources(videocommon PRIVATE
+    VR/FrameUI/Overlay.h
+    VR/FrameUI/PadFilter.cpp
+    VR/FrameUI/PadFilter.h
+    VR/FrameUI/ScreenPlacement.cpp
+    VR/FrameUI/ScreenPlacement.h
+    VR/FrameUI/VrMenu.cpp
+    VR/FrameUI/VrMenu.h
+    VR/FrameUI/VrUi.cpp
+    VR/FrameUI/VrUi.h
+    VR/FrameUI/beam.cpp
+    VR/FrameUI/geometry.cpp
+    VR/FrameUI/md3.cpp
+    VR/FrameUI/stb_truetype.cpp
+    VR/FrameUI/ui_canvas.cpp
+    VR/FrameUI/ui_ttf.cpp
     VR/OpenXRManager.cpp
     VR/OpenXRManager.h
   )
+  # stb_truetype is vendored unchanged.
+  set_source_files_properties(VR/FrameUI/stb_truetype.cpp PROPERTIES COMPILE_OPTIONS "-w")
   # Expose the OpenXR headers to all targets that depend on videocommon.
   target_include_directories(videocommon PUBLIC "${CMAKE_SOURCE_DIR}/Externals/OpenXR/include")
 endif()

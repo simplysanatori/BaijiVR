@@ -212,6 +212,11 @@ const Info<bool> GFX_VR_ENABLE_CONTROLLER_ANCHOR{{System::GFX, "VR", "EnableCont
 const Info<bool> GFX_VR_VIRTUAL_SCREEN{{System::GFX, "VR", "VirtualScreen"}, true};
 const Info<float> GFX_VR_SCREEN_DISTANCE{{System::GFX, "VR", "ScreenDistance"}, 2.0f};
 const Info<float> GFX_VR_SCREEN_SIZE{{System::GFX, "VR", "ScreenSize"}, 1.5f};
+const Info<float> GFX_VR_SCREEN_YAW{{System::GFX, "VR", "ScreenYaw"}, 0.0f};
+const Info<float> GFX_VR_SCREEN_PITCH{{System::GFX, "VR", "ScreenPitch"}, 0.0f};
+const Info<bool> GFX_VR_LOCK_SCREEN{{System::GFX, "VR", "LockScreen"}, false};
+const Info<bool> GFX_VR_POINTER_BEAMS{{System::GFX, "VR", "PointerBeams"}, true};
+const Info<bool> GFX_VR_TOASTS{{System::GFX, "VR", "Toasts"}, true};
 const Info<float> GFX_VR_HEAD_LOCKED_CURVATURE{{System::GFX, "VR", "HeadLockedCurvature"}, 0.0f};
 const Info<bool> GFX_VR_DONT_CLEAR_SCREEN{{System::GFX, "VR", "DontClearScreen"}, false};
 const Info<bool> GFX_VR_LOAD_CUSTOM_SHADERS{{System::GFX, "VR", "LoadCustomShaders"}, false};

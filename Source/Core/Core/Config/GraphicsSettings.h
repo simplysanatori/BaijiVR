@@ -209,6 +209,12 @@ static constexpr float GFX_VR_CAMERA_ANCHOR_SMOOTHING_STEP = 0.05f;
 extern const Info<bool> GFX_VR_VIRTUAL_SCREEN;
 extern const Info<float> GFX_VR_SCREEN_DISTANCE;
 extern const Info<float> GFX_VR_SCREEN_SIZE;
+// Where the screen is, degrees from straight ahead (positive is left, and up).
+extern const Info<float> GFX_VR_SCREEN_YAW;
+extern const Info<float> GFX_VR_SCREEN_PITCH;
+extern const Info<bool> GFX_VR_LOCK_SCREEN;
+extern const Info<bool> GFX_VR_POINTER_BEAMS;
+extern const Info<bool> GFX_VR_TOASTS;
 extern const Info<float> GFX_VR_HEAD_LOCKED_CURVATURE;
 extern const Info<bool> GFX_VR_DONT_CLEAR_SCREEN;
 extern const Info<bool> GFX_VR_LOAD_CUSTOM_SHADERS;
