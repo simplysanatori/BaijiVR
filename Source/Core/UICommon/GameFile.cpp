@@ -24,7 +24,6 @@
 #include "Common/CommonTypes.h"
 #include "Common/Crypto/SHA1.h"
 #include "Common/FileUtil.h"
-#include "Common/HttpRequest.h"
 #include "Common/IOFile.h"
 #include "Common/Image.h"
 #include "Common/MsgHandler.h"
@@ -43,6 +42,8 @@
 #include "DiscIO/GameModDescriptor.h"
 #include "DiscIO/Volume.h"
 #include "DiscIO/WiiSaveBanner.h"
+
+#include "UICommon/GameCovers.h"
 
 namespace UICommon
 {
@@ -227,24 +228,18 @@ void GameFile::DownloadDefaultCover()
   if (!m_default_cover.buffer.empty() || !UseGameCovers() || m_gametdb_id.empty())
     return;
 
-  const auto cover_path = File::GetUserPath(D_COVERCACHE_IDX) + DIR_SEP;
-  const auto png_path = cover_path + m_gametdb_id + ".png";
-
-  // If the cover has already been downloaded, abort
-  if (File::Exists(png_path))
+  if (File::Exists(GetCoverPath(m_gametdb_id)))
     return;
+  // Built once, when the first game without a cover comes.
+  static const Core::TitleDatabase title_database;
 
-  const std::string region_code =
-      SConfig::GetInstance().GetGameTDBImageRegionCode(DiscIO::IsWii(GetPlatform()), m_region);
-
-  Common::HttpRequest request;
-  static constexpr char cover_url[] = "https://art.gametdb.com/wii/cover/{}/{}.png";
-  const auto response = request.Get(fmt::format(cover_url, region_code, m_gametdb_id));
-
-  if (!response)
-    return;
-
-  File::WriteStringToFile(png_path, std::string(response->begin(), response->end()));
+  const bool is_wii = DiscIO::IsWii(GetPlatform());
+  EnsureCover({.game_id = m_gametdb_id,
+               .region_code = SConfig::GetInstance().GetGameTDBImageRegionCode(is_wii, m_region),
+               .is_wii = is_wii,
+               .region = m_region,
+               .file_name = m_file_name,
+               .title = title_database.GetTitleName(m_gametdb_id, DiscIO::Language::English)});
 }
 
 bool GameFile::DefaultCoverChanged()
@@ -252,11 +247,9 @@ bool GameFile::DefaultCoverChanged()
   if (!m_default_cover.buffer.empty() || !UseGameCovers())
     return false;
 
-  const auto cover_path = File::GetUserPath(D_COVERCACHE_IDX) + DIR_SEP;
-
   std::string contents;
 
-  File::ReadFileToString(cover_path + m_gametdb_id + ".png", contents);
+  File::ReadFileToString(GetCoverPath(m_gametdb_id), contents);
 
   if (contents.empty())
     return false;

@@ -171,7 +171,7 @@ void InterfacePane::CreateUI()
   m_checkbox_use_builtin_title_database = new ConfigBool(tr("Use Built-In Database of Game Names"),
                                                          Config::MAIN_USE_BUILT_IN_TITLE_DATABASE);
   m_checkbox_use_covers =
-      new ConfigBool(tr("Download Game Covers from GameTDB.com for Use in Grid Mode"),
+      new ConfigBool(tr("Download Game Covers"),
                      Config::MAIN_USE_GAME_COVERS);
   m_checkbox_show_debugging_ui = new ToolTipCheckBox(tr("Enable Debugging UI"));
   m_checkbox_focused_hotkeys =
@@ -348,11 +348,9 @@ void InterfacePane::AddDescriptions()
       QT_TR_NOOP("Requires the render window to be focused for hotkeys to take effect."
                  "<br><br><dolphin_emphasis>If unsure, leave this checked.</dolphin_emphasis>");
   static constexpr char TR_USE_COVERS_DESCRIPTION[] =
-      QT_TR_NOOP("Downloads full game covers from GameTDB.com to display in the game list's Grid "
-                 "View. If this setting is unchecked, the game list displays a banner from the "
-                 "game's save data, and if the game has no save file, displays a generic "
-                 "banner instead."
-                 "<br><br>List View will always use the save file banners."
+      QT_TR_NOOP("Downloads game covers from GameTDB.com, or from libretro-thumbnails on GitHub, for "
+                 "the Grid View, and for games in the List View that have no banner. The game's ID "
+                 "or its file name is sent."
                  "<br><br><dolphin_emphasis>If unsure, leave this checked.</dolphin_emphasis>");
   static constexpr char TR_DISABLE_SCREENSAVER_DESCRIPTION[] =
       QT_TR_NOOP("Disables your screensaver while running a game."

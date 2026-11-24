@@ -5,6 +5,8 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QImage>
+#include <QPainter>
 #include <QPixmap>
 #include <QRegularExpression>
 
@@ -22,6 +24,27 @@
 #include "UICommon/UICommon.h"
 
 const QSize GAMECUBE_BANNER_SIZE(96, 32);
+
+// For games without a banner (a Wii game has one only once it has a save): the box art, whole, on a
+// dark, enlarged copy of itself.
+static QPixmap CoverBanner(const std::vector<u8>& buffer)
+{
+  if (buffer.empty())
+    return {};
+  const QImage cover = QImage::fromData(buffer.data(), static_cast<int>(buffer.size()));
+  if (cover.isNull())
+    return {};
+  const QSize size = GAMECUBE_BANNER_SIZE * 2;
+  const QImage back = cover.scaledToWidth(size.width(), Qt::SmoothTransformation);
+  const QImage front = cover.scaledToHeight(size.height(), Qt::SmoothTransformation);
+  QPixmap banner(size);
+  banner.fill(Qt::black);
+  QPainter painter(&banner);
+  painter.drawImage(0, (size.height() - back.height()) / 2, back);
+  painter.fillRect(banner.rect(), QColor(0, 0, 0, 130));
+  painter.drawImage((size.width() - front.width()) / 2, 0, front);
+  return banner;
+}
 
 GameListModel::GameListModel(QObject* parent) : QAbstractTableModel(parent)
 {
@@ -81,6 +104,8 @@ QVariant GameListModel::data(const QModelIndex& index, int role) const
     {
       // GameCube banners are 96x32, but Wii banners are 192x64.
       QPixmap banner = ToQPixmap(game.GetBannerImage());
+      if (banner.isNull())
+        banner = CoverBanner(game.GetCoverImage().buffer);
       if (banner.isNull())
         banner = Resources::GetMisc(Resources::MiscID::BannerMissing).pixmap(GAMECUBE_BANNER_SIZE);
 
