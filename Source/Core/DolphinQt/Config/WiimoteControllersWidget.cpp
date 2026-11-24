@@ -502,6 +502,11 @@ void WiimoteControllersWidget::OnWiimoteConfigure(size_t index)
   MappingWindow* window = new MappingWindow(this, type, static_cast<int>(index));
   window->setAttribute(Qt::WA_DeleteOnClose, true);
   window->setWindowModality(Qt::WindowModality::WindowModal);
+#ifdef BAIJI_STEAMVR
+  // The mapping window can change the extension too; show its choice here once it closes.
+  connect(window, &QObject::destroyed, this,
+          [this] { LoadSettings(Core::GetState(Core::System::GetInstance())); });
+#endif
   window->show();
 }
 
