@@ -1,5 +1,6 @@
-// Copyright 2026 Dolphin Emulator Project
-// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright 2026 AzaharFrame contributors
+// Licensed under GPLv3 or any later version
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 // The windows Baiji opens in Steam's Game Mode (dialogs, message boxes, file dialogs, Settings,
 // Mapping, a game's Properties...) sized for SteamVR's theater screen. gamescope shows the newest
