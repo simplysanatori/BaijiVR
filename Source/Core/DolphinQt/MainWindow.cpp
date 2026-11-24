@@ -249,7 +249,12 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
   restoreGeometry(settings.value(QStringLiteral("mainwindow/geometry")).toByteArray());
   if (!Settings::Instance().IsBatchModeEnabled())
   {
-    show();
+    // gamescope scales a smaller window up with black bars round it; there is no desktop behind
+    // it and nothing to move it for, so in Game Mode the window is the whole panel.
+    if (Host::IsGameMode())
+      showFullScreen();
+    else
+      show();
   }
 
   InitControllers();
@@ -373,7 +378,9 @@ MainWindow::~MainWindow()
   if (!Settings::Instance().IsBatchModeEnabled())
   {
     settings.setValue(QStringLiteral("mainwindow/state"), saveState());
-    settings.setValue(QStringLiteral("mainwindow/geometry"), saveGeometry());
+    // Game Mode's full-panel window is not the size to open with on the desktop.
+    if (!Host::IsGameMode())
+      settings.setValue(QStringLiteral("mainwindow/geometry"), saveGeometry());
   }
 
   settings.setValue(QStringLiteral("renderwidget/geometry"), m_render_widget_geometry);
