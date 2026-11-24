@@ -55,26 +55,6 @@ Point Direction(float angle)
 using Contour = std::vector<Point>;
 using Contours = std::vector<Contour>;
 
-uint32_t Mix(uint32_t a, uint32_t b, float t)
-{
-  const auto channel = [&](int shift) {
-    const float from = static_cast<float>((a >> shift) & 255);
-    const float to = static_cast<float>((b >> shift) & 255);
-    return static_cast<uint32_t>(from + (to - from) * t + 0.5f) << shift;
-  };
-  return channel(0) | channel(8) | channel(16);
-}
-
-uint32_t Lighter(uint32_t rgb, float t)
-{
-  return Mix(rgb, 0xFFFFFF, t);
-}
-
-uint32_t Darker(uint32_t rgb, float t)
-{
-  return Mix(rgb, 0x000000, t);
-}
-
 // Coverage of a shape, in canvas pixels.
 struct Mask
 {
@@ -160,44 +140,6 @@ void AccumulateEdge(Mask* mask, Point p0, Point p1)
   }
 }
 
-// One box blur pass over `count` lines of `length` values.
-void BoxBlur(Mask* mask, int count, int length, int line_step, int step, int radius,
-             std::vector<float>* scratch)
-{
-  const float scale = 1.0f / static_cast<float>(2 * radius + 1);
-  scratch->resize(static_cast<size_t>(length));
-  float* const in = scratch->data();
-  for (int line = 0; line < count; ++line)
-  {
-    float* const v = mask->a.data() + static_cast<ptrdiff_t>(line) * line_step;
-    for (int i = 0; i < length; ++i)
-      in[i] = v[static_cast<ptrdiff_t>(i) * step];
-    float sum = 0.0f;
-    for (int i = 0; i < std::min(radius, length); ++i)
-      sum += in[i];
-    for (int i = 0; i < length; ++i)
-    {
-      if (i + radius < length)
-        sum += in[i + radius];
-      v[static_cast<ptrdiff_t>(i) * step] = sum * scale;
-      if (i - radius >= 0)
-        sum -= in[i - radius];
-    }
-  }
-}
-
-// Two box blurs, close to a Gaussian of this deviation.
-void Blur(Mask* mask, float deviation)
-{
-  const int radius = std::max(1, static_cast<int>(std::lround(deviation)));
-  std::vector<float> scratch;
-  for (int i = 0; i < 2; ++i)
-  {
-    BoxBlur(mask, mask->h, mask->w, mask->w, 1, radius, &scratch);
-    BoxBlur(mask, mask->w, mask->h, 1, mask->w, radius, &scratch);
-  }
-}
-
 // Draws shapes given in a controller's own units.
 class Painter
 {
@@ -220,8 +162,8 @@ public:
 
   Point Px(Point p) const { return Dp(p) * m_kit->Px(); }
   float UnitPx() const { return m_scale * m_kit->Px(); }
-  // A pixel, in units (hairlines).
-  float Hair() const { return 1.0f / UnitPx(); }
+  // A width in dp, in units.
+  float FromDp(float dp) const { return dp / m_scale; }
 
   // An SVG-like path: absolute M, L, C. Mirrored, it is flipped across x = `mirror_x`.
   Contours Path(std::string_view svg, bool mirror = false, float mirror_x = 0.0f) const
@@ -427,67 +369,6 @@ public:
     Paint(Cover(shape), rgb, opacity);
   }
 
-  // A gradient down the shape as it is on screen; `slant` leans it to the right.
-  void Shade(const Contours& shape, uint32_t top, uint32_t bottom, float slant = 0.0f) const
-  {
-    const Mask mask = Cover(shape);
-    const float total = 1.0f + slant;
-    const float dx = slant / (static_cast<float>(mask.w) * total);
-    const float dy = 1.0f / (static_cast<float>(mask.h) * total);
-    const Color c0 = Rgb(top);
-    const Color c1 = Rgb(bottom);
-    for (int y = 0; y < mask.h; ++y)
-    {
-      const float* const row = mask.Row(y);
-      for (int x = 0; x < mask.w; ++x)
-      {
-        if (row[x] <= 0.002f)
-          continue;
-        const float t = static_cast<float>(x) * dx + static_cast<float>(y) * dy;
-        const Color c{c0.r + (c1.r - c0.r) * t, c0.g + (c1.g - c0.g) * t, c0.b + (c1.b - c0.b) * t,
-                      1.0f};
-        Put(mask.x0 + x, mask.y0 + y, c, row[x]);
-      }
-    }
-  }
-
-  // Soft light or shade inside the shape, along the edges that (dx, dy) points away from.
-  void Inner(const Contours& shape, float dx, float dy, float blur, uint32_t rgb,
-             float opacity) const
-  {
-    const float k = UnitPx();
-    const Mask mask = Cover(shape);
-    Mask soft = Cover(shape, std::ceil(blur * k * 2.0f) + 1.0f);
-    Blur(&soft, blur * k);
-    const int ox = static_cast<int>(std::lround(dx * k));
-    const int oy = static_cast<int>(std::lround(dy * k));
-    const Color color = Rgb(rgb, opacity);
-    for (int y = 0; y < mask.h; ++y)
-    {
-      const float* const row = mask.Row(y);
-      for (int x = 0; x < mask.w; ++x)
-      {
-        if (row[x] <= 0.002f)
-          continue;
-        const float lit = 1.0f - soft.At(mask.x0 + x - ox, mask.y0 + y - oy);
-        if (lit > 0.004f)
-          Put(mask.x0 + x, mask.y0 + y, color, row[x] * lit);
-      }
-    }
-  }
-
-  // A soft shadow (or glow) of a shape.
-  void Drop(const Contours& shape, float dx, float dy, float blur, uint32_t rgb,
-            float opacity) const
-  {
-    const float k = UnitPx();
-    Mask mask = Cover(shape, std::ceil(blur * k * 2.0f) + 1.0f);
-    Blur(&mask, blur * k);
-    mask.x0 += static_cast<int>(std::lround(dx * k));
-    mask.y0 += static_cast<int>(std::lround(dy * k));
-    Paint(mask, rgb, opacity);
-  }
-
   // Lines `width` units wide, round ended. For smooth lines: sharp corners are not mitred.
   void Stroke(const Contours& lines, float width, uint32_t rgb, float opacity = 1.0f,
               bool closed = false) const
@@ -540,8 +421,7 @@ public:
   }
 
   // A dashed closed line.
-  void StrokeDashed(const Contour& line, float width, float dash, uint32_t rgb,
-                    float opacity) const
+  void StrokeDashed(const Contour& line, float width, float dash, uint32_t rgb) const
   {
     const float period = dash * 2.0f * UnitPx();
     Contours pieces;
@@ -564,24 +444,16 @@ public:
       }
       run += length;
     }
-    Stroke(pieces, width, rgb, opacity);
+    Stroke(pieces, width, rgb);
   }
 
   // Text centred on a point, upright, `size` units per em.
-  void Letter(Point p, float size, uint32_t rgb, const std::string& text,
-              float opacity = 1.0f) const
+  void Letter(Point p, float size, uint32_t rgb, const std::string& text) const
   {
     const Point at = Dp(p);
     const float size_dp = size * m_scale;
     const float cap = m_kit->CapHeightSized(size_dp, true);
-    m_kit->TextSized(at.x, at.y + cap * 0.5f, size_dp, true, rgb, text, 1, opacity);
-  }
-
-  // A letter pressed into a surface.
-  void Engrave(Point p, float size, uint32_t ink, const std::string& text) const
-  {
-    Letter({p.x, p.y + Hair()}, size, 0xFFFFFF, text, 0.35f);
-    Letter(p, size, ink, text);
+    m_kit->TextSized(at.x, at.y + cap * 0.5f, size_dp, true, rgb, text, 1);
   }
 
 private:
@@ -625,234 +497,165 @@ private:
   bool m_turned;
 };
 
-// A raised, rounded key of one colour.
-void Key(const Painter& p, const Contours& shape, uint32_t rgb, float depth)
+// --- The drawings: outlines over a dark fill, as the controllers of Azahar for Frame's help ---
+
+constexpr uint32_t LINE = 0xE6E6EA;
+constexpr uint32_t BODY = 0x1F2125;
+constexpr uint32_t PART = 0x323238;
+constexpr float OUTLINE_DP = 1.7f;
+constexpr float DETAIL_DP = 1.1f;
+
+// A shape in front of what is drawn so far.
+void Solid(const Painter& p, const Contours& shape, uint32_t fill, float line_dp = OUTLINE_DP)
 {
-  p.Drop(shape, 0.0f, depth * 0.6f, depth * 0.6f, 0x000000, 0.55f);
-  p.Shade(shape, Lighter(rgb, 0.16f), Darker(rgb, 0.10f), 0.2f);
-  p.Inner(shape, 0.0f, depth * 0.45f, depth * 0.40f, 0xFFFFFF, 0.55f);
-  p.Inner(shape, 0.0f, -depth * 0.55f, depth * 0.50f, 0x000000, 0.42f);
-  p.Stroke(shape, 0.8f * p.Hair(), Darker(rgb, 0.55f), 0.7f, true);
+  p.Fill(shape, fill);
+  p.Stroke(shape, p.FromDp(line_dp), LINE, 1.0f, true);
 }
 
-// A hollow a control sits in.
-void Dish(const Painter& p, const Contours& shape, uint32_t rgb, float depth)
+void Detail(const Painter& p, const Contours& lines, bool closed = false)
 {
-  p.Shade(shape, Darker(rgb, 0.22f), Lighter(rgb, 0.04f));
-  p.Inner(shape, 0.0f, depth * 0.6f, depth * 0.6f, 0x000000, 0.50f);
-  p.Inner(shape, 0.0f, -depth * 0.3f, depth * 0.35f, 0xFFFFFF, 0.28f);
+  p.Stroke(lines, p.FromDp(DETAIL_DP), LINE, 0.75f, closed);
 }
 
-// --- The GameCube controller ---
-
-constexpr float GC_CX = 433.5f;
-constexpr Point GC_STICK{212.0f, 298.0f};
-constexpr Point GC_DPAD{317.0f, 443.0f};
-constexpr Point GC_CSTICK{550.0f, 441.0f};
-constexpr Point GC_A{657.0f, 304.0f};
-constexpr Point GC_B{573.0f, 343.0f};
-constexpr Point GC_START{433.5f, 284.0f};
-
-void DrawGameCube(const Painter& p)
+// The letter of a control that nothing presses: the others have their callout's dot there.
+void Unbound(const Painter& p, const PadLabels& labels, PadControl control, Point at, float size,
+             const char* letter)
 {
-  constexpr uint32_t BODY = 0x6562B4;
-  constexpr uint32_t GREY = 0xC3C5CF;
+  if (labels[control].empty())
+    p.Letter(at, size, LINE, letter);
+}
+
+// --- The GameCube controller, in millimetres: the middle of its top edge at (0, 0) ---
+
+constexpr Point GC_STICK{-42.0f, 33.0f};
+constexpr Point GC_DPAD{-22.0f, 62.5f};
+constexpr Point GC_CSTICK{22.0f, 62.5f};
+constexpr Point GC_A{42.0f, 33.0f};
+constexpr Point GC_B{26.5f, 40.0f};
+constexpr Point GC_X{57.5f, 30.0f};
+constexpr Point GC_Y{38.0f, 17.6f};
+constexpr Point GC_START{0.0f, 33.0f};
+constexpr Point GC_L{-45.0f, 1.2f};
+constexpr Point GC_R{45.0f, -2.4f};
+constexpr Point GC_Z{52.5f, 7.6f};
+
+void DrawGameCube(const Painter& p, const PadLabels& labels)
+{
+  using enum PadControl;
 
   // The cable.
-  p.Shade(p.Path("M 420 64 L 424 36 L 443 36 L 447 64"), 0x23242B, 0x3A3B45);
-  for (const float y : {41.0f, 48.0f, 55.0f})
-    p.Stroke(p.Line({425.0f, y}, {442.0f, y}), 2.0f, 0x111217, 0.8f);
+  Solid(p, p.Path("M -2.6 3 L -2 -9 L 2 -9 L 2.6 3"), BODY);
+  for (const float y : {-6.5f, -4.0f, -1.5f})
+    Detail(p, p.Line({-2.1f, y}, {2.1f, y}));
 
-  // L and R, behind the body.
+  // L and R, then Z, behind the body.
   for (const bool right : {false, true})
   {
-    const Contours trigger = p.Path("M 130 186 C 128 128 158 86 206 84 C 244 83 262 100 268 122 "
-                                    "L 262 150 L 150 196",
-                                    right, GC_CX);
-    p.Shade(trigger, 0xD6D8E0, 0x8B8D99, 0.2f);
-    p.Inner(trigger, right ? -5.0f : 5.0f, 6.0f, 7.0f, 0xFFFFFF, 0.6f);
-    p.Inner(trigger, 0.0f, -10.0f, 12.0f, 0x202030, 0.5f);
-    p.Engrave({right ? 2.0f * GC_CX - 190.0f : 190.0f, 111.0f}, 34.0f, 0x6A6C78,
-              right ? "R" : "L");
+    Solid(p, p.Path("M -65 22 C -65 6 -56 -6 -43 -7 C -33 -7.5 -26 -5 -24 1 L -24 12", right), PART);
   }
+  Solid(p, p.Path("M 27 5 C 27 1 30 0 34 0.4 C 47 1.6 61 7.5 66 16.5 C 68 20.5 66 24 62 24"), PART);
 
-  // The grips, under the face.
+  // The grips.
   for (const bool right : {false, true})
   {
-    const Contours grip = p.Path("M 80 285 C 74 350 78 440 95 493 C 108 532 157 536 176 500 "
-                                 "C 190 472 198 440 216 412 L 250 300",
-                                 right, GC_CX);
-    p.Shade(grip, Darker(BODY, 0.10f), Darker(BODY, 0.36f));
-    p.Inner(grip, right ? -9.0f : 9.0f, 0.0f, 10.0f, Lighter(BODY, 0.5f), 0.35f);
-    p.Inner(grip, right ? 14.0f : -14.0f, -10.0f, 16.0f, 0x0C0B26, 0.55f);
+    Solid(p,
+          p.Path("M -67 36 C -72 54 -70.5 80 -65.5 94 C -62.5 102.5 -53.5 103.5 -49.5 95.5 "
+                 "C -45 86 -43.5 77 -39 69 L -42 50",
+                 right),
+          BODY);
   }
 
   // The face.
   constexpr std::string_view HALF =
-      "M 433.5 58 C 375 58 330 68 300 84 C 240 116 185 138 142 163 C 98 190 80 240 80 296 "
-      "C 80 372 132 428 204 433 C 232 435 240 442 246 462 C 256 499 288 517 322 517 "
-      "C 370 517 407 481 407 436 C 407 396 382 374 364 352 C 352 337 354 330 370 327 "
-      "C 392 322 412 320.5 433.5 320.5";
+      "M 0 0 C -13 0 -25 1.4 -35 5.2 C -42 7.8 -46 9 -51 11.6 C -61 16.6 -68 24.5 -68 35.5 "
+      "C -68 47.5 -60.5 56.5 -49.5 60.4 C -44 62.4 -42.4 63.6 -41 68 C -38.4 77 -31 83 -22 83 "
+      "C -11.5 83 -3.2 74 -3.2 63.5 C -3.2 57.5 -5 54.4 -7.6 51.4 C -9.8 48.6 -8 47 -4 47 L 0 47";
   Contour face = p.Path(HALF)[0];
-  const Contour mirrored = p.Path(HALF, true, GC_CX)[0];
+  const Contour mirrored = p.Path(HALF, true)[0];
   face.insert(face.end(), mirrored.rbegin(), mirrored.rend());
-  const Contours body{face};
-  p.Drop(body, 0.0f, 8.0f, 8.0f, 0x05041A, 0.55f);
-  p.Shade(body, 0x7F7CCB, 0x504D9C);
-  p.Inner(body, 0.0f, 10.0f, 12.0f, 0xC4C2F4, 0.55f);
-  p.Inner(body, 0.0f, -12.0f, 14.0f, 0x15133F, 0.50f);
-  p.Stroke(body, 1.6f, 0x2A285C, 0.8f, true);
+  Solid(p, {face}, BODY);
 
-  // The crease between the raised middle and the sides.
-  for (const bool right : {false, true})
-  {
-    p.Stroke(p.Path("M 300 98 C 240 130 190 150 150 173 C 130 185 118 200 112 216", right, GC_CX),
-             2.5f, 0x35336F, 0.55f);
-    p.Stroke(p.Path("M 301 102 C 241 134 191 154 151 177 C 131 189 120 204 114 220", right, GC_CX),
-             2.0f, 0xB0AEEA, 0.45f);
-  }
-
-  // Z, on the right shoulder.
-  const Contours z = p.Path("M 617 132 C 622 116 650 120 682 131 C 715 143 740 160 744 176 "
-                            "C 746 186 737 189 728 184 C 696 166 660 152 626 145 "
-                            "C 618 143 615 138 617 132");
-  Key(p, z, 0x3A37C0, 9.0f);
-  p.Letter({666.0f, 140.0f}, 25.0f, 0xC4C2FA, "Z");
+  // The hollow the buttons are in.
+  Detail(p, p.Arc({43.5f, 31.5f}, 22.0f, -PI * 1.10f, PI * 0.46f));
 
   // The control stick.
-  Dish(p, p.Circle(GC_STICK, 90.0f), BODY, 12.0f);
-  const Contours gate = p.Octagon(GC_STICK, 66.0f, 10.0f);
-  p.Shade(gate, 0x1C1B3C, 0x34326B);
-  p.Inner(gate, 0.0f, 6.0f, 6.0f, 0x000000, 0.6f);
-  p.Stroke(gate, 3.0f, 0x8F8DD4, 0.8f, true);
-  Key(p, p.Circle(GC_STICK, 47.0f), GREY, 12.0f);
-  for (const float r : {34.0f, 24.0f, 14.0f})
-  {
-    p.Stroke(p.Circle({GC_STICK.x, GC_STICK.y + 1.5f}, r), 2.4f, 0xFFFFFF, 0.6f, true);
-    p.Stroke(p.Circle(GC_STICK, r), 2.4f, 0x80828E, 0.9f, true);
-  }
+  Detail(p, p.Circle(GC_STICK, 19.5f), true);
+  Solid(p, p.Octagon(GC_STICK, 14.6f, 2.0f), BODY);
+  Solid(p, p.Circle(GC_STICK, 10.2f), PART);
+  Detail(p, p.Circle(GC_STICK, 7.2f), true);
+  Detail(p, p.Circle(GC_STICK, 4.2f), true);
 
   // The D-pad.
-  Dish(p, p.Circle(GC_DPAD, 59.0f), BODY, 10.0f);
-  Key(p, p.Cross(GC_DPAD, 47.0f, 16.0f, 6.0f), GREY, 9.0f);
-  for (int i = 0; i < 4; ++i)
-  {
-    const Point d = Direction(static_cast<float>(i) * PI * 0.5f);
-    const Point n{-d.y, d.x};
-    p.Fill(p.Rounded({GC_DPAD + d * 38.0f, GC_DPAD + d * 26.0f + n * 8.0f,
-                      GC_DPAD + d * 26.0f - n * 8.0f},
-                     2.0f),
-           0x8A8C98);
-  }
-  p.Fill(p.Circle(GC_DPAD, 8.0f), 0x9A9CA8);
-  p.Inner(p.Circle(GC_DPAD, 8.0f), 0.0f, 3.0f, 2.0f, 0x000000, 0.35f);
+  Detail(p, p.Circle(GC_DPAD, 13.0f), true);
+  Solid(p, p.Cross(GC_DPAD, 10.0f, 3.5f, 1.2f), PART);
 
   // The C stick.
-  Dish(p, p.Circle(GC_CSTICK, 70.0f), BODY, 10.0f);
-  const Contours c_gate = p.Octagon(GC_CSTICK, 59.0f, 9.0f);
-  p.Shade(c_gate, 0xB88A08, 0xE0B21A);
-  p.Inner(c_gate, 0.0f, 8.0f, 7.0f, 0x3A2A00, 0.65f);
-  p.Stroke(c_gate, 2.4f, 0xF4D04A, 0.9f, true);
-  Key(p, p.Circle(GC_CSTICK, 36.0f), 0xF3C21E, 11.0f);
-  p.Stroke(p.Circle(GC_CSTICK, 27.0f), 2.0f, 0xB88A08, 0.7f, true);
-  p.Engrave(GC_CSTICK, 38.0f, 0x8A6500, "C");
+  Solid(p, p.Octagon(GC_CSTICK, 13.6f, 2.0f), BODY);
+  Solid(p, p.Circle(GC_CSTICK, 7.8f), PART);
+  Detail(p, p.Circle(GC_CSTICK, 5.4f), true);
+  Unbound(p, labels, CStick, GC_CSTICK, 7.0f, "C");
 
-  // A, B, X, Y.
-  Key(p, p.Bean(GC_A, 79.0f, 21.0f, -PI * 0.71f, -PI * 0.485f), GREY, 10.0f);
-  Key(p, p.Bean(GC_A, 81.0f, 21.0f, -PI * 0.185f, PI * 0.045f), GREY, 10.0f);
-  Key(p, p.Circle(GC_A, 45.0f), 0x2FB59B, 13.0f);
-  Key(p, p.Circle(GC_B, 29.0f), 0xD8323C, 10.0f);
-  p.Engrave(GC_A, 48.0f, 0x0B5B4C, "A");
-  p.Engrave(GC_B, 34.0f, 0x650A12, "B");
-  p.Engrave({GC_A.x - 24.0f, GC_A.y - 75.0f}, 32.0f, 0x5E606C, "Y");
-  p.Engrave({GC_A.x + 79.0f, GC_A.y - 17.0f}, 32.0f, 0x5E606C, "X");
-
-  // Start.
-  Dish(p, p.Circle(GC_START, 24.0f), BODY, 6.0f);
-  Key(p, p.Circle(GC_START, 18.0f), GREY, 7.0f);
+  // The buttons.
+  Solid(p, p.Bean(GC_A, 15.9f, 4.3f, -PI * 0.71f, -PI * 0.455f), PART);
+  Solid(p, p.Bean(GC_A, 15.9f, 4.3f, -PI * 0.185f, PI * 0.07f), PART);
+  Solid(p, p.Circle(GC_A, 9.2f), PART);
+  Solid(p, p.Circle(GC_B, 5.6f), PART);
+  Solid(p, p.Circle(GC_START, 3.6f), PART);
+  Unbound(p, labels, A, GC_A, 10.0f, "A");
+  Unbound(p, labels, B, GC_B, 6.5f, "B");
+  Unbound(p, labels, X, GC_X, 6.0f, "X");
+  Unbound(p, labels, Y, GC_Y, 6.0f, "Y");
+  Unbound(p, labels, L, GC_L, 6.5f, "L");
+  Unbound(p, labels, R, GC_R, 6.5f, "R");
+  Unbound(p, labels, Z, GC_Z, 5.0f, "Z");
 }
 
-// --- The Wii Remote: upright, its top centre at (0, 0) ---
+// --- The Wii Remote, 750 units for its 148 mm: the middle of its top edge at (0, 0) ---
 
-constexpr float REMOTE_HALF_W = 97.0f;
+constexpr float REMOTE_HALF_W = 92.0f;
 constexpr float REMOTE_H = 750.0f;
-constexpr uint32_t WII_INK = 0x7C8089;
+constexpr float REMOTE_FRONT = 12.0f;  // the pointer's window, past the top edge
+constexpr Point WII_POINTER{0.0f, -6.0f};
+constexpr Point WII_POWER{-54.0f, 34.0f};
+constexpr Point WII_DPAD{0.0f, 102.0f};
+constexpr Point WII_A{0.0f, 213.0f};
+constexpr Point WII_B{46.0f, 182.0f};
+constexpr Point WII_MINUS{-55.0f, 337.0f};
+constexpr Point WII_HOME{0.0f, 337.0f};
+constexpr Point WII_PLUS{55.0f, 337.0f};
+constexpr Point WII_ONE{0.0f, 531.0f};
+constexpr Point WII_TWO{0.0f, 598.0f};
+constexpr Point WII_SHAKE{60.0f, 712.0f};
 
-void WiiKey(const Painter& p, const Contours& shape, float depth)
+void DrawRemote(const Painter& p, const PadLabels& labels)
 {
-  p.Drop(shape, 0.0f, depth * 0.5f, depth * 0.6f, 0x1A2030, 0.50f);
-  p.Shade(shape, 0xFFFFFF, 0xD3D7DF, 0.2f);
-  p.Inner(shape, 0.0f, -depth * 0.5f, depth * 0.5f, 0x3A4254, 0.35f);
-  p.Stroke(shape, p.Hair(), 0x8E94A0, 0.9f, true);
-}
+  using enum PadControl;
 
-void DrawRemote(const Painter& p)
-{
-  const Contours body =
-      p.Path("M -67 2 C -40 -2 40 -2 67 2 C 88 4 97 14 97 34 L 97 716 C 97 740 86 750 64 750 "
-             "L -64 750 C -86 750 -97 740 -97 716 L -97 34 C -97 14 -88 4 -67 2");
-  p.Shade(body, 0xFAFBFD, 0xD6DAE2, 0.6f);
-  p.Inner(body, 5.0f, 5.0f, 5.0f, 0xFFFFFF, 0.9f);
-  p.Inner(body, -8.0f, -8.0f, 9.0f, 0x5C667C, 0.45f);
-  p.Stroke(body, p.Hair(), 0x9AA0AC, 0.8f, true);
-
-  // The pointer's window.
-  p.Shade(p.Path("M -60 4 C -30 0 30 0 60 4 C 66 5 66 18 58 19 C 30 22 -30 22 -58 19 "
-                 "C -66 18 -66 5 -60 4"),
-          0x3A3F4A, 0x14161B);
-  p.Stroke(p.Path("M -48 9 C -24 6 24 6 48 9"), 2.5f, 0x8D96A8, 0.7f);
+  // The pointer's window, on the front end.
+  Solid(p, p.RoundRect(-62.0f, -REMOTE_FRONT, 62.0f, 20.0f, 9.0f), PART);
+  Solid(p, p.RoundRect(-REMOTE_HALF_W, 0.0f, REMOTE_HALF_W, REMOTE_H, 26.0f), BODY);
 
   // Power.
-  const Point power{-56.0f, 60.0f};
-  WiiKey(p, p.Circle(power, 18.0f), 6.0f);
-  const Painter power_icon = p.UprightAt(power);
-  power_icon.Stroke(power_icon.Arc({}, 8.0f, -PI * 0.28f, PI * 1.28f), 2.6f, 0xDA3A34);
-  power_icon.Stroke(power_icon.Line({0.0f, -11.0f}, {0.0f, -2.0f}), 2.6f, 0xDA3A34);
+  Detail(p, p.Circle(WII_POWER, 16.0f), true);
 
-  // B, on the back: its outline shows through.
-  const Contours trigger = p.Rounded({{-58.0f, 190.0f},
-                                      {58.0f, 190.0f},
-                                      {66.0f, 212.0f},
-                                      {54.0f, 324.0f},
-                                      {-54.0f, 324.0f},
-                                      {-66.0f, 212.0f}},
-                                     18.0f);
-  p.Fill(trigger, 0x6A7488, 0.16f);
-  p.StrokeDashed(trigger[0], 2.4f, 7.0f, 0x5F687A, 0.9f);
+  // B, on the back.
+  p.StrokeDashed(p.Rounded({{-54.0f, 160.0f},
+                            {54.0f, 160.0f},
+                            {62.0f, 176.0f},
+                            {52.0f, 284.0f},
+                            {-52.0f, 284.0f},
+                            {-62.0f, 176.0f}},
+                           16.0f)[0],
+                 p.FromDp(DETAIL_DP), 7.0f, 0x92939A);
 
-  p.Letter({0.0f, 303.0f}, 25.0f, 0x5F687A, "B");
-
-  // The D-pad.
-  const Point dpad{0.0f, 128.0f};
-  WiiKey(p, p.Cross(dpad, 50.0f, 17.0f, 5.0f), 8.0f);
-  for (int i = 0; i < 4; ++i)
-  {
-    const Point d = Direction(static_cast<float>(i) * PI * 0.5f);
-    p.Stroke(p.Line(dpad + d * 28.0f, dpad + d * 39.0f), 3.0f, 0xA2A7B1);
-  }
-  p.Stroke(p.Circle(dpad, 9.0f), 2.0f, 0xC2C6CE, 1.0f, true);
-
-  // A.
-  const Point a{0.0f, 246.0f};
-  WiiKey(p, p.Circle(a, 37.0f), 9.0f);
-  p.Stroke(p.Circle(a, 31.0f), 1.6f, 0xC4C9D2, 1.0f, true);
-  p.Letter(a, 42.0f, WII_INK, "A");
-
-  // Minus, Home, Plus.
-  const Point minus{-58.0f, 367.0f};
-  const Point home{0.0f, 367.0f};
-  const Point plus{58.0f, 367.0f};
-  for (const Point c : {minus, home, plus})
-    WiiKey(p, p.Circle(c, 21.0f), 7.0f);
-  const Painter minus_icon = p.UprightAt(minus);
-  minus_icon.Stroke(minus_icon.Line({-8.0f, 0.0f}, {8.0f, 0.0f}), 3.4f, WII_INK);
-  const Painter plus_icon = p.UprightAt(plus);
-  plus_icon.Stroke(plus_icon.Line({-8.0f, 0.0f}, {8.0f, 0.0f}), 3.4f, WII_INK);
-  plus_icon.Stroke(plus_icon.Line({0.0f, -8.0f}, {0.0f, 8.0f}), 3.4f, WII_INK);
-  const Painter home_icon = p.UprightAt(home);
-  home_icon.Fill(home_icon.Path("M 0 -13 L 13 -1 L 9 -1 L 9 10 L 3 10 L 3 2 L -3 2 L -3 10 "
-                                "L -9 10 L -9 -1 L -13 -1"),
-                 0x3FA4DC);
+  Solid(p, p.Cross(WII_DPAD, 50.0f, 17.0f, 5.0f), PART);
+  Solid(p, p.Circle(WII_A, 33.0f), PART);
+  for (const Point c : {WII_MINUS, WII_HOME, WII_PLUS})
+    Solid(p, p.Circle(c, 18.0f), PART);
+  Unbound(p, labels, A, WII_A, 34.0f, "A");
+  Unbound(p, labels, B, {0.0f, 264.0f}, 24.0f, "B");
+  Unbound(p, labels, Minus, WII_MINUS, 26.0f, "-");
+  Unbound(p, labels, Plus, WII_PLUS, 26.0f, "+");
 
   // The speaker.
   for (int row = 0; row < 6; ++row)
@@ -860,87 +663,75 @@ void DrawRemote(const Painter& p)
     for (int column = 0; column < 4; ++column)
     {
       p.Fill(p.Circle({-18.0f + 12.0f * static_cast<float>(column),
-                       428.0f + 13.0f * static_cast<float>(row)},
-                      3.3f),
-             0x3C414C);
+                       400.0f + 12.0f * static_cast<float>(row)},
+                      2.6f),
+             LINE, 0.6f);
     }
   }
 
-  // 1 and 2.
-  for (const bool two : {false, true})
-  {
-    const Point c{0.0f, two ? 620.0f : 553.0f};
-    WiiKey(p, p.Circle(c, 26.0f), 8.0f);
-    p.Letter(c, 33.0f, WII_INK, two ? "2" : "1");
-  }
+  Solid(p, p.Circle(WII_ONE, 24.0f), PART);
+  Solid(p, p.Circle(WII_TWO, 24.0f), PART);
+  Unbound(p, labels, One, WII_ONE, 28.0f, "1");
+  Unbound(p, labels, Two, WII_TWO, 28.0f, "2");
 
   // The player lights.
   for (int i = 0; i < 4; ++i)
   {
     const float x = -54.0f + 36.0f * static_cast<float>(i);
-    const Contours light = p.RoundRect(x - 6.0f, 682.0f, x + 6.0f, 694.0f, 2.0f);
-    if (i == 0)
-      p.Drop(light, 0.0f, 0.0f, 6.0f, 0x2FA8FF, 0.8f);
-    p.Fill(light, i == 0 ? 0x37B4FF : 0x30343D);
+    Detail(p, p.RoundRect(x - 5.5f, 650.0f, x + 5.5f, 661.0f, 1.5f), true);
   }
 }
 
-// --- The Nunchuk: a little from its side, its stick to the right ---
+// --- The Nunchuk, from its left side, in the remote's units ---
 
-constexpr Point NUNCHUK_STICK{396.0f, 284.0f};
+constexpr Point NUNCHUK_STICK{191.0f, 23.0f};
+constexpr Point NUNCHUK_C{15.0f, 92.0f};
+constexpr Point NUNCHUK_Z{16.0f, 166.0f};
 
-void DrawNunchuk(const Painter& p)
+void DrawNunchuk(const Painter& p, const PadLabels& labels)
 {
-  WiiKey(p, p.Path("M 258 224 C 244 206 252 180 276 178 C 290 177 300 186 302 196"), 8.0f);
-  WiiKey(p,
-         p.Path("M 268 218 L 240 226 C 234 226 232 230 231 236 C 228 256 220 264 211 276 "
-                "C 207 282 208 288 213 292 C 226 302 240 312 256 330"),
-         9.0f);
+  using enum PadControl;
 
-  const Contours body =
-      p.Path("M 340 166 C 388 166 432 196 452 242 C 474 300 480 372 472 452 C 462 542 442 640 416 "
-             "698 C 406 722 392 732 374 732 C 345 732 310 702 295 652 C 283 606 286 546 290 500 "
-             "C 294 440 298 402 284 364 C 272 334 246 312 242 288 C 240 264 250 236 262 216 "
-             "C 284 184 310 166 340 166");
-  p.Shade(body, 0xFAFBFD, 0xCFD4DD, 0.5f);
-  p.Inner(body, 6.0f, 6.0f, 6.0f, 0xFFFFFF, 0.9f);
-  p.Inner(body, -10.0f, -8.0f, 11.0f, 0x5C667C, 0.50f);
-  p.Stroke(body, p.Hair(), 0x9AA0AC, 0.8f, true);
+  // C and Z, then the stick, behind the shell.
+  Solid(p, p.Path("M 58 60 C 24 56 4 70 1 86 C -2 102 8 116 26 122 L 58 124"), PART);
+  Solid(p,
+        p.Path("M 60 140 L 8 130 C 0 129 -4 133 -3 140 L 5 192 C 6 199 10 202 16 203 L 60 210"),
+        PART);
+  Solid(p, p.Path("M 211 34 L 197 74 L 208 110 L 150 90 L 157 58 L 167 18"), BODY);
+  Solid(p,
+        p.Path("M 232 37 C 235 27 219 18 195 11 C 171 3 153 0 150 10 C 147 20 163 30 186 38 "
+               "C 210 46 229 47 232 37"),
+        PART);
 
-  // The seam between the halves.
-  p.Stroke(p.Path("M 288 186 C 310 262 352 400 366 540 C 372 606 368 672 374 731"), 4.0f, 0x8C93A0,
-           0.9f);
-  p.Stroke(p.Path("M 292 184 C 314 260 356 400 370 540 C 376 606 372 672 378 731"), 2.0f, 0xFFFFFF,
-           0.9f);
-
-  // The stick.
-  const Contours gate = p.Octagon(NUNCHUK_STICK, 57.0f, 9.0f);
-  p.Shade(gate, 0x555B68, 0xA9AFBB);
-  p.Inner(gate, 0.0f, 6.0f, 6.0f, 0x000000, 0.5f);
-  p.Stroke(gate, 2.0f, 0xFFFFFF, 0.9f, true);
-  WiiKey(p, p.Circle(NUNCHUK_STICK, 39.0f), 10.0f);
-  p.Stroke(p.Circle(NUNCHUK_STICK, 30.0f), 2.2f, 0xB4B9C3, 1.0f, true);
-  p.Inner(p.Circle(NUNCHUK_STICK, 29.0f), 0.0f, 4.0f, 5.0f, 0x3A4254, 0.30f);
+  Solid(p, p.Path("M 372 480 L 378 532 L 400 530 L 400 478"), PART);
+  Solid(p,
+        p.Path("M 32 59 C 35 44 42 30 53 26 C 75 19 105 29 127 46 L 227 87 C 250 102 268 122 279 138 "
+               "C 340 228 384 373 401 451 C 408 478 401 492 386 491 C 337 529 274 517 226 455 "
+               "C 176 390 168 293 131 251 C 109 225 83 219 64 221 C 46 223 39 207 37 188 L 27 106 "
+               "C 25 89 28 76 32 59"),
+        BODY);
+  // The shell's seam, and the stick's collar.
+  Detail(p, p.Path("M 32 59 C 107 107 207 205 274 307 C 322 378 357 455 386 491"));
+  Detail(p, p.Path("M 127 46 C 148 64 190 84 227 87"));
+  Unbound(p, labels, C, NUNCHUK_C, 24.0f, "C");
+  Unbound(p, labels, NunchukZ, NUNCHUK_Z, 24.0f, "Z");
 }
 
 // The Nunchuk and the remote together: where each's own (0, 0) is.
-constexpr Point NUNCHUK_AT{-211.0f, 12.0f};
-constexpr Point REMOTE_AT{415.0f, 0.0f};
+constexpr Point NUNCHUK_AT{0.0f, 130.0f};
+constexpr Point REMOTE_AT{528.0f, 0.0f};
 
-void DrawRemoteAndNunchuk(const Painter& p)
+void DrawRemoteAndNunchuk(const Painter& p, const PadLabels& labels)
 {
-  const Contours cord = p.Path("M 163 740 C 160 800 200 834 270 832 C 340 830 412 838 415 770");
-  p.Stroke(cord, 13.0f, 0x7E8491);
-  p.Stroke(cord, 10.0f, 0xC9CDD6);
-  p.Stroke(cord, 3.5f, 0xF6F7FA, 0.9f);
-  p.Shade(p.RoundRect(381.0f, 742.0f, 449.0f, 784.0f, 12.0f), 0xD3D7DF, 0xA4AAB6);
-  p.Shade(p.RoundRect(149.0f, 734.0f, 177.0f, 774.0f, 8.0f), 0xE4E7ED, 0xB4BAC6);
-  for (const float y : {752.0f, 760.0f, 768.0f})
-    p.Stroke(p.Line({153.0f, y}, {173.0f, y}), 2.4f, 0x8C93A0);
+  // The cord.
+  const Contours cord = p.Path("M 389 655 C 394 740 392 836 456 838 C 516 840 528 826 528 776");
+  p.Stroke(cord, p.FromDp(OUTLINE_DP * 2.0f) + 9.0f, LINE);
+  p.Stroke(cord, 9.0f, BODY);
+  Solid(p, p.RoundRect(494.0f, 730.0f, 562.0f, 786.0f, 10.0f), PART);
 
   // The scale is the painter's, the place the part's.
-  DrawNunchuk(p.UprightAt(NUNCHUK_AT));
-  DrawRemote(p.UprightAt(REMOTE_AT));
+  DrawNunchuk(p.UprightAt(NUNCHUK_AT), labels);
+  DrawRemote(p.UprightAt(REMOTE_AT), labels);
 }
 
 // --- Callouts ---
@@ -949,6 +740,7 @@ enum class Side
 {
   Left,
   Right,
+  Under,
 };
 
 // Where a control's callout starts. `bend`: the line goes there first, around what is beside it.
@@ -964,72 +756,70 @@ struct Anchor
 struct Callout
 {
   Anchor anchor;
-  std::string label;
-  std::string name;
+  std::string key;     // what presses it
+  std::string action;  // the control
   std::vector<Point> line;  // from the control to the text
   float width = 0.0f;
+  float want = 0.0f;  // where its text would like to be
   float row = 0.0f;   // the middle of its text
-  float edge = 0.0f;  // where its text starts, or ends
-  bool flush_right = false;
-
-  float X0() const { return flush_right ? edge - width : edge; }
-  float X1() const { return flush_right ? edge : edge + width; }
+  float x0 = 0.0f;    // where its text starts
 };
 
-constexpr float LABEL_GAP = 10.0f;  // between a line and its text
-constexpr float STUB = 14.0f;       // the level part of a line at its text
-constexpr float GUTTER = 34.0f;     // between the texts and the controller
-constexpr float MAX_GUTTER = 88.0f;
-constexpr float MAX_LABEL_W = 200.0f;
-constexpr float ROW_H = 44.0f;
-constexpr float MAX_ROW_H = 60.0f;
-constexpr float LABEL_DY = -10.5f;  // the lines of text, from the row's middle
-constexpr float NAME_DY = 10.5f;
+constexpr Type TEXT = Type::RailLabel;
+constexpr float LABEL_GAP = 8.0f;  // between a line and its text
+constexpr float GUTTER = 24.0f;    // between the texts and the controller
+constexpr float MAX_GUTTER = 72.0f;
+constexpr float MAX_LABEL_W = 220.0f;
+constexpr float ROW_H = 26.0f;
+constexpr float LEADER_DP = 1.5f;
+constexpr float DOT_DP = 3.5f;
 
-const char* NameOf(PadControl control)
+const char* ActionOf(PadControl control, bool wii)
 {
   switch (control)
   {
   case PadControl::A:
-    return "A";
+    return wii ? "Wii A" : "GameCube A";
   case PadControl::B:
-    return "B";
+    return wii ? "Wii B" : "GameCube B";
   case PadControl::X:
-    return "X";
+    return "GameCube X";
   case PadControl::Y:
-    return "Y";
+    return "GameCube Y";
   case PadControl::Z:
-  case PadControl::NunchukZ:
-    return "Z";
+    return "GameCube Z";
   case PadControl::L:
-    return "L";
+    return "GameCube L";
   case PadControl::R:
-    return "R";
+    return "GameCube R";
   case PadControl::Start:
     return "Start";
   case PadControl::Stick:
-  case PadControl::NunchukStick:
     return "Control Stick";
   case PadControl::CStick:
     return "C Stick";
   case PadControl::DPad:
-    return "D-Pad";
+    return wii ? "Wii D-Pad" : "GameCube D-Pad";
   case PadControl::One:
-    return "1";
+    return "Wii 1";
   case PadControl::Two:
-    return "2";
+    return "Wii 2";
   case PadControl::Plus:
-    return "Plus";
+    return "Wii Plus";
   case PadControl::Minus:
-    return "Minus";
+    return "Wii Minus";
   case PadControl::Home:
-    return "Home";
+    return "Wii Home";
   case PadControl::Pointer:
     return "Pointer";
   case PadControl::Shake:
     return "Shake";
   case PadControl::C:
-    return "C";
+    return "Nunchuk C";
+  case PadControl::NunchukZ:
+    return "Nunchuk Z";
+  case PadControl::NunchukStick:
+    return "Nunchuk Stick";
   case PadControl::Count:
     break;
   }
@@ -1057,8 +847,16 @@ bool LinesCross(const std::vector<Point>& a, const std::vector<Point>& b)
   return false;
 }
 
+// Shortens what presses it, not the control's name.
+void FitTo(const Kit& kit, Callout* callout, float width)
+{
+  const float action = kit.TextWidth(TEXT, ": " + callout->action);
+  callout->key = kit.Fit(TEXT, callout->key, std::max(0.0f, width - action));
+  callout->width = kit.TextWidth(TEXT, callout->key + ": ") + kit.TextWidth(TEXT, callout->action);
+}
+
 std::vector<Callout> MakeCallouts(const Kit& kit, const std::vector<Anchor>& anchors, Side side,
-                                  const PadLabels& labels)
+                                  const PadLabels& labels, bool wii)
 {
   std::vector<Callout> out;
   for (const Anchor& anchor : anchors)
@@ -1068,10 +866,9 @@ std::vector<Callout> MakeCallouts(const Kit& kit, const std::vector<Anchor>& anc
       continue;
     Callout callout;
     callout.anchor = anchor;
-    callout.label = kit.Fit(Type::Body, label, MAX_LABEL_W);
-    callout.name = NameOf(anchor.control);
-    callout.width = std::max(kit.TextWidth(Type::Body, callout.label),
-                             kit.TextWidth(Type::Label, callout.name));
+    callout.key = label;
+    callout.action = ActionOf(anchor.control, wii);
+    FitTo(kit, &callout, MAX_LABEL_W);
     out.push_back(std::move(callout));
   }
   return out;
@@ -1085,53 +882,98 @@ float WidthOf(const std::vector<Callout>& callouts)
   return width;
 }
 
-// Spreads the callouts of one side down a column whose text starts (or ends) at `edge`.
+// The places nearest to `want` (in order) that are `gap[i]` apart from the one before and stay
+// between `low` and `high`.
+std::vector<float> Spread(const std::vector<float>& want, const std::vector<float>& gap, float low,
+                          float high)
+{
+  // Groups that touch each other sit where they are off the least, together.
+  struct Group
+  {
+    float sum;
+    size_t count;
+    float At() const { return sum / static_cast<float>(count); }
+  };
+  std::vector<Group> groups;
+  std::vector<float> offset(want.size(), 0.0f);
+  for (size_t i = 0; i < want.size(); ++i)
+  {
+    offset[i] = i == 0 ? 0.0f : offset[i - 1] + gap[i];
+    groups.push_back({want[i] - offset[i], 1});
+    while (groups.size() > 1 && groups[groups.size() - 2].At() > groups.back().At())
+    {
+      const Group last = groups.back();
+      groups.pop_back();
+      groups.back().sum += last.sum;
+      groups.back().count += last.count;
+    }
+  }
+  std::vector<float> out;
+  for (const Group& group : groups)
+  {
+    for (size_t i = 0; i < group.count; ++i)
+    {
+      const float at = group.At();
+      const float most = high - offset.back();
+      out.push_back(std::max(low, std::min(at, most)) + offset[out.size()]);
+    }
+  }
+  return out;
+}
+
+// Puts the callouts of one side down a column whose text starts (or ends) at `edge`, each as near
+// its control's height as there is room.
 void PlaceColumn(std::vector<Callout>* callouts, const Painter& painter, const Rect& area,
                  Side side, float edge)
 {
   const size_t n = callouts->size();
   if (n == 0)
     return;
-  const float pitch = std::min(MAX_ROW_H, area.H() / static_cast<float>(n));
-  const float half = pitch * static_cast<float>(n) * 0.5f;
-  float middle = 0.0f;
-  for (const Callout& callout : *callouts)
-    middle += painter.Dp(callout.anchor.at).y / static_cast<float>(n);
-  middle = std::clamp(middle, area.y0 + half, std::max(area.y0 + half, area.y1 - half));
-
-  const float inwards = side == Side::Left ? 1.0f : -1.0f;
-  const auto place = [&](size_t row) {
-    Callout& callout = (*callouts)[row];
-    callout.row = middle - half + pitch * (static_cast<float>(row) + 0.5f);
-    callout.edge = edge;
-    callout.flush_right = side == Side::Left;
-    callout.line = {painter.Dp(callout.anchor.at)};
-    if (callout.anchor.has_bend)
-      callout.line.push_back(painter.Dp(callout.anchor.bend));
-    callout.line.push_back({edge + inwards * (LABEL_GAP + STUB), callout.row});
-    callout.line.push_back({edge + inwards * LABEL_GAP, callout.row});
+  const float pitch = std::min(ROW_H, area.H() / static_cast<float>(n));
+  const auto place = [&] {
+    std::vector<float> want;
+    for (const Callout& callout : *callouts)
+    {
+      const Anchor& anchor = callout.anchor;
+      want.push_back(painter.Dp(anchor.has_bend ? anchor.bend : anchor.at).y);
+    }
+    const std::vector<float> rows = Spread(want, std::vector<float>(n, pitch),
+                                           area.y0 + pitch * 0.5f, area.y1 - pitch * 0.5f);
+    for (size_t i = 0; i < n; ++i)
+    {
+      Callout& callout = (*callouts)[i];
+      callout.row = rows[i];
+      callout.x0 = side == Side::Left ? edge - callout.width : edge;
+      callout.line = {painter.Dp(callout.anchor.at)};
+      if (callout.anchor.has_bend)
+        callout.line.push_back(painter.Dp(callout.anchor.bend));
+      callout.line.push_back({edge + (side == Side::Left ? LABEL_GAP : -LABEL_GAP), rows[i]});
+    }
   };
 
-  // Rows by height, then exchanged until no two lines cross: each exchange makes the lines shorter
-  // in all, so it ends.
+  // By height, then exchanged until no two lines cross.
   std::ranges::stable_sort(*callouts, [&](const Callout& a, const Callout& b) {
-    return painter.Dp(a.anchor.at).y < painter.Dp(b.anchor.at).y;
+    return painter.Dp(a.anchor.has_bend ? a.anchor.bend : a.anchor.at).y <
+           painter.Dp(b.anchor.has_bend ? b.anchor.bend : b.anchor.at).y;
   });
-  for (size_t row = 0; row < n; ++row)
-    place(row);
+  place();
   bool changed = true;
   for (size_t pass = 0; changed && pass < n * n; ++pass)
   {
     changed = false;
-    for (size_t i = 0; i < n; ++i)
+    for (size_t i = 0; i + 1 < n && !changed; ++i)
     {
-      for (size_t k = i + 1; k < n; ++k)
+      if (LinesCross((*callouts)[i].line, (*callouts)[i + 1].line))
       {
-        if (LinesCross((*callouts)[i].line, (*callouts)[k].line))
+        std::swap((*callouts)[i], (*callouts)[i + 1]);
+        place();
+        if (LinesCross((*callouts)[i].line, (*callouts)[i + 1].line))
         {
-          std::swap((*callouts)[i], (*callouts)[k]);
-          place(i);
-          place(k);
+          std::swap((*callouts)[i], (*callouts)[i + 1]);
+          place();
+        }
+        else
+        {
           changed = true;
         }
       }
@@ -1141,294 +983,211 @@ void PlaceColumn(std::vector<Callout>* callouts, const Painter& painter, const R
 
 void DrawCallouts(Kit* kit, const std::vector<Callout>& callouts)
 {
-  // The dark edges first, so that no line is cut by another's.
-  for (const bool ink : {false, true})
+  for (const Callout& callout : callouts)
   {
-    const uint32_t rgb = ink ? Tok::kPrimary : Tok::kSurface;
-    for (const Callout& callout : callouts)
+    for (size_t i = 0; i + 1 < callout.line.size(); ++i)
     {
-      for (size_t i = 0; i + 1 < callout.line.size(); ++i)
-      {
-        const Point a = callout.line[i];
-        const Point b = callout.line[i + 1];
-        kit->Line(a.x, a.y, b.x, b.y, ink ? 1.8f : 4.0f, rgb, ink ? 1.0f : 0.55f);
-      }
-      const Point dot = callout.line.front();
-      kit->Dot(dot.x, dot.y, ink ? 4.5f : 6.2f, rgb, ink ? 1.0f : 0.85f);
+      const Point a = callout.line[i];
+      const Point b = callout.line[i + 1];
+      kit->Line(a.x, a.y, b.x, b.y, LEADER_DP, Tok::kOutline);
     }
   }
   for (const Callout& callout : callouts)
   {
-    const int align = callout.flush_right ? 2 : 0;
-    kit->TextMid(callout.edge, callout.row + LABEL_DY, Type::Body, Tok::kOnSurface, callout.label,
-                 align);
-    kit->TextMid(callout.edge, callout.row + NAME_DY, Type::Label, Tok::kOnSurfaceVariant,
-                 callout.name, align);
+    kit->Dot(callout.line.front().x, callout.line.front().y, DOT_DP, Tok::kPrimary);
+    const std::string key = callout.key + ": ";
+    kit->TextMid(callout.x0, callout.row, TEXT, Tok::kOnSurfaceVariant, key);
+    kit->TextMid(callout.x0 + kit->TextWidth(TEXT, key), callout.row, TEXT, Tok::kOnSurface,
+                 callout.action);
   }
 }
-
-// Where a diagram goes, and its callouts.
-struct Placed
-{
-  Point origin;
-  float scale = 1.0f;
-  std::vector<Callout> callouts;
-};
 
 struct Plan
 {
   Rect bounds;  // of the drawing, in its units
-  void (*draw)(const Painter&);
+  void (*draw)(const Painter&, const PadLabels&);
+  bool wii;
   std::vector<Anchor> anchors;
 };
 
 Plan GameCubePlan()
 {
   using enum PadControl;
-  return {{76.0f, 34.0f, 791.0f, 528.0f},
+  return {{-72.0f, -9.0f, 72.0f, 102.0f},
           DrawGameCube,
+          false,
           {
-              {L, Side::Left, {152.0f, 126.0f}},
-              {Start, Side::Left, {420.0f, 271.0f}, true, {352.0f, 200.0f}},
-              {Stick, Side::Left, {167.0f, 304.0f}},
-              {DPad, Side::Left, {270.0f, 443.0f}},
-              {R, Side::Right, {717.0f, 120.0f}},
-              {Z, Side::Right, {716.0f, 158.0f}},
-              {Y, Side::Right, {672.0f, 222.0f}},
-              {X, Side::Right, {757.0f, 303.0f}},
-              {A, Side::Right, {692.0f, 333.0f}},
-              {B, Side::Right, {601.0f, 352.0f}},
-              {CStick, Side::Right, {584.0f, 454.0f}},
+              {L, Side::Left, GC_L},
+              {Stick, Side::Left, GC_STICK},
+              {DPad, Side::Left, GC_DPAD},
+              {Start, Side::Under, GC_START},
+              {R, Side::Right, GC_R},
+              {Z, Side::Right, GC_Z},
+              {Y, Side::Right, GC_Y},
+              {X, Side::Right, GC_X},
+              {A, Side::Right, GC_A},
+              {B, Side::Right, GC_B},
+              {CStick, Side::Right, GC_CSTICK},
           }};
 }
+
+// Over the buttons beside them, and under.
+constexpr Point HOME_BEND{32.0f, 303.0f};
+constexpr Point MINUS_BEND{-26.0f, 372.0f};
 
 Plan RemotePlan()
 {
   using enum PadControl;
-  return {{-REMOTE_HALF_W, -10.0f, REMOTE_HALF_W, REMOTE_H + 10.0f},
+  return {{-REMOTE_HALF_W, -REMOTE_FRONT - 4.0f, REMOTE_HALF_W, REMOTE_H + 4.0f},
           DrawRemote,
+          true,
           {
-              {Pointer, Side::Left, {-40.0f, 12.0f}},
-              {DPad, Side::Left, {-50.0f, 128.0f}},
-              {A, Side::Left, {-36.0f, 254.0f}},
-              {Minus, Side::Left, {-78.0f, 367.0f}},
-              {One, Side::Left, {-26.0f, 553.0f}},
-              {B, Side::Right, {56.0f, 214.0f}},
-              {Home, Side::Right, {14.0f, 351.0f}, true, {38.0f, 331.0f}},
-              {Plus, Side::Right, {78.0f, 367.0f}},
-              {Two, Side::Right, {26.0f, 620.0f}},
-              {Shake, Side::Right, {78.0f, 712.0f}},
+              {Pointer, Side::Left, WII_POINTER},
+              {DPad, Side::Left, WII_DPAD},
+              {A, Side::Left, WII_A},
+              {Minus, Side::Left, WII_MINUS},
+              {One, Side::Left, WII_ONE},
+              {B, Side::Right, WII_B},
+              {Home, Side::Right, WII_HOME, true, HOME_BEND},
+              {Plus, Side::Right, WII_PLUS},
+              {Two, Side::Right, WII_TWO},
+              {Shake, Side::Right, WII_SHAKE},
           }};
 }
 
 Plan NunchukPlan()
 {
   using enum PadControl;
-  const auto n = [](float x, float y) { return Point{x, y} + NUNCHUK_AT; };
-  const auto r = [](float x, float y) { return Point{x, y} + REMOTE_AT; };
-  return {{0.0f, -8.0f, 512.0f, 850.0f},
+  return {{0.0f, -REMOTE_FRONT - 4.0f, REMOTE_AT.x + REMOTE_HALF_W, 850.0f},
           DrawRemoteAndNunchuk,
+          true,
           {
-              {Pointer, Side::Left, r(-40.0f, 12.0f)},
-              {DPad, Side::Left, r(-50.0f, 128.0f)},
-              {C, Side::Left, n(272.0f, 194.0f)},
-              {NunchukZ, Side::Left, n(232.0f, 276.0f)},
-              {NunchukStick, Side::Left, n(364.0f, 306.0f)},
-              {B, Side::Right, r(56.0f, 214.0f)},
-              {A, Side::Right, r(36.0f, 254.0f)},
-              {Home, Side::Right, r(14.0f, 351.0f), true, r(38.0f, 331.0f)},
-              {Plus, Side::Right, r(78.0f, 367.0f)},
-              {Minus, Side::Right, r(-48.0f, 385.0f), true, r(-22.0f, 405.0f)},
-              {One, Side::Right, r(26.0f, 553.0f)},
-              {Two, Side::Right, r(26.0f, 620.0f)},
-              {Shake, Side::Right, r(78.0f, 712.0f)},
+              {NunchukStick, Side::Left, NUNCHUK_STICK + NUNCHUK_AT},
+              {C, Side::Left, NUNCHUK_C + NUNCHUK_AT},
+              {NunchukZ, Side::Left, NUNCHUK_Z + NUNCHUK_AT},
+              {Pointer, Side::Right, WII_POINTER + REMOTE_AT},
+              {DPad, Side::Right, WII_DPAD + REMOTE_AT},
+              {B, Side::Right, WII_B + REMOTE_AT},
+              {A, Side::Right, WII_A + REMOTE_AT},
+              {Home, Side::Right, WII_HOME + REMOTE_AT, true, HOME_BEND + REMOTE_AT},
+              {Plus, Side::Right, WII_PLUS + REMOTE_AT},
+              {Minus, Side::Right, WII_MINUS + REMOTE_AT, true, MINUS_BEND + REMOTE_AT},
+              {One, Side::Right, WII_ONE + REMOTE_AT},
+              {Two, Side::Right, WII_TWO + REMOTE_AT},
+              {Shake, Side::Right, WII_SHAKE + REMOTE_AT},
           }};
 }
 
-Placed PlaceUpright(Kit* kit, Canvas* canvas, const Rect& area, const Plan& plan,
-                    const PadLabels& labels)
+void DrawUpright(Kit* kit, Canvas* canvas, const Rect& area, const Plan& plan,
+                 const PadLabels& labels)
 {
-  std::vector<Callout> left = MakeCallouts(*kit, plan.anchors, Side::Left, labels);
-  std::vector<Callout> right = MakeCallouts(*kit, plan.anchors, Side::Right, labels);
+  std::vector<Callout> left = MakeCallouts(*kit, plan.anchors, Side::Left, labels, plan.wii);
+  std::vector<Callout> right = MakeCallouts(*kit, plan.anchors, Side::Right, labels, plan.wii);
   const float left_w = WidthOf(left);
   const float right_w = WidthOf(right);
   const float room = area.W() - left_w - right_w;
 
-  Placed placed;
   const float w = plan.bounds.W();
   const float scale =
       std::max(0.05f, std::min((room - 2.0f * GUTTER) / w, area.H() / plan.bounds.H()));
   const float gutter = std::clamp((room - w * scale) * 0.5f, 0.0f, MAX_GUTTER);
   const float left_edge = area.Cx() + (left_w - right_w - w * scale) * 0.5f - gutter;
   const float right_edge = left_edge + 2.0f * gutter + w * scale;
-  placed.scale = scale;
-  placed.origin = {left_edge + gutter - plan.bounds.x0 * scale,
-                   area.Cy() - plan.bounds.Cy() * scale};
+  const Point origin{left_edge + gutter - plan.bounds.x0 * scale,
+                     area.Cy() - plan.bounds.Cy() * scale};
 
-  const Painter painter(kit, canvas, placed.origin, scale);
+  const Painter painter(kit, canvas, origin, scale);
   PlaceColumn(&left, painter, area, Side::Left, left_edge);
   PlaceColumn(&right, painter, area, Side::Right, right_edge);
-  placed.callouts = std::move(left);
-  std::ranges::move(right, std::back_inserter(placed.callouts));
-  return placed;
-}
+  plan.draw(painter, labels);
+  DrawCallouts(kit, left);
+  DrawCallouts(kit, right);
 
-void DrawUpright(Kit* kit, Canvas* canvas, const Rect& area, const Plan& plan,
-                 const PadLabels& labels)
-{
-  const Placed placed = PlaceUpright(kit, canvas, area, plan, labels);
-  plan.draw(Painter(kit, canvas, placed.origin, placed.scale));
-  DrawCallouts(kit, placed.callouts);
-}
-
-// --- The remote held sideways: lines go up or down from it, then out to the texts ---
-
-// The hands that hold the turned remote (in its units, its middle at y = 0): the palms behind its
-// ends, then the thumbs on its face.
-void DrawHands(const Painter& p, bool thumbs)
-{
-  constexpr uint32_t HAND = 0x56667D;
-  for (const bool right : {false, true})
+  // Straight down, between the grips.
+  std::vector<Callout> under = MakeCallouts(*kit, plan.anchors, Side::Under, labels, plan.wii);
+  for (Callout& callout : under)
   {
-    if (!thumbs)
-    {
-      const Contours palm =
-          p.Path("M 70 -60 C 70 -112 40 -122 6 -116 C -30 -108 -48 -74 -52 -20 "
-                 "C -55 40 -44 96 -10 116 C 24 130 80 124 96 100 L 96 0",
-                 right, REMOTE_H * 0.5f);
-      p.Shade(palm, HAND, Darker(HAND, 0.40f));
-      p.Inner(palm, 0.0f, 7.0f, 7.0f, 0xFFFFFF, 0.25f);
-      continue;
-    }
-    const Contours thumb =
-        p.Path("M -44 104 C -46 62 -22 26 16 2 C 32 -8 42 -18 54 -24 C 78 -34 98 -8 84 14 "
-               "C 72 32 46 46 36 70 C 31 84 32 96 30 112 C 10 126 -30 124 -44 104",
-               right, REMOTE_H * 0.5f);
-    p.Drop(thumb, 0.0f, 5.0f, 6.0f, 0x10141C, 0.45f);
-    p.Shade(thumb, Lighter(HAND, 0.14f), Darker(HAND, 0.24f));
-    p.Inner(thumb, 0.0f, 5.0f, 5.0f, 0xFFFFFF, 0.28f);
-    const Contours nail =
-        p.Path("M 52 -8 C 58 -22 82 -24 84 -6 C 84 4 74 12 64 14 C 54 14 48 2 52 -8", right,
-               REMOTE_H * 0.5f);
-    p.Shade(nail, Lighter(HAND, 0.42f), Lighter(HAND, 0.22f));
+    const Point at = painter.Dp(callout.anchor.at);
+    FitTo(*kit, &callout, (plan.bounds.W() - 60.0f) * scale);
+    callout.row = painter.Dp({0.0f, plan.bounds.y1}).y - ROW_H * 0.5f;
+    callout.x0 = at.x - callout.width * 0.5f;
+    callout.line = {at, {at.x, callout.row - ROW_H * 0.5f}};
   }
+  DrawCallouts(kit, under);
 }
 
-Placed PlaceSideways(Kit* kit, Canvas* canvas, const Rect& area, const PadLabels& labels)
+// The remote held sideways: its callouts are in a row above it and a row below.
+void DrawSideways(Kit* kit, Canvas* canvas, const Rect& area, const PadLabels& labels)
 {
   using enum PadControl;
-  // In the upright remote's units; the turn is the painter's.
-  const std::vector<Anchor> above = {
-      {Pointer, Side::Left, {48.0f, 12.0f}},
-      {DPad, Side::Left, {50.0f, 128.0f}},
-      {A, Side::Left, {37.0f, 246.0f}},
-      {Plus, Side::Right, {78.0f, 367.0f}},
-      {One, Side::Right, {26.0f, 553.0f}},
+  // In the upright remote's units; the turn is the painter's. Left is above, right is below.
+  const std::vector<Anchor> anchors = {
+      {DPad, Side::Left, WII_DPAD}, {A, Side::Left, WII_A},
+      {Plus, Side::Left, WII_PLUS}, {One, Side::Left, WII_ONE},
+      {B, Side::Right, {-WII_B.x, WII_B.y}},
+      {Minus, Side::Right, WII_MINUS},
+      {Home, Side::Right, WII_HOME, true, {-40.0f, 376.0f}},
+      {Two, Side::Right, WII_TWO},  {Shake, Side::Right, {-WII_SHAKE.x, WII_SHAKE.y}},
   };
-  const std::vector<Anchor> under = {
-      {B, Side::Left, {-64.0f, 225.0f}},
-      {Minus, Side::Left, {-78.0f, 367.0f}},
-      {Home, Side::Right, {-16.0f, 381.0f}, true, {-36.0f, 400.0f}},
-      {Two, Side::Right, {-26.0f, 620.0f}},
-      {Shake, Side::Right, {-82.0f, 690.0f}},
-  };
+  constexpr float SPACE = 64.0f;  // between the remote and the texts
+  constexpr float APART = 18.0f;  // between texts
 
-  struct Block
-  {
-    bool below;
-    bool right;
-    std::vector<Callout> callouts;
-  };
-  std::vector<Block> blocks;
-  size_t row_counts[2] = {0, 0};
-  for (const bool below : {false, true})
-  {
-    for (const bool right : {false, true})
-    {
-      Block block{below, right,
-                  MakeCallouts(*kit, below ? under : above, right ? Side::Right : Side::Left,
-                               labels)};
-      size_t& count = row_counts[below ? 1 : 0];
-      count = std::max(count, block.callouts.size());
-      blocks.push_back(std::move(block));
-    }
-  }
-
-  constexpr float HANDS = 60.0f;  // units past the remote's ends
-  constexpr float SPACE = 26.0f;  // between the remote and the nearest text
-  const float rows_above = static_cast<float>(row_counts[0]);
-  const float rows = rows_above + static_cast<float>(row_counts[1]);
   const float scale =
-      std::max(0.05f, std::min(area.W() / (REMOTE_H + 2.0f * HANDS),
-                               (area.H() - rows * ROW_H - 2.0f * SPACE) / (2.0f * REMOTE_HALF_W)));
-  const float thick = 2.0f * REMOTE_HALF_W * scale;
-  const float spare = area.H() - thick - 2.0f * SPACE;
-  const float pitch = rows > 0.0f ? std::min(MAX_ROW_H, spare / rows) : 0.0f;
-  const float top =
-      area.Cy() - (thick + rows * pitch) * 0.5f + rows_above * pitch;
-  Placed placed;
-  placed.scale = scale;
-  placed.origin = {area.Cx() - REMOTE_H * scale * 0.5f, top + thick * 0.5f};
-  const Painter remote(kit, canvas, placed.origin, scale, true);
+      std::max(0.05f, std::min(area.W() * 0.86f / (REMOTE_H + REMOTE_FRONT),
+                               (area.H() - 2.0f * (SPACE + ROW_H)) / (2.0f * REMOTE_HALF_W)));
+  const Point origin{area.Cx() - (REMOTE_H - REMOTE_FRONT) * scale * 0.5f, area.Cy()};
+  const Painter remote(kit, canvas, origin, scale, true);
+  DrawRemote(remote, labels);
 
-  for (Block& block : blocks)
+  for (const Side side : {Side::Left, Side::Right})
   {
-    const float out = block.right ? 1.0f : -1.0f;
-    const float down = block.below ? 1.0f : -1.0f;
-    // The nearest row is the outermost control's, so that no line has to pass another.
-    std::ranges::stable_sort(block.callouts, [&](const Callout& a, const Callout& b) {
-      return out * remote.Dp(a.anchor.at).x > out * remote.Dp(b.anchor.at).x;
+    std::vector<Callout> callouts = MakeCallouts(*kit, anchors, side, labels, true);
+    const size_t n = callouts.size();
+    if (n == 0)
+      continue;
+    std::ranges::stable_sort(callouts, [&](const Callout& a, const Callout& b) {
+      return remote.Dp(a.anchor.at).x < remote.Dp(b.anchor.at).x;
     });
-    // How far in the rows so far reach, measured inwards from the area's edge.
-    const float edge = block.right ? area.x1 : area.x0;
-    float reach = -STUB;
-    float row = 0.5f;
-    for (Callout& callout : block.callouts)
+
+    // The long ones are cut short where they do not all fit.
+    const float most = area.W() - APART * static_cast<float>(n - 1);
+    for (float cap = MAX_LABEL_W; cap > 40.0f; cap -= 4.0f)
     {
-      callout.row = (block.below ? top + thick + SPACE : top - SPACE) + down * pitch * row;
-      callout.edge = edge;
-      callout.flush_right = block.right;
+      float total = 0.0f;
+      for (Callout& callout : callouts)
+      {
+        if (callout.width > cap)
+          FitTo(*kit, &callout, cap);
+        total += callout.width;
+      }
+      if (total <= most)
+        break;
+    }
+
+    std::vector<float> want;
+    std::vector<float> gap;
+    for (size_t i = 0; i < n; ++i)
+    {
+      const float half = callouts[i].width * 0.5f;
+      want.push_back(remote.Dp(callouts[i].anchor.at).x);
+      gap.push_back(i == 0 ? 0.0f : callouts[i - 1].width * 0.5f + APART + half);
+    }
+    const std::vector<float> middles =
+        Spread(want, gap, area.x0 + callouts.front().width * 0.5f,
+               area.x1 - callouts.back().width * 0.5f);
+    const float down = side == Side::Left ? -1.0f : 1.0f;
+    for (size_t i = 0; i < n; ++i)
+    {
+      Callout& callout = callouts[i];
+      callout.row = area.Cy() + down * (REMOTE_HALF_W * scale + SPACE + ROW_H * 0.5f);
+      callout.x0 = middles[i] - callout.width * 0.5f;
       callout.line = {remote.Dp(callout.anchor.at)};
       if (callout.anchor.has_bend)
         callout.line.push_back(remote.Dp(callout.anchor.bend));
-      // Where the line turns: over the control, or further in to pass the rows before.
-      const float over = (edge - callout.line.back().x) * out;
-      const float turn = std::max(over, reach + STUB);
-      if (turn < callout.width + LABEL_GAP)
-      {
-        // Over its own text: straight onto it (onto the label, where the name is shorter).
-        const bool onto_label =
-            !block.below && turn > kit->TextWidth(Type::Label, callout.name) + LABEL_GAP;
-        callout.line.push_back({edge - out * std::clamp(turn, 4.0f, callout.width - 4.0f),
-                                callout.row - down * (onto_label ? 5.0f : 22.0f)});
-      }
-      else
-      {
-        // Aside before the texts it passes.
-        if (turn > over + 0.5f)
-        {
-          callout.line.push_back(
-              {edge - out * turn, block.below ? top + thick + SPACE * 0.4f : top - SPACE * 0.4f});
-        }
-        callout.line.push_back({edge - out * turn, callout.row});
-        callout.line.push_back({edge - out * (callout.width + LABEL_GAP), callout.row});
-      }
-      reach = std::max({reach, turn, callout.width + LABEL_GAP});
-      row += 1.0f;
+      callout.line.push_back({middles[i], callout.row - down * (ROW_H * 0.5f)});
     }
-    std::ranges::move(block.callouts, std::back_inserter(placed.callouts));
+    DrawCallouts(kit, callouts);
   }
-  return placed;
-}
-
-void DrawSideways(Kit* kit, Canvas* canvas, const Rect& area, const PadLabels& labels)
-{
-  const Placed placed = PlaceSideways(kit, canvas, area, labels);
-  const Painter level(kit, canvas, placed.origin, placed.scale);
-  DrawHands(level, false);
-  DrawRemote(Painter(kit, canvas, placed.origin, placed.scale, true));
-  DrawHands(level, true);
-  DrawCallouts(kit, placed.callouts);
 }
 }  // namespace
 
