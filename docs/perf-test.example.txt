@@ -14,9 +14,9 @@
 # ShaderCompilationMode: 0 Specialized (default), 1 Exclusive Ubershaders, 2 Hybrid Ubershaders,
 #       3 Skip Drawing.
 
-seconds = 20
-settle = 4
-rounds = 3
+seconds = 40
+settle = 20
+rounds = 2
 
 baseline:
 hybrid ubershaders: ShaderCompilationMode=2
