@@ -79,6 +79,7 @@
     <ClCompile Include="Config\GameConfigHighlighter.cpp" />
     <ClCompile Include="Config\GameConfigWidget.cpp" />
     <ClCompile Include="Config\GamecubeControllersWidget.cpp" />
+    <ClCompile Include="Config\GameModsWidget.cpp" />
     <ClCompile Include="Config\GeckoCodeWidget.cpp" />
     <ClCompile Include="Config\Graphics\AdvancedWidget.cpp" />
     <ClCompile Include="Config\Graphics\EnhancementsWidget.cpp" />
@@ -254,6 +255,7 @@
     <ClInclude Include="Config\CheatCodeEditor.h" />
     <ClInclude Include="Config\ConfigControls\ConfigControl.h" />
     <ClInclude Include="Config\GameConfigEdit.h" />
+    <ClInclude Include="Config\GameModsWidget.h" />
     <ClInclude Include="Config\Mapping\MappingCommon.h" />
     <QtMoc Include="Config\Mapping\MappingIndicator.h" />
     <ClInclude Include="Config\Mapping\MappingNumeric.h" />

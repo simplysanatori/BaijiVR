@@ -17,6 +17,7 @@
 #include "DolphinQt/Config/ElementsGroupOverrideWidget.h"
 #include "DolphinQt/Config/FilesystemWidget.h"
 #include "DolphinQt/Config/GameConfigWidget.h"
+#include "DolphinQt/Config/GameModsWidget.h"
 #include "DolphinQt/Config/GeckoCodeWidget.h"
 #include "DolphinQt/Config/GraphicsModListWidget.h"
 #include "DolphinQt/Config/VRConfigWidget.h"
@@ -75,6 +76,12 @@ PropertiesDialog::PropertiesDialog(QWidget* parent, const UICommon::GameFile& ga
   AddPane(ar, tr("AR Codes"));
   AddPane(gecko, tr("Gecko Codes"));
   AddWrappedPane(graphics_mod_list, tr("Graphics Mods"));
+
+  if (DiscIO::IsDisc(game.GetPlatform()))
+  {
+    auto* const mods = new GameModsWidget(game.GetGameID(), game.GetRevision());
+    AddPane(mods, tr("Mods"));
+  }
 
   auto* const shader_overrides = new ShaderOverrideWidget(game.GetGameID(), revision);
   AddPane(shader_overrides, tr("Shader Overrides"));

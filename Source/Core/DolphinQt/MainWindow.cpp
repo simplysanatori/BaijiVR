@@ -100,6 +100,7 @@
 #include "DolphinQt/FrameFlatModeInputWarningDialog.h"
 #include "DolphinQt/GCMemcardManager.h"
 #include "DolphinQt/GameList/GameList.h"
+#include "DolphinQt/GameModeWindows.h"
 #include "DolphinQt/Host.h"
 #include "DolphinQt/HotkeyScheduler.h"
 #include "DolphinQt/InfinityBase/InfinityBaseWindow.h"
@@ -252,7 +253,10 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
     // gamescope scales a smaller window up with black bars round it; there is no desktop behind
     // it and nothing to move it for, so in Game Mode the window is the whole panel.
     if (Host::IsGameMode())
+    {
       showFullScreen();
+      GameModeWindows::Install(this);
+    }
     else
       show();
   }

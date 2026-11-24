@@ -364,6 +364,13 @@ void Settings::ApplyStyle()
 
   qApp->setPalette(palette);
 
+  // Unchecked boxes are Base on Window, which the dark gray style has nearly the same.
+  QPalette box_palette = palette;
+  if (style_type == StyleType::FusionDarkGray || style_type == StyleType::FusionDark)
+    box_palette.setColor(QPalette::All, QPalette::Base, QColor(95, 95, 95));
+  for (const char* const box : {"QCheckBox", "QRadioButton"})
+    qApp->setPalette(box_palette, box);
+
   // Define tooltips style if not already defined
   if (!stylesheet_contents.contains(QStringLiteral("QToolTip"), Qt::CaseSensitive))
   {

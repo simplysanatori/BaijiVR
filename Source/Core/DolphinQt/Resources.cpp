@@ -9,9 +9,12 @@
 #include <QPixmap>
 
 #include "Common/Assert.h"
+#include "Common/CommonPaths.h"
 #include "Common/FileUtil.h"
 
 #include "Core/Config/MainSettings.h"
+
+#include "DolphinQt/Settings.h"
 
 bool Resources::m_svg_supported;
 QList<QIcon> Resources::m_platforms;
@@ -55,7 +58,11 @@ QIcon Resources::LoadNamedIcon(std::string_view name, const QString& dir)
 
 static QString GetCurrentThemeDir()
 {
-  return QString::fromStdString(File::GetThemeDir(Config::Get(Config::MAIN_THEME_NAME)));
+  std::string name = Config::Get(Config::MAIN_THEME_NAME);
+  // The default theme's dark icons vanish on a dark style; its light variant is made for it.
+  if (name == DEFAULT_THEME_DIR && Settings::Instance().IsThemeDark())
+    name = "Clean Lite";
+  return QString::fromStdString(File::GetThemeDir(name));
 }
 
 static QString GetResourcesDir()

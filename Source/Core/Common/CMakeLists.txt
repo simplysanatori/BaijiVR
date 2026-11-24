@@ -163,6 +163,7 @@ add_library(common
   Version.h
   WaitableFlag.h
   WindowSystemInfo.h
+  WindowFit.h
   WorkQueueThread.h
 )
 

@@ -104,6 +104,8 @@ add_executable(dolphin-emu
   Config/VRConfigWidget.h
   Config/GamecubeControllersWidget.cpp
   Config/GamecubeControllersWidget.h
+  Config/GameModsWidget.cpp
+  Config/GameModsWidget.h
   Config/GeckoCodeWidget.cpp
   Config/GeckoCodeWidget.h
   Config/Graphics/AdvancedWidget.cpp
@@ -302,6 +304,8 @@ add_executable(dolphin-emu
   GameList/GameListModel.h
   GameList/GameTracker.cpp
   GameList/GameTracker.h
+  GameModeWindows.cpp
+  GameModeWindows.h
   GameList/GridProxyModel.cpp
   GameList/GridProxyModel.h
   GameList/ListProxyModel.cpp
