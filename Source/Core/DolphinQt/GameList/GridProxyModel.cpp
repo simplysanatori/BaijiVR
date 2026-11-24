@@ -14,8 +14,6 @@
 
 #include "UICommon/GameFile.h"
 
-const QSize LARGE_BANNER_SIZE(144, 48);
-
 GridProxyModel::GridProxyModel(QObject* parent) : QSortFilterProxyModel(parent)
 {
   setDynamicSortFilter(true);
@@ -36,7 +34,7 @@ QVariant GridProxyModel::data(const QModelIndex& i, int role) const
 
     const auto& buffer = model->GetGameFile(source_index.row())->GetCoverImage().buffer;
 
-    QSize size = Config::Get(Config::MAIN_USE_GAME_COVERS) ? QSize(160, 224) : LARGE_BANNER_SIZE;
+    QSize size = Config::Get(Config::MAIN_USE_GAME_COVERS) ? GRID_COVER_SIZE : GRID_BANNER_SIZE;
     QPixmap pixmap(size * model->GetScale() * QPixmap().devicePixelRatio());
 
     if (buffer.empty() || !Config::Get(Config::MAIN_USE_GAME_COVERS))
@@ -49,7 +47,7 @@ QVariant GridProxyModel::data(const QModelIndex& i, int role) const
 
       banner = banner.scaled(pixmap.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
 
-      pixmap.fill();
+      pixmap.fill(Qt::transparent);
 
       QPainter painter(&pixmap);
 
@@ -63,7 +61,7 @@ QVariant GridProxyModel::data(const QModelIndex& i, int role) const
       pixmap = QPixmap::fromImage(QImage::fromData(
           reinterpret_cast<const unsigned char*>(&buffer[0]), static_cast<int>(buffer.size())));
 
-      return pixmap.scaled(QSize(160, 224) * model->GetScale() * pixmap.devicePixelRatio(),
+      return pixmap.scaled(GRID_COVER_SIZE * model->GetScale() * pixmap.devicePixelRatio(),
                            Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
   }

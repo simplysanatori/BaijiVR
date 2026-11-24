@@ -169,6 +169,7 @@
     <ClCompile Include="GameList\GameList.cpp" />
     <ClCompile Include="GameList\GameListModel.cpp" />
     <ClCompile Include="GameList\GameTracker.cpp" />
+    <ClCompile Include="GameList\GridDelegate.cpp" />
     <ClCompile Include="GameList\GridProxyModel.cpp" />
     <ClCompile Include="GameList\ListProxyModel.cpp" />
     <ClCompile Include="GBAHost.cpp" />
@@ -400,6 +401,7 @@
     <QtMoc Include="GameList\GameList.h" />
     <QtMoc Include="GameList\GameListModel.h" />
     <QtMoc Include="GameList\GameTracker.h" />
+    <QtMoc Include="GameList\GridDelegate.h" />
     <QtMoc Include="GameList\GridProxyModel.h" />
     <QtMoc Include="GameList\ListProxyModel.h" />
     <QtMoc Include="GBAWidget.h" />

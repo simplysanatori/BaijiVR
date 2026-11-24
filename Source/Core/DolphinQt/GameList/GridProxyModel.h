@@ -3,7 +3,11 @@
 
 #pragma once
 
+#include <QSize>
 #include <QSortFilterProxyModel>
+
+inline constexpr QSize GRID_COVER_SIZE(160, 224);
+inline constexpr QSize GRID_BANNER_SIZE(144, 48);
 
 // This subclass of QSortFilterProxyModel transforms the raw data into a
 // single-column large icon + name to be displayed in a QListView.

@@ -38,6 +38,7 @@
 #include <QShortcut>
 #include <QSortFilterProxyModel>
 #include <QTableView>
+#include <QTimer>
 #include <QUrl>
 
 #ifdef _WIN32
@@ -58,6 +59,7 @@
 
 #include "DolphinQt/Config/PropertiesDialog.h"
 #include "DolphinQt/ConvertDialog.h"
+#include "DolphinQt/GameList/GridDelegate.h"
 #include "DolphinQt/GameList/GridProxyModel.h"
 #include "DolphinQt/GameList/ListProxyModel.h"
 #include "DolphinQt/MenuBar.h"
@@ -108,6 +110,14 @@ protected:
   {
     if (event->button() == Qt::LeftButton)
       QListView::mouseDoubleClickEvent(event);
+  }
+
+  // The grid's current game, which Qt scrolls to, is the first one found and not the first one shown.
+  void showEvent(QShowEvent* event) override
+  {
+    QListView::showEvent(event);
+    if (!selectionModel()->hasSelection())
+      QTimer::singleShot(0, this, &QListView::scrollToTop);
   }
 };
 }  // namespace
@@ -359,6 +369,9 @@ void GameList::MakeGridView()
   m_grid->setUniformItemSizes(true);
   m_grid->setContextMenuPolicy(Qt::CustomContextMenu);
   m_grid->setFrameStyle(QFrame::NoFrame);
+  m_grid->setItemDelegate(new GridDelegate(m_model, m_grid));
+  m_grid->setMouseTracking(true);
+  m_grid->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
 
   // Work around a Qt bug where clicking in the background (below the last game) as the first action
   // and then pressing a key (e.g. page down or end) selects the first entry in the list instead of
