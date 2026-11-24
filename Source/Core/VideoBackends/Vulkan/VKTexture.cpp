@@ -1076,6 +1076,32 @@ void VKStagingTexture::Flush()
   m_needs_flush = false;
 }
 
+bool VKStagingTexture::TryFlush()
+{
+  if (!m_needs_flush)
+    return true;
+
+  // Still in the command buffer being recorded: not submitted, so not ready. Do not submit here;
+  // the caller decides whether a stale result is acceptable or it has to Flush().
+  if (g_command_buffer_mgr->GetCurrentFenceCounter() == m_flush_fence_counter)
+    return false;
+
+  if (!g_command_buffer_mgr->PollFenceCounter(m_flush_fence_counter))
+    return false;
+
+  // Same completion work as Flush(): there is new data in the readback memory.
+  if (m_type == StagingTextureType::Readback || m_type == StagingTextureType::Mutable)
+    m_staging_buffer->InvalidateCPUCache();
+
+  m_needs_flush = false;
+  return true;
+}
+
+bool VKStagingTexture::IsCopySubmitted() const
+{
+  return !m_needs_flush || g_command_buffer_mgr->GetCurrentFenceCounter() != m_flush_fence_counter;
+}
+
 VKFramebuffer::VKFramebuffer(VKTexture* color_attachment, VKTexture* depth_attachment,
                              std::vector<AbstractTexture*> additional_color_attachments, u32 width,
                              u32 height, u32 layers, u32 samples, VkFramebuffer fb,

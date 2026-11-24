@@ -142,7 +142,15 @@ u32 VideoBackendBase::Video_GetQueryResult(PerfQueryType type)
 
   if (!g_perf_query->IsFlushed())
   {
-    AsyncRequests::GetInstance()->PushBlockingEvent([] { g_perf_query->FlushResults(); });
+    if (g_perf_query->UseNonBlockingResults())
+    {
+      AsyncRequests::GetInstance()->PushBlockingEvent(
+          [] { g_perf_query->PrepareNonBlockingResult(); });
+    }
+    else
+    {
+      AsyncRequests::GetInstance()->PushBlockingEvent([] { g_perf_query->FlushResults(); });
+    }
   }
 
   return g_perf_query->GetQueryResult(type);

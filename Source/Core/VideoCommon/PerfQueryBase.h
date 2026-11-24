@@ -64,6 +64,18 @@ public:
   // NOTE: Called from CPU thread
   virtual bool IsFlushed() const { return true; }
 
+  // Non-blocking results ([VR] NonBlockingPerfQueries, on backends that support it): a read of
+  // queries the GPU has not finished is answered with the same measurement of an earlier frame
+  // instead of waiting. NOTE: Called from CPU thread
+  virtual bool UseNonBlockingResults() const { return false; }
+  // Runs on the video thread for such a read; afterwards IsFlushed() is true and GetQueryResult()
+  // returns the answer.
+  virtual void PrepareNonBlockingResult() {}
+  // Non-blocking results find a frame's measurements again by their order in it. The game dropped
+  // the frame it was sending (a FIFO reset), or a loaded state is another moment of the game.
+  virtual void OnFrameAborted() {}
+  virtual void OnStateLoaded() {}
+
 protected:
   std::atomic<u32> m_query_count;
   std::array<std::atomic<u32>, PQG_NUM_MEMBERS> m_results;

@@ -29,6 +29,8 @@
 #include "VideoCommon/DataReader.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/OpcodeDecoding.h"
+#include "VideoCommon/PerfQueryBase.h"
+#include "VideoCommon/TextureCacheBase.h"
 #include "VideoCommon/VertexLoaderManager.h"
 #include "VideoCommon/VertexManagerBase.h"
 #include "VideoCommon/VideoBackendBase.h"
@@ -66,6 +68,9 @@ void FifoManager::DoState(PointerWrap& p)
 
   p.Do(m_sync_ticks);
   p.Do(m_syncing_suspended);
+
+  if (p.IsReadMode())
+    g_perf_query->OnStateLoaded();
 }
 
 void FifoManager::PauseAndLock()
@@ -280,6 +285,10 @@ void FifoManager::ResetVideoBuffer()
   m_video_buffer_pp_read_ptr = m_video_buffer;
   m_fifo_aux_write_ptr = m_fifo_aux_data;
   m_fifo_aux_read_ptr = m_fifo_aux_data;
+
+  // An aborted frame has no frame end of its own.
+  if (g_perf_query)
+    g_perf_query->OnFrameAborted();
 }
 
 // Description: Main FIFO update loop
@@ -387,6 +396,8 @@ void FifoManager::RunGpuLoop()
           // Make sure VertexManager finishes drawing any primitives it has stored in it's buffer.
           g_vertex_manager->Flush();
           g_framebuffer_manager->RefreshPeekCache();
+          // Async EFB copies: deliver the ones the GPU finished while the CPU thread waits.
+          g_texture_cache->WriteCompletedEFBCopies();
         }
       },
       100);

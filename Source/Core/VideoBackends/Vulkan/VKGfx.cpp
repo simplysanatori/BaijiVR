@@ -27,6 +27,9 @@
 #include "VideoCommon/Present.h"
 #include "VideoCommon/RenderState.h"
 #include "VideoCommon/VideoConfig.h"
+#ifdef ENABLE_VR
+#include "VideoCommon/VR/Perf/VRPerf.h"
+#endif
 
 namespace Vulkan
 {
@@ -459,7 +462,12 @@ void VKGfx::ExecuteCommandBuffer(bool submit_off_thread, bool wait_for_completio
 {
   StateTracker::GetInstance()->EndRenderPass();
 
-  g_command_buffer_mgr->SubmitCommandBuffer(submit_off_thread, wait_for_completion);
+  [[maybe_unused]] const bool submitted =
+      g_command_buffer_mgr->SubmitCommandBuffer(submit_off_thread, wait_for_completion);
+#ifdef ENABLE_VR
+  if (wait_for_completion && submitted && g_command_buffer_mgr->GetLastCompletionWaitUs() != 0)
+    VR::Perf::AddGpuWait(g_command_buffer_mgr->GetLastCompletionWaitUs());
+#endif
 
   StateTracker::GetInstance()->InvalidateCachedState();
 }

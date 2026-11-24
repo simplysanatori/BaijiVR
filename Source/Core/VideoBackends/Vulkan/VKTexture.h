@@ -117,6 +117,8 @@ public:
   bool Map() override;
   void Unmap() override;
   void Flush() override;
+  bool TryFlush() override;
+  bool IsCopySubmitted() const override;
 
   static std::unique_ptr<VKStagingTexture> Create(StagingTextureType type,
                                                   const TextureConfig& config);

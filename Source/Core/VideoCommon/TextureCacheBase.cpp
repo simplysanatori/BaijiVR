@@ -26,6 +26,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/MathUtil.h"
 #include "Common/MemoryUtil.h"
+#include "Common/Timer.h"
 
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/ConfigManager.h"
@@ -66,6 +67,50 @@ static const int TEXTURE_KILL_THRESHOLD = 64;
 static const int TEXTURE_POOL_KILL_THRESHOLD = 3;
 
 static int xfb_count = 0;
+
+namespace
+{
+constexpr u32 MAX_EFB_COPY_EVENT_LOGS = 16;
+// Async EFB copies: a copy still on the GPU this many frame ends after its sync point is waited
+// for, and so is everything once this many copies are pending.
+constexpr u32 MAX_ASYNC_EFB_COPY_FRAMES = 2;
+constexpr size_t MAX_ASYNC_PENDING_EFB_COPIES = 64;
+
+bool RangesOverlap(u32 a, u32 a_size, u32 b, u32 b_size)
+{
+  return a < b + b_size && b < a + a_size;
+}
+
+u32 PendingEFBCopySize(const TCacheEntry& entry)
+{
+  return entry.pending_efb_copy_height * entry.memory_stride;
+}
+
+u64 HashGuestRange(u32 address, u32 size)
+{
+  auto& memory = Core::System::GetInstance().GetMemory();
+  const u8* const ptr = memory.GetPointerForRange(address, size);
+  return ptr ? Common::GetHash64(ptr, size, 0) : 0;
+}
+
+// Hash of the guest memory a pending copy writes: not of what lies between its rows.
+u64 HashPendingEFBCopyMemory(const TCacheEntry& entry)
+{
+  const u32 size = PendingEFBCopySize(entry);
+  const u32 row_size = entry.pending_efb_copy_width * sizeof(u32);
+  if (row_size >= entry.memory_stride)
+    return HashGuestRange(entry.addr, size);
+
+  auto& memory = Core::System::GetInstance().GetMemory();
+  const u8* ptr = memory.GetPointerForRange(entry.addr, size);
+  if (!ptr)
+    return 0;
+  u64 hash = 0;
+  for (u32 row = 0; row < entry.pending_efb_copy_height; ++row, ptr += entry.memory_stride)
+    hash = hash * 31 + Common::GetHash64(ptr, row_size, 0);
+  return hash;
+}
+}  // namespace
 
 std::unique_ptr<TextureCacheBase> g_texture_cache;
 
@@ -202,6 +247,7 @@ bool TextureCacheBase::Initialize()
 void TextureCacheBase::Invalidate()
 {
   FlushEFBCopies();
+  m_delivered_efb_copies.clear();
   TMEM::InvalidateAll();
 
   for (auto& bind : m_bound_textures)
@@ -660,6 +706,8 @@ void TextureCacheBase::DoState(PointerWrap& p)
 {
   // Flush all pending XFB copies before either loading or saving.
   FlushEFBCopies();
+  // A loaded state replaces guest RAM: delivered copies no longer describe it.
+  m_delivered_efb_copies.clear();
 
   p.Do(m_last_entry_id);
 
@@ -883,10 +931,31 @@ void TextureCacheBase::DoLoadState(PointerWrap& p)
 
 void TextureCacheBase::OnFrameEnd()
 {
-  // Flush any outstanding EFB copies to RAM, in case the game is running at an uncapped frame
-  // rate and not waiting for vblank. Otherwise, we'd end up with a huge list of pending
-  // copies.
-  FlushEFBCopies();
+  ++m_efb_copy_frame;
+  if (UseAsyncEFBCopies())
+  {
+    WriteCompletedEFBCopies();
+    // The flush below is a sync point of its own for the copies still on the GPU.
+    MarkPendingEFBCopiesPastSync();
+    // Bound how late a copy reaches guest RAM: wait for one still on the GPU a whole frame after
+    // its sync point (and for everything once the list grows).
+    const bool overdue = std::ranges::any_of(m_pending_efb_copies, [this](const RcTcacheEntry& e) {
+      return m_efb_copy_frame - e->pending_efb_copy_sync_frame >= MAX_ASYNC_EFB_COPY_FRAMES;
+    });
+    if (overdue || m_pending_efb_copies.size() > MAX_ASYNC_PENDING_EFB_COPIES)
+    {
+      m_efb_copy_stats.forced_flushes++;
+      FlushEFBCopies();
+    }
+  }
+  else
+  {
+    // Flush any outstanding EFB copies to RAM, in case the game is running at an uncapped frame
+    // rate and not waiting for vblank. Otherwise, we'd end up with a huge list of pending
+    // copies.
+    FlushEFBCopies();
+  }
+  UpdateEFBCopyStats();
 
   Cleanup(g_presenter->FrameCount());
 }
@@ -2684,17 +2753,28 @@ void TextureCacheBase::CopyRenderTargetToTexture(
       // We can't defer if there is no VRAM copy (since we need to update the hash).
       if (!copy_to_vram || !g_ActiveConfig.bDeferEFBCopies)
       {
-        // Immediately flush it.
+        // Immediately flush it. Older copies must not land on top of it: waiting for this one
+        // completes them too.
+        if (UseAsyncEFBCopies() && !m_pending_efb_copies.empty())
+        {
+          staging_texture->Flush();
+          WriteCompletedEFBCopies();
+        }
+        m_efb_copy_stats.immediate++;
         WriteEFBCopyToRAM(dst, bytes_per_row / sizeof(u32), num_blocks_y, dstStride,
                           std::move(staging_texture));
       }
       else
       {
         // Defer the flush until later.
+        WriteCompletedEFBCopies();
         entry->pending_efb_copy = std::move(staging_texture);
         entry->pending_efb_copy_width = bytes_per_row / sizeof(u32);
         entry->pending_efb_copy_height = num_blocks_y;
+        entry->pending_efb_copy_past_sync = false;
         m_pending_efb_copies.push_back(entry);
+        m_efb_copy_stats.copies++;
+        m_efb_copy_stats.bytes += num_blocks_y * bytes_per_row;
       }
     }
   }
@@ -2801,8 +2881,225 @@ void TextureCacheBase::FlushEFBCopies()
     return;
 
   for (auto& entry : m_pending_efb_copies)
-    FlushEFBCopy(entry.get());
+    WritePendingEFBCopy(entry.get());
   m_pending_efb_copies.clear();
+}
+
+bool TextureCacheBase::UseAsyncEFBCopies()
+{
+  return g_ActiveConfig.VRSessionActive() && g_ActiveConfig.vr_async_efb_copies;
+}
+
+// The game waits for draw done or a PE token, then may read the EFB copies issued before it, so
+// these have always been written to guest RAM here, waiting for the GPU. Games that sync several
+// times per frame on copies the GPU is still rendering (Metroid Prime 3, Super Mario Sunshine at
+// high IR) serialize the CPU, video thread and GPU this way. With AsyncEFBCopies, a copy the GPU
+// has not finished is written when it completes instead, so the game can see it late; the guest
+// memory hash taken here lets the late write notice a game write in between.
+void TextureCacheBase::FlushEFBCopiesAtSyncPoint()
+{
+  const bool diagnostics = g_ActiveConfig.vr_efb_copy_diagnostics;
+  if (diagnostics)
+  {
+    CheckDeliveredEFBCopies();
+    m_efb_copy_stats.sync_points++;
+    m_efb_copy_stats.pending_at_sync += static_cast<u32>(m_pending_efb_copies.size());
+  }
+
+  if (!UseAsyncEFBCopies())
+  {
+    if (diagnostics)
+    {
+      // The copies the flush below waits for: the ones AsyncEFBCopies would write late.
+      for (const auto& entry : m_pending_efb_copies)
+      {
+        if (!entry->pending_efb_copy->TryFlush())
+          m_efb_copy_stats.in_flight_at_sync++;
+      }
+    }
+    FlushEFBCopies();
+    return;
+  }
+
+  WriteCompletedEFBCopies();
+  if (m_pending_efb_copies.empty())
+    return;
+
+  m_efb_copy_stats.in_flight_at_sync += static_cast<u32>(m_pending_efb_copies.size());
+  MarkPendingEFBCopiesPastSync();
+
+  // A copy still in the command buffer being recorded never completes on its own.
+  if (std::ranges::any_of(m_pending_efb_copies, [](const RcTcacheEntry& entry) {
+        return !entry->pending_efb_copy->IsCopySubmitted();
+      }))
+  {
+    g_gfx->Flush();
+  }
+}
+
+void TextureCacheBase::MarkPendingEFBCopiesPastSync()
+{
+  for (const auto& entry : m_pending_efb_copies)
+  {
+    // An earlier sync point may already have passed this copy.
+    if (entry->pending_efb_copy_past_sync)
+      continue;
+    entry->pending_efb_copy_past_sync = true;
+    entry->pending_efb_copy_sync_hash = HashPendingEFBCopyMemory(*entry);
+    entry->pending_efb_copy_sync_time_us = Common::Timer::NowUs();
+    entry->pending_efb_copy_sync_frame = m_efb_copy_frame;
+  }
+}
+
+void TextureCacheBase::WriteCompletedEFBCopies()
+{
+  if (m_pending_efb_copies.empty() || !UseAsyncEFBCopies())
+    return;
+
+  // The GPU completes the copies in the order they were recorded, which is the list order, and
+  // overlapping copies must reach guest RAM in that order too.
+  auto it = m_pending_efb_copies.begin();
+  for (; it != m_pending_efb_copies.end(); ++it)
+  {
+    if (!(*it)->pending_efb_copy->TryFlush())
+      break;
+    WritePendingEFBCopy(it->get());
+  }
+  m_pending_efb_copies.erase(m_pending_efb_copies.begin(), it);
+}
+
+void TextureCacheBase::WritePendingEFBCopy(TCacheEntry* entry)
+{
+  const u32 address = entry->addr;
+  const u32 size = PendingEFBCopySize(*entry);
+
+  if (entry->pending_efb_copy_past_sync)
+  {
+    entry->pending_efb_copy_past_sync = false;
+    const u64 late_us = Common::Timer::NowUs() - entry->pending_efb_copy_sync_time_us;
+    m_efb_copy_stats.late_writes++;
+    m_efb_copy_stats.late_us_total += late_us;
+    m_efb_copy_stats.late_us_max = std::max(m_efb_copy_stats.late_us_max, late_us);
+    if (HashPendingEFBCopyMemory(*entry) != entry->pending_efb_copy_sync_hash)
+    {
+      // The game wrote there after the sync point, so after the copy: its write is the newer one
+      // (the memory may be used for something else by now). The entry no longer matches the memory
+      // and is dropped when it is next looked up.
+      m_efb_copy_stats.conflicts++;
+      if (m_efb_copy_events_logged < MAX_EFB_COPY_EVENT_LOGS)
+      {
+        m_efb_copy_events_logged++;
+        WARN_LOG_FMT(VIDEO,
+                     "EFBCopyRAM: the game wrote to {:#010x}+{:#x} while its EFB copy was still on "
+                     "the GPU ({:.2f} ms after the sync point); the late copy is dropped.",
+                     address, size, late_us / 1000.0);
+      }
+      ReleaseEFBCopyStagingTexture(std::move(entry->pending_efb_copy));
+      return;
+    }
+  }
+
+  // This write is not a game write for later copies that cover the same memory.
+  std::vector<std::pair<TCacheEntry*, bool>> later;
+  if (UseAsyncEFBCopies())
+  {
+    for (const auto& other : m_pending_efb_copies)
+    {
+      if (other.get() != entry && other->pending_efb_copy &&
+          RangesOverlap(address, size, other->addr, PendingEFBCopySize(*other)))
+      {
+        later.emplace_back(other.get(),
+                           !other->invalidated && other->CalculateHash() == other->hash);
+      }
+    }
+  }
+
+  FlushEFBCopy(entry);
+
+  for (const auto& [other, hash_valid] : later)
+  {
+    if (other->pending_efb_copy_past_sync)
+      other->pending_efb_copy_sync_hash = HashPendingEFBCopyMemory(*other);
+    if (hash_valid)
+    {
+      const u64 hash = other->CalculateHash();
+      other->SetHashes(hash, hash);
+    }
+  }
+
+  if (g_ActiveConfig.vr_efb_copy_diagnostics)
+  {
+    std::erase_if(m_delivered_efb_copies, [&](const DeliveredEFBCopy& delivered) {
+      return RangesOverlap(address, size, delivered.address, delivered.size);
+    });
+    m_delivered_efb_copies.push_back(
+        {address, size, HashGuestRange(address, size), m_efb_copy_frame});
+  }
+}
+
+void TextureCacheBase::CheckDeliveredEFBCopies()
+{
+  for (auto it = m_delivered_efb_copies.begin(); it != m_delivered_efb_copies.end();)
+  {
+    const u32 frames = m_efb_copy_frame - it->frame;
+    if (HashGuestRange(it->address, it->size) != it->hash)
+    {
+      m_efb_copy_stats.modified_after_delivery++;
+      if (m_efb_copy_events_logged < MAX_EFB_COPY_EVENT_LOGS)
+      {
+        m_efb_copy_events_logged++;
+        WARN_LOG_FMT(VIDEO,
+                     "EFBCopyRAM: the game modified the EFB copy at {:#010x}+{:#x} {} frame(s) "
+                     "after it was written to RAM.",
+                     it->address, it->size, frames);
+      }
+      it = m_delivered_efb_copies.erase(it);
+    }
+    else if (frames > MAX_ASYNC_EFB_COPY_FRAMES)
+    {
+      it = m_delivered_efb_copies.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
+  }
+}
+
+void TextureCacheBase::UpdateEFBCopyStats()
+{
+  EFBCopyStats& stats = m_efb_copy_stats;
+  const bool async = UseAsyncEFBCopies();
+  if (!g_ActiveConfig.vr_efb_copy_diagnostics && !async)
+  {
+    stats = {};
+    m_delivered_efb_copies.clear();
+    return;
+  }
+
+  const u64 now_us = Common::Timer::NowUs();
+  if (stats.start_us == 0)
+    stats.start_us = now_us;
+  stats.frames++;
+  if (now_us - stats.start_us < 5'000'000)
+    return;
+
+  const double frames = static_cast<double>(stats.frames);
+  const double seconds = (now_us - stats.start_us) / 1'000'000.0;
+  INFO_LOG_FMT(VIDEO,
+               "EFBCopyRAM: {:.1f} f/s {} | to RAM/f={:.1f} ({:.0f} KiB/f) immediate/f={:.1f} | sync "
+               "points/f={:.1f} pending/f={:.1f} in flight/f={:.1f} | late writes/f={:.1f} "
+               "avg={:.2f}ms max={:.2f}ms forced/f={:.2f} superseded={} conflicts={} | modified "
+               "after delivery={}",
+               frames / seconds, async ? "async" : "blocking", stats.copies / frames,
+               stats.bytes / 1024.0 / frames, stats.immediate / frames, stats.sync_points / frames,
+               stats.pending_at_sync / frames, stats.in_flight_at_sync / frames,
+               stats.late_writes / frames,
+               stats.late_writes ? stats.late_us_total / 1000.0 / stats.late_writes : 0.0,
+               stats.late_us_max / 1000.0, stats.forced_flushes / frames, stats.superseded,
+               stats.conflicts, stats.modified_after_delivery);
+  stats = {};
+  stats.start_us = now_us;
 }
 
 void TextureCacheBase::FlushStaleBinds()
@@ -3064,6 +3361,7 @@ TextureCacheBase::InvalidateTexture(TexAddrCache::iterator iter, bool discard_pe
       // existing pending copy, and not bother waiting for it in the future. This happens in
       // Xenoblade's sunset scene, where 35 copies are done per frame, and 25 of them are
       // copied to the same address, and can be skipped.
+      m_efb_copy_stats.superseded += entry->pending_efb_copy_past_sync;
       ReleaseEFBCopyStagingTexture(std::move(entry->pending_efb_copy));
       auto pending_it = std::ranges::find(m_pending_efb_copies, entry);
       if (pending_it != m_pending_efb_copies.end())

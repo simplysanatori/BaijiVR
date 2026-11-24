@@ -21,6 +21,9 @@
 
 #include "VideoBackends/Vulkan/VulkanContext.h"
 #include "VideoCommon/Constants.h"
+#ifdef ENABLE_VR
+#include "VideoCommon/VR/Perf/VRPerf.h"
+#endif
 #if defined(ANDROID) && defined(ENABLE_VR)
 #include "VideoCommon/VR/OpenXRManager.h"
 #endif
@@ -314,6 +317,23 @@ bool CommandBufferManager::CreateSubmitThread()
       registered_with_openxr = true;
     }
 #endif
+#if defined(__linux__) && !defined(ANDROID) && defined(ENABLE_VR)
+    // Linux: a fast core off the CPU/Video cores, when there is a distinct one (see Thread.h).
+    static thread_local bool pinned_submit_worker = false;
+    if (!pinned_submit_worker)
+    {
+      pinned_submit_worker = true;
+      if (Config::Get(Config::GFX_VR_PIN_EMULATION_CORES))
+      {
+        const int core =
+            Common::PinCurrentThreadToPerformanceCore(Common::ThreadCoreRole::VRSubmit);
+        if (core >= 0)
+          INFO_LOG_FMT(VIDEO, "Vulkan submit worker pinned to performance core cpu{}.", core);
+        else
+          Common::ResetInheritedThreadAffinity();  // not the video thread's single core
+      }
+    }
+#endif
 
     if (ShouldLogSubmitDebug(s_worker_execute_log_count, MAX_WORKER_EXECUTE_LOGS))
     {
@@ -362,11 +382,16 @@ void CommandBufferManager::WaitForWorkerThreadIdle()
   m_submit_thread.WaitForCompletion();
 }
 
-void CommandBufferManager::WaitForFenceCounter(u64 fence_counter)
+static void ReportGpuWait([[maybe_unused]] u64 waited_us)
 {
-  if (m_completed_fence_counter >= fence_counter)
-    return;
+#ifdef ENABLE_VR
+  if (waited_us != 0)
+    VR::Perf::AddGpuWait(waited_us);
+#endif
+}
 
+u32 CommandBufferManager::FindCommandBufferForFenceCounter(u64 fence_counter) const
+{
   // Find the first command buffer which covers this counter value.
   u32 index = (m_current_cmd_buffer + 1) % m_num_command_buffers;
   while (index != m_current_cmd_buffer)
@@ -376,41 +401,98 @@ void CommandBufferManager::WaitForFenceCounter(u64 fence_counter)
 
     index = (index + 1) % m_num_command_buffers;
   }
-
-  ASSERT(index != m_current_cmd_buffer);
-  WaitForCommandBufferCompletion(index);
+  return index;
 }
 
-void CommandBufferManager::WaitForCommandBufferCompletion(u32 index)
+void CommandBufferManager::WaitForFenceCounter(u64 fence_counter)
+{
+  if (m_completed_fence_counter >= fence_counter)
+    return;
+
+  const u32 index = FindCommandBufferForFenceCounter(fence_counter);
+  ASSERT(index != m_current_cmd_buffer);
+  ReportGpuWait(WaitForCommandBufferCompletion(index));
+}
+
+bool CommandBufferManager::PollFenceCounter(u64 fence_counter)
+{
+  if (m_completed_fence_counter >= fence_counter)
+    return true;
+  // Nothing will ever complete after a device loss; report done so callers stop polling.
+  if (IsDeviceLost())
+    return true;
+
+  // Work still being recorded into the current buffer cannot be complete. Unlike
+  // WaitForFenceCounter's callers, a poller must not force a submit to make progress.
+  const u32 index = FindCommandBufferForFenceCounter(fence_counter);
+  if (index == m_current_cmd_buffer)
+    return false;
+
+  // The submit thread owns the buffer until its post-submit callback is done: the stereo pair's
+  // waits for this very fence, so the buffer must not count as completed (and be reused) before.
+  CmdBufferResources& resources = m_command_buffers[index];
+  if (resources.waiting_for_submit.load(std::memory_order_acquire))
+    return false;
+
+  const VkResult res = vkGetFenceStatus(g_vulkan_context->GetDevice(), resources.fence);
+  if (res == VK_NOT_READY)
+    return false;
+  if (res != VK_SUCCESS)
+  {
+    LOG_VULKAN_ERROR(res, "vkGetFenceStatus failed: ");
+    if (res == VK_ERROR_DEVICE_LOST)
+      HandleDeviceLost("vkGetFenceStatus");
+    return true;
+  }
+
+  OnCommandBufferCompleted(index);
+  return true;
+}
+
+u64 CommandBufferManager::WaitForCommandBufferCompletion(u32 index)
 {
   if (IsDeviceLost())
-    return;
+    return 0;
 
   const u64 perf_start_us = Common::Timer::NowUs();
   CmdBufferResources& resources = m_command_buffers[index];
 
   // Ensure this command buffer has been submitted.
-  if (resources.waiting_for_submit.load(std::memory_order_acquire))
+  bool waited = resources.waiting_for_submit.load(std::memory_order_acquire);
+  if (waited)
   {
     WaitForWorkerThreadIdle();
     ASSERT_MSG(VIDEO, !resources.waiting_for_submit.load(std::memory_order_relaxed),
                "Submit thread is idle but command buffer is still waiting for submission!");
   }
 
-  // Wait for this command buffer to be completed.
-  VkResult res =
-      vkWaitForFences(g_vulkan_context->GetDevice(), 1, &resources.fence, VK_TRUE, UINT64_MAX);
-  if (res != VK_SUCCESS)
+  // Wait for this command buffer to be completed, if it is not already.
+  if (vkGetFenceStatus(g_vulkan_context->GetDevice(), resources.fence) != VK_SUCCESS)
   {
-    LOG_VULKAN_ERROR(res, "vkWaitForFences failed: ");
-    if (res == VK_ERROR_DEVICE_LOST)
-      HandleDeviceLost("vkWaitForFences");
-    return;
+    waited = true;
+    VkResult res =
+        vkWaitForFences(g_vulkan_context->GetDevice(), 1, &resources.fence, VK_TRUE, UINT64_MAX);
+    if (res != VK_SUCCESS)
+    {
+      LOG_VULKAN_ERROR(res, "vkWaitForFences failed: ");
+      if (res == VK_ERROR_DEVICE_LOST)
+        HandleDeviceLost("vkWaitForFences");
+      return 0;
+    }
   }
 
+  OnCommandBufferCompleted(index);
+  const u64 elapsed_us = Common::Timer::NowUs() - perf_start_us;
+  g_vulkan_context->GetPerfCounters().fence_wait_us.fetch_add(elapsed_us,
+                                                              std::memory_order_relaxed);
+  return waited ? elapsed_us : 0;
+}
+
+void CommandBufferManager::OnCommandBufferCompleted(u32 index)
+{
   // Clean up any resources for command buffers between the last known completed buffer and this
   // now-completed command buffer. If we use >2 buffers, this may be more than one buffer.
-  const u64 now_completed_counter = resources.fence_counter;
+  const u64 now_completed_counter = m_command_buffers[index].fence_counter;
   u32 cleanup_index = (m_current_cmd_buffer + 1) % m_num_command_buffers;
   while (cleanup_index != m_current_cmd_buffer)
   {
@@ -429,8 +511,6 @@ void CommandBufferManager::WaitForCommandBufferCompletion(u32 index)
   }
 
   m_completed_fence_counter = now_completed_counter;
-  g_vulkan_context->GetPerfCounters().fence_wait_us.fetch_add(
-      Common::Timer::NowUs() - perf_start_us, std::memory_order_relaxed);
 }
 
 bool CommandBufferManager::SubmitCommandBuffer(bool submit_on_worker_thread,
@@ -505,6 +585,8 @@ bool CommandBufferManager::SubmitCommandBuffer(bool submit_on_worker_thread,
   }
   else
   {
+    // The submit thread may still be waiting for the stereo pair: part of the wait below.
+    const u64 wait_start_us = wait_for_completion ? Common::Timer::NowUs() : 0;
     WaitForWorkerThreadIdle();
 
     // Pass through to normal submission path.
@@ -515,7 +597,10 @@ bool CommandBufferManager::SubmitCommandBuffer(bool submit_on_worker_thread,
     if (submit_result != VK_SUCCESS)
       return false;
     if (wait_for_completion)
+    {
       WaitForCommandBufferCompletion(m_current_cmd_buffer);
+      m_last_completion_wait_us = Common::Timer::NowUs() - wait_start_us;
+    }
     if (IsDeviceLost())
       return false;
   }
@@ -568,7 +653,7 @@ bool CommandBufferManager::SubmitCommandBuffer(bool submit_on_worker_thread,
       if (cmd_buffer.frame_index == m_current_frame && cmd_buffer.fence_counter != 0 &&
           cmd_buffer.fence_counter > m_completed_fence_counter)
       {
-        WaitForCommandBufferCompletion(cmd_buffer_index);
+        ReportGpuWait(WaitForCommandBufferCompletion(cmd_buffer_index));
       }
       cmd_buffer_index = (cmd_buffer_index + 1) % m_num_command_buffers;
     }
@@ -722,7 +807,7 @@ void CommandBufferManager::BeginCommandBuffer()
 
   // Wait for the GPU to finish with all resources for this command buffer.
   if (resources.fence_counter > m_completed_fence_counter)
-    WaitForCommandBufferCompletion(next_buffer_index);
+    ReportGpuWait(WaitForCommandBufferCompletion(next_buffer_index));
   if (IsDeviceLost())
     return;
 
