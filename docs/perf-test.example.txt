@@ -19,7 +19,6 @@ settle = 4
 rounds = 3
 
 baseline:
-waits: AsyncEFBCopies=true; NonBlockingPerfQueries=true
 hybrid ubershaders: ShaderCompilationMode=2
 3x: InternalResolution=3
 dynamic: DynamicResolution=true

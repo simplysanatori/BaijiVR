@@ -31,6 +31,7 @@
 #include "VideoCommon/PixelShaderManager.h"
 #include "VideoCommon/ShaderGenCommon.h"
 #include "VideoCommon/TextureCacheBase.h"
+#include "VideoCommon/VR/Perf/DynamicResolution.h"
 #include "VideoCommon/VertexManagerBase.h"
 #include "VideoCommon/XFMemory.h"
 
@@ -52,6 +53,9 @@ void UpdateActiveConfig()
 {
   g_ActiveConfig = g_Config;
   g_ActiveConfig.bVSyncActive = IsVSyncActive(g_ActiveConfig.bVSync);
+#ifdef ENABLE_VR
+  g_ActiveConfig.iEFBScale = VR::DynamicResolution::GetEFBScale(g_ActiveConfig);
+#endif
 }
 
 namespace
