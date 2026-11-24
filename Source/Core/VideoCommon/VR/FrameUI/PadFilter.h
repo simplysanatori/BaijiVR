@@ -15,7 +15,7 @@
 // controllers before the game sees them:
 //
 //   Menu tapped: the game's button. Held 1 s: the VR menu.
-//   View tapped: the game's button. Held 1.5 s: stop the game.
+//   View tapped: the game's button. Held 1.5 s: stop the game (in the VR menu too).
 //   View + Right Bumper, let go: Quick Save. View + Left Bumper held half a second: Quick Load.
 //   View + Right Trigger, let go: Fast Forward on or off.
 //   Both bumpers, then View and Menu: Stereoscopic 3D or Immersive.

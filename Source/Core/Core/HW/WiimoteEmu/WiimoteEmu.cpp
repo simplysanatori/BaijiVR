@@ -18,6 +18,7 @@
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/MathUtil.h"
+#include "Common/VR/OpenXRInputState.h"
 
 #include "Core/Config/MainSettings.h"
 #include "Core/Config/SYSCONFSettings.h"
@@ -493,6 +494,8 @@ void Wiimote::BuildDesiredWiimoteState(DesiredWiimoteState* target_state,
   m_dpad->GetState(&target_state->buttons.hex,
                    IsSideways() ? dpad_sideways_bitmasks : dpad_bitmasks,
                    m_input_override_function);
+  if (m_index == 0 && Common::VR::OpenXRInputState::IsHomePressed())
+    target_state->buttons.hex |= BUTTON_HOME;
 
   // Calculate accelerometer state.
   // Calibration values are 8-bit but we want 10-bit precision, so << 2.

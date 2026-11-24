@@ -87,8 +87,9 @@ constexpr float FAST_FORWARD_SPEED = 2.0f;
 std::atomic<bool> s_paused_by_menu{false};
 std::mutex s_toast_mutex;
 std::optional<std::pair<std::string, u32>> s_toast;
-// After the toast there is.
+// After the next toast that is posted.
 std::optional<std::pair<std::string, u32>> s_next_toast;
+bool s_next_toast_ready = false;
 // The save states on disk changed.
 std::atomic<u32> s_saves_changed{0};
 std::atomic<u32> s_mods_changed{0};
@@ -178,6 +179,7 @@ void ShowSaveStateNotice()
   Config::SetBaseOrCurrent(Config::MAIN_SAVE_STATE_NOTICE_SHOWN, true);
   std::lock_guard lock(s_toast_mutex);
   s_next_toast.emplace("Save states are NOT a replacement for saving in the game", 5000);
+  s_next_toast_ready = false;
 }
 
 void QueueSave(std::string path)
@@ -185,8 +187,8 @@ void QueueSave(std::string path)
   Core::QueueHostJob([path = std::move(path)](Core::System& system) {
     // Says it is saved (PostEmulatorMessage) once it is.
     File::CreateFullPath(path);
-    State::SaveAs(system, path);
     ShowSaveStateNotice();
+    State::SaveAs(system, path);
   });
 }
 
@@ -345,6 +347,7 @@ void VrUi::PostToast(std::string text, u32 ms)
 {
   std::lock_guard lock(s_toast_mutex);
   s_toast.emplace(std::move(text), ms);
+  s_next_toast_ready = true;
 }
 
 void VrUi::PostEmulatorMessage(std::string_view message, u32 ms)
@@ -1276,7 +1279,7 @@ void VrUi::UpdateToasts(const Frame& frame)
   {
     std::lock_guard lock(s_toast_mutex);
     posted = std::exchange(s_toast, std::nullopt);
-    if (!posted && m_toast_until_ns == 0 && !m_menu_open)
+    if (!posted && s_next_toast_ready && m_toast_until_ns == 0 && !m_menu_open)
       posted = std::exchange(s_next_toast, std::nullopt);
   }
   if (posted && g_ActiveConfig.vr_toasts)

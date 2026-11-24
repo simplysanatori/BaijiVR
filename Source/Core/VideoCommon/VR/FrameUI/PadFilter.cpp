@@ -124,8 +124,22 @@ PadEvents PadFilter::Update(Controllers* controllers, s64 now_ns, bool blocked, 
   {
     // What is down when the menu lets go of the controllers was meant for the menu.
     const Controllers raw = *controllers;
+    // View stops the game from the menu too.
+    const bool view = left.view_button || right.view_button;
+    const bool counts = view && m_blocked && m_view_down;
+    const bool used = counts && m_view_used;
+    const s64 since = counts ? m_view_since : now_ns;
     Reset();
     m_blocked = true;
+    m_view_down = view;
+    m_view_since = since;
+    m_view_used = used;
+    if (view && !used)
+    {
+      events.stop = now_ns - since >= STOP_NS;
+      events.stopping = !events.stop && now_ns - since >= STOP_NS / 2;
+      m_view_used = events.stop;
+    }
     SwallowHeld(raw);
     for (State& state : *controllers)
     {
@@ -136,6 +150,9 @@ PadEvents PadFilter::Update(Controllers* controllers, s64 now_ns, bool blocked, 
     }
     return events;
   }
+  // A View held since the menu is not a hold of its own.
+  if (m_blocked && m_view_down)
+    m_view_used = true;
   m_blocked = false;
 
   // Swallowed controls look let go to everything below, but for the View combinations, which

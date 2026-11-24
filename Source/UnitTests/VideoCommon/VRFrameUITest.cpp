@@ -190,6 +190,33 @@ TEST(VRFrameUI, MenuGivesBackOnlyWhatIsLetGo)
   EXPECT_TRUE(pad.seen[1].primary_button);
 }
 
+TEST(VRFrameUI, ViewStopsFromTheMenu)
+{
+  Pad pad;
+  pad.blocked = true;
+  pad.raw[0].view_button = true;
+  pad.Run(1000);
+  EXPECT_TRUE(pad.stopping);
+  EXPECT_EQ(pad.stops, 0);
+  pad.Run(1500);
+  EXPECT_EQ(pad.stops, 1);
+  EXPECT_FALSE(pad.game_view);
+
+  // Let go half way, or closed the menu half way: nothing.
+  Pad other;
+  other.blocked = true;
+  other.raw[0].view_button = true;
+  other.Run(1000);
+  other.raw[0].view_button = false;
+  other.Run(100);
+  other.raw[0].view_button = true;
+  other.Run(1000);
+  other.blocked = false;
+  other.Run(2000);
+  EXPECT_EQ(other.stops, 0);
+  EXPECT_FALSE(other.game_view);
+}
+
 TEST(VRFrameUI, GrabKeepsTheStickFromTheGame)
 {
   Pad pad;

@@ -328,15 +328,7 @@ ControllerEmu::InputOverrideFunction CreateOpenXRInputOverrideFunction(unsigned 
       cached_state.generation = snapshot.generation;
     }
 
-    if (group_name == WiimoteEmu::Wiimote::BUTTONS_GROUP)
-    {
-      if (!attachment && control_name == WiimoteEmu::Wiimote::HOME_BUTTON &&
-          Common::VR::OpenXRInputState::IsHomePressed())
-      {
-        return 1.0;
-      }
-    }
-    else if (group_name == WiimoteEmu::Wiimote::DPAD_GROUP)
+    if (group_name == WiimoteEmu::Wiimote::DPAD_GROUP)
     {
       if (attachment)
         return std::nullopt;
