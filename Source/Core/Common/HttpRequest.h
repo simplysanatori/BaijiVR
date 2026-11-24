@@ -14,6 +14,11 @@
 
 #include "Common/CommonTypes.h"
 
+namespace File
+{
+class IOFile;
+}
+
 namespace Common
 {
 class HttpRequest final
@@ -50,6 +55,10 @@ public:
   std::string GetHeaderValue(std::string_view name) const;
   Response Get(const std::string& url, const Headers& headers = {},
                AllowedReturnCodes codes = AllowedReturnCodes::Ok_Only);
+  // Streams a 200 reply that is not a web page into file (*wrote tells); any other reply is
+  // returned, up to 512 KB. Redirects are not followed: redirect gets the address to go to.
+  Response GetToFile(const std::string& url, File::IOFile* file, bool* wrote, std::string* redirect,
+                     const Headers& headers = {});
   Response Post(const std::string& url, const std::vector<u8>& payload, const Headers& headers = {},
                 AllowedReturnCodes codes = AllowedReturnCodes::Ok_Only);
   Response Post(const std::string& url, const std::string& payload, const Headers& headers = {},

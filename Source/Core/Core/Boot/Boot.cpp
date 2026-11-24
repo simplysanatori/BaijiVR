@@ -55,6 +55,7 @@
 #include "Core/System.h"
 
 #include "DiscIO/Enums.h"
+#include "Core/GameMods/GameModsInternal.h"
 #include "DiscIO/GameModDescriptor.h"
 #include "DiscIO/RiivolutionParser.h"
 #include "DiscIO/RiivolutionPatcher.h"
@@ -243,8 +244,13 @@ std::unique_ptr<BootParameters> BootParameters::GenerateFromFile(std::vector<std
     std::unique_ptr<DiscIO::VolumeDisc> disc = DiscIO::CreateDiscForCore(path);
     if (disc)
     {
-      return std::make_unique<BootParameters>(Disc{std::move(path), std::move(disc), paths},
-                                              std::move(boot_session_data_));
+      // Riivolution mods switched on from the mods list, with the XML's own default options.
+      auto patches = GameMods::Internal::GetRiivolutionPatches(disc->GetGameID(), disc->GetRevision(),
+                                                               disc->GetDiscNumber());
+      auto boot_params = std::make_unique<BootParameters>(Disc{std::move(path), std::move(disc), paths},
+                                                          std::move(boot_session_data_));
+      AddRiivolutionPatches(boot_params.get(), std::move(patches));
+      return boot_params;
     }
 
     if (extension == ".elf")

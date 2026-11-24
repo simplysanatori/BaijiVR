@@ -3,18 +3,29 @@
 
 #include "Common/HttpRequest.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <mutex>
 
 #include <curl/curl.h>
 
+#include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Common/ScopeGuard.h"
 #include "Common/StringUtil.h"
 
 namespace Common
 {
+struct FileTarget
+{
+  CURL* curl = nullptr;
+  File::IOFile* file = nullptr;
+  std::vector<u8>* buffer = nullptr;
+  bool decided = false;
+  bool to_file = false;
+};
+
 class HttpRequest::Impl final
 {
 public:
@@ -34,7 +45,9 @@ public:
   s32 GetLastResponseCode();
   Response Fetch(const std::string& url, Method method, const Headers& headers, const u8* payload,
                  size_t size, AllowedReturnCodes codes = AllowedReturnCodes::Ok_Only,
-                 std::span<Multiform> multiform = {});
+                 std::span<Multiform> multiform = {}, FileTarget* target = nullptr);
+  Response GetToFile(const std::string& url, File::IOFile* file, bool* wrote, std::string* redirect,
+                     const Headers& headers);
 
   static int CurlProgressCallback(Impl* impl, curl_off_t dltotal, curl_off_t dlnow,
                                   curl_off_t ultotal, curl_off_t ulnow);
@@ -94,6 +107,13 @@ HttpRequest::Response HttpRequest::Get(const std::string& url, const Headers& he
                                        AllowedReturnCodes codes)
 {
   return m_impl->Fetch(url, Impl::Method::GET, headers, nullptr, 0, codes);
+}
+
+HttpRequest::Response HttpRequest::GetToFile(const std::string& url, File::IOFile* file,
+                                             bool* wrote, std::string* redirect,
+                                             const Headers& headers)
+{
+  return m_impl->GetToFile(url, file, wrote, redirect, headers);
 }
 
 HttpRequest::Response HttpRequest::Post(const std::string& url, const std::vector<u8>& payload,
@@ -212,6 +232,31 @@ static size_t CurlWriteCallback(char* data, size_t size, size_t nmemb, void* use
   return actual_size;
 }
 
+static size_t CurlFileWriteCallback(char* data, size_t size, size_t nmemb, void* userdata)
+{
+  auto* target = static_cast<FileTarget*>(userdata);
+  const size_t actual_size = size * nmemb;
+  if (!target->decided)
+  {
+    long code = 0;
+    char* type = nullptr;
+    curl_easy_getinfo(target->curl, CURLINFO_RESPONSE_CODE, &code);
+    curl_easy_getinfo(target->curl, CURLINFO_CONTENT_TYPE, &type);
+    const std::string_view type_view = type ? type : "";
+    target->decided = true;
+    target->to_file = code == 200 && !(type_view.size() >= 9 && type_view.substr(0, 9) == "text/html");
+  }
+  if (target->to_file)
+    return target->file->WriteBytes(data, actual_size) ? actual_size : 0;
+  constexpr size_t PAGE_LIMIT = 512 * 1024;
+  if (target->buffer->size() < PAGE_LIMIT)
+  {
+    const size_t take = std::min(actual_size, PAGE_LIMIT - target->buffer->size());
+    target->buffer->insert(target->buffer->end(), data, data + take);
+  }
+  return actual_size;
+}
+
 static size_t header_callback(char* buffer, size_t size, size_t nitems, void* userdata)
 {
   auto* headers = static_cast<HttpRequest::Headers*>(userdata);
@@ -230,7 +275,8 @@ static size_t header_callback(char* buffer, size_t size, size_t nitems, void* us
 HttpRequest::Response HttpRequest::Impl::Fetch(const std::string& url, Method method,
                                                const Headers& headers, const u8* payload,
                                                size_t size, AllowedReturnCodes codes,
-                                               std::span<Multiform> multiform)
+                                               std::span<Multiform> multiform,
+                                               FileTarget* target)
 {
   m_response_headers.clear();
   curl_easy_setopt(m_curl.get(), CURLOPT_POST, method == Method::POST);
@@ -273,8 +319,18 @@ HttpRequest::Response HttpRequest::Impl::Fetch(const std::string& url, Method me
   curl_easy_setopt(m_curl.get(), CURLOPT_HEADERDATA, static_cast<void*>(&m_response_headers));
 
   std::vector<u8> buffer;
-  curl_easy_setopt(m_curl.get(), CURLOPT_WRITEFUNCTION, CurlWriteCallback);
-  curl_easy_setopt(m_curl.get(), CURLOPT_WRITEDATA, &buffer);
+  if (target)
+  {
+    target->curl = m_curl.get();
+    target->buffer = &buffer;
+    curl_easy_setopt(m_curl.get(), CURLOPT_WRITEFUNCTION, CurlFileWriteCallback);
+    curl_easy_setopt(m_curl.get(), CURLOPT_WRITEDATA, target);
+  }
+  else
+  {
+    curl_easy_setopt(m_curl.get(), CURLOPT_WRITEFUNCTION, CurlWriteCallback);
+    curl_easy_setopt(m_curl.get(), CURLOPT_WRITEDATA, &buffer);
+  }
 
   const char* type = method == Method::POST ? "POST" : "GET";
   const CURLcode res = curl_easy_perform(m_curl.get());
@@ -306,5 +362,23 @@ HttpRequest::Response HttpRequest::Impl::Fetch(const std::string& url, Method me
   }
 
   return buffer;
+}
+
+HttpRequest::Response HttpRequest::Impl::GetToFile(const std::string& url, File::IOFile* file,
+                                                   bool* wrote, std::string* redirect,
+                                                   const Headers& headers)
+{
+  FileTarget target;
+  target.file = file;
+  auto response = Fetch(url, Method::GET, headers, nullptr, 0, AllowedReturnCodes::All, {}, &target);
+  *wrote = target.to_file;
+  redirect->clear();
+  char* location = nullptr;
+  if (response && curl_easy_getinfo(m_curl.get(), CURLINFO_REDIRECT_URL, &location) == CURLE_OK &&
+      location)
+  {
+    *redirect = location;
+  }
+  return response;
 }
 }  // namespace Common

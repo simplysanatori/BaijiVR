@@ -28,6 +28,7 @@
 #include "Core/ConfigLoaders/BaseConfigLoader.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
+#include "Core/GameMods/GameMods.h"
 #include "Core/FreeLookManager.h"
 #include "Core/HW/GBAPad.h"
 #include "Core/HW/GCKeyboard.h"
@@ -146,6 +147,7 @@ void Init()
 
 void Shutdown()
 {
+  GameMods::Shutdown();
   Config::RemoveConfigChangedCallback(s_config_changed_callback_id);
 
   Statistics::Shutdown();

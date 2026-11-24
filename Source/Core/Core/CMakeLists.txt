@@ -126,6 +126,10 @@ add_library(core
   FifoPlayer/FifoRecorder.cpp
   FifoPlayer/FifoRecorder.h
   FreeLookManager.cpp
+  GameMods/GameMods.cpp
+  GameMods/GameMods.h
+  GameMods/GameModsInternal.h
+  GameMods/Install.cpp
   FreeLookManager.h
   GeckoCode.cpp
   GeckoCode.h
