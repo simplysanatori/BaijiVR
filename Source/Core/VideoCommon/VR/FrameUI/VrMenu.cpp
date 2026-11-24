@@ -163,7 +163,7 @@ void AddMain(Builder* builder, const MenuState& state)
       {MenuItem::SaveState, Icon::kSaveAs, "Save State"},
       {MenuItem::LoadState, Icon::kFolderOpen, "Load State"},
       {MenuItem::Screenshot, Icon::kPhotoCamera, "Screenshot"},
-      {MenuItem::ResetScreen, Icon::kRecenter, "Reset Screen", false, state.immersive},
+      {MenuItem::ResetScreen, Icon::kRecenter, state.immersive ? "Reset View" : "Reset Screen"},
       {MenuItem::FastForward, Icon::kSpeed, "Fast Forward", state.fast_forward},
       state.wii ? TileItem{MenuItem::Home, Icon::kHome, "Wii Home"} :
                   TileItem{MenuItem::Restart, Icon::kRestartAlt, "Restart"},
@@ -331,7 +331,7 @@ void AddControls(Builder* builder, const MenuState& state)
   builder->Text("Quick Save", "View, then Right Bumper");
   builder->Text("Quick Load", "View, then Hold Left Bumper");
   builder->Text("Fast Forward", "View, then Right Trigger");
-  builder->Text("Reset Screen", "Hold Right Stick Click");
+  builder->Text("Reset Screen or View", "Hold Right Stick Click");
   builder->Text("3D Screen or Immersive", "Both Bumpers, then View and Menu");
   builder->Gap(12.0f);
   builder->Text("Move Screen", "Grip");

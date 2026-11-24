@@ -427,7 +427,12 @@ void VrUi::HandleEvents(const PadEvents& events)
     SetFastForward(!m_fast_forward);
   if (events.switch_mode)
     SwitchMode();
-  if (events.reset_screen)
+  if (events.reset_screen && !m_frame.has_screen)
+  {
+    m_manager->RequestRecenter();
+    ShowToast("View Reset", ToastFit::kShortNs);
+  }
+  else if (events.reset_screen)
   {
     m_manager->ResetScreenPlacement();
     SaveScreenPlacement();
