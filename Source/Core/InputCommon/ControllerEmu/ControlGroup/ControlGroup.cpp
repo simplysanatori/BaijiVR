@@ -10,6 +10,9 @@
 #include "InputCommon/ControllerEmu/Control/Output.h"
 #include "InputCommon/ControllerEmu/ControllerEmu.h"
 #include "InputCommon/ControllerEmu/Setting/NumericSetting.h"
+#ifdef ENABLE_VR
+#include "InputCommon/ControllerInterface/OpenXR/FrameControllerNames.h"
+#endif
 
 namespace ControllerEmu
 {
@@ -72,6 +75,9 @@ void ControlGroup::LoadConfig(Common::IniFile::Section* sec, const std::string& 
       // control expression
       std::string expression;
       sec->Get(group + c->name, &expression, "");
+#ifdef ENABLE_VR
+      ciface::OpenXR::UpdateFrameExpression(group + c->name, &expression);
+#endif
       c->control_ref->SetExpression(std::move(expression));
     }
 

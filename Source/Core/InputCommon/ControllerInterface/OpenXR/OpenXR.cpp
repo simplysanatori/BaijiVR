@@ -4,6 +4,7 @@
 #ifdef ENABLE_VR
 
 #include "InputCommon/ControllerInterface/OpenXR/OpenXR.h"
+#include "InputCommon/ControllerInterface/OpenXR/FrameControllerNames.h"
 
 #include <algorithm>
 #include <array>
@@ -332,14 +333,11 @@ private:
 
   void AddHandInputs(Hand hand)
   {
-    AddInput(new DigitalInput(this, hand, DigitalControl::Primary));
-    AddInput(new DigitalInput(this, hand, DigitalControl::Secondary));
-    AddInput(new DigitalInput(this, hand, DigitalControl::Menu));
-    AddInput(new DigitalInput(this, hand, DigitalControl::System));
     AddInput(new DigitalInput(this, hand, DigitalControl::Bumper));
     AddInput(new DigitalInput(this, hand, DigitalControl::Trigger));
     AddInput(new DigitalInput(this, hand, DigitalControl::Squeeze));
     AddInput(new DigitalInput(this, hand, DigitalControl::Thumbstick));
+    AddInput(new DigitalInput(this, hand, DigitalControl::System));
     if (hand == Hand::Left)
     {
       AddInput(new DigitalInput(this, hand, DigitalControl::View));
@@ -350,8 +348,11 @@ private:
     }
     else
     {
+      AddInput(new DigitalInput(this, hand, DigitalControl::Primary));
+      AddInput(new DigitalInput(this, hand, DigitalControl::Secondary));
       AddInput(new DigitalInput(this, hand, DigitalControl::FrameX));
       AddInput(new DigitalInput(this, hand, DigitalControl::FrameY));
+      AddInput(new DigitalInput(this, hand, DigitalControl::Menu));
     }
     AddInput(new AnalogInput(this, hand, AnalogControl::Trigger));
     AddInput(new AnalogInput(this, hand, AnalogControl::Squeeze));
@@ -424,38 +425,43 @@ private:
       switch (m_control)
       {
       case DigitalControl::Primary:
-        return prefix + (m_hand == Hand::Left ? " Button X" : " Button A");
+        return "A";
       case DigitalControl::Secondary:
-        return prefix + (m_hand == Hand::Left ? " Button Y" : " Button B");
+        return "B";
       case DigitalControl::Menu:
-        return prefix + " Button Menu";
+        return "Menu";
       case DigitalControl::System:
-        return prefix + " Button System";
+        return prefix + " System";
       case DigitalControl::View:
-        return prefix + " Button View";
+        return "View";
       case DigitalControl::Bumper:
-        return prefix + " Button Bumper";
+        return prefix + " Bumper";
       case DigitalControl::DpadUp:
-        return prefix + " D-Pad Up";
+        return "D-Pad Up";
       case DigitalControl::DpadDown:
-        return prefix + " D-Pad Down";
+        return "D-Pad Down";
       case DigitalControl::DpadLeft:
-        return prefix + " D-Pad Left";
+        return "D-Pad Left";
       case DigitalControl::DpadRight:
-        return prefix + " D-Pad Right";
+        return "D-Pad Right";
       case DigitalControl::FrameX:
-        return prefix + " Button X";
+        return "X";
       case DigitalControl::FrameY:
-        return prefix + " Button Y";
+        return "Y";
       case DigitalControl::Trigger:
-        return prefix + " Button Trigger";
+        return prefix + " Trigger Click";
       case DigitalControl::Squeeze:
-        return prefix + " Button Squeeze";
+        return prefix + " Grip";
       case DigitalControl::Thumbstick:
-        return prefix + " Button Thumbstick";
+        return prefix + " Stick Click";
       }
 
       return "";
+    }
+
+    bool IsMatchingName(std::string_view name) const override
+    {
+      return Input::IsMatchingName(GetFrameInputName(name));
     }
 
     ControlState GetState() const override
@@ -471,9 +477,7 @@ private:
       case DigitalControl::Secondary:
         return state.secondary_button ? 1.0 : 0.0;
       case DigitalControl::Menu:
-        // Keep the old left-menu control name as a hidden alias for Frame's left View button.
-        // Existing hotkey configs used Left Button Menu for Stop.
-        return (m_hand == Hand::Left ? state.view_button : state.menu_button) ? 1.0 : 0.0;
+        return state.menu_button ? 1.0 : 0.0;
       case DigitalControl::System:
         return state.system_button ? 1.0 : 0.0;
       case DigitalControl::View:
@@ -505,10 +509,8 @@ private:
 
     bool IsHidden() const override
     {
-      // Frame has a left D-pad and View button, not the left-hand X/Y/Menu controls in Touch.
-      return m_hand == Hand::Left &&
-             (m_control == DigitalControl::Primary || m_control == DigitalControl::Secondary ||
-              m_control == DigitalControl::Menu);
+      // The Steam button is the system's.
+      return m_control == DigitalControl::System;
     }
 
   private:
@@ -533,15 +535,20 @@ private:
       case AnalogControl::Trigger:
         return prefix + " Trigger";
       case AnalogControl::Squeeze:
-        return prefix + " Squeeze";
+        return prefix + " Grip Pressure";
       case AnalogControl::SqueezeForce:
-        return prefix + " Squeeze Force";
+        return prefix + " Grip Force";
       }
 
       return "";
     }
 
     bool IsHidden() const override { return m_control == AnalogControl::Squeeze; }
+
+    bool IsMatchingName(std::string_view name) const override
+    {
+      return Input::IsMatchingName(GetFrameInputName(name));
+    }
 
     ControlState GetState() const override
     {
@@ -579,8 +586,14 @@ private:
     std::string GetName() const override
     {
       const std::string prefix = m_device.GetHandPrefix(m_hand);
-      const char axis_char = m_axis == AxisControl::ThumbstickX ? 'X' : 'Y';
-      return prefix + " Thumbstick " + axis_char + (m_positive ? '+' : '-');
+      if (m_axis == AxisControl::ThumbstickX)
+        return prefix + (m_positive ? " Stick Right" : " Stick Left");
+      return prefix + (m_positive ? " Stick Up" : " Stick Down");
+    }
+
+    bool IsMatchingName(std::string_view name) const override
+    {
+      return Input::IsMatchingName(GetFrameInputName(name));
     }
 
     ControlState GetState() const override

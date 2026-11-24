@@ -194,33 +194,33 @@ void GCPad::LoadDefaults(const ControllerInterface& ciface)
 #ifdef ENABLE_VR
   SetDefaultDevice("OpenXR/0/OpenXR Controller");
 
-  // Baiju's default pad is the Steam Frame controller, not a keyboard.
-  m_buttons->SetControlExpression(0, "`Right Button A`");
-  m_buttons->SetControlExpression(1, "`Right Button B`");
-  m_buttons->SetControlExpression(2, "`Right Button X`");
-  m_buttons->SetControlExpression(3, "`Right Button Y`");
-  m_buttons->SetControlExpression(4, "`Right Button Squeeze`");
-  m_buttons->SetControlExpression(5, "`Right Button Menu`");
+  // Baiji's default pad is the Steam Frame controller, not a keyboard.
+  m_buttons->SetControlExpression(0, "`A`");
+  m_buttons->SetControlExpression(1, "`B`");
+  m_buttons->SetControlExpression(2, "`X`");
+  m_buttons->SetControlExpression(3, "`Y`");
+  m_buttons->SetControlExpression(4, "`Right Bumper`");
+  m_buttons->SetControlExpression(5, "`Menu`");
 
-  m_main_stick->SetControlExpression(0, "`Left Thumbstick Y+`");
-  m_main_stick->SetControlExpression(1, "`Left Thumbstick Y-`");
-  m_main_stick->SetControlExpression(2, "`Left Thumbstick X-`");
-  m_main_stick->SetControlExpression(3, "`Left Thumbstick X+`");
+  m_main_stick->SetControlExpression(0, "`Left Stick Up`");
+  m_main_stick->SetControlExpression(1, "`Left Stick Down`");
+  m_main_stick->SetControlExpression(2, "`Left Stick Left`");
+  m_main_stick->SetControlExpression(3, "`Left Stick Right`");
 
-  m_c_stick->SetControlExpression(0, "`Right Thumbstick Y+`");
-  m_c_stick->SetControlExpression(1, "`Right Thumbstick Y-`");
-  m_c_stick->SetControlExpression(2, "`Right Thumbstick X-`");
-  m_c_stick->SetControlExpression(3, "`Right Thumbstick X+`");
+  m_c_stick->SetControlExpression(0, "`Right Stick Up`");
+  m_c_stick->SetControlExpression(1, "`Right Stick Down`");
+  m_c_stick->SetControlExpression(2, "`Right Stick Left`");
+  m_c_stick->SetControlExpression(3, "`Right Stick Right`");
 
-  m_triggers->SetControlExpression(0, "`Left Button Trigger`");
-  m_triggers->SetControlExpression(1, "`Right Button Trigger`");
+  m_triggers->SetControlExpression(0, "`Left Trigger Click`");
+  m_triggers->SetControlExpression(1, "`Right Trigger Click`");
   m_triggers->SetControlExpression(2, "`Left Trigger`");
   m_triggers->SetControlExpression(3, "`Right Trigger`");
 
-  m_dpad->SetControlExpression(0, "`Left D-Pad Up`");
-  m_dpad->SetControlExpression(1, "`Left D-Pad Down`");
-  m_dpad->SetControlExpression(2, "`Left D-Pad Left`");
-  m_dpad->SetControlExpression(3, "`Left D-Pad Right`");
+  m_dpad->SetControlExpression(0, "`D-Pad Up`");
+  m_dpad->SetControlExpression(1, "`D-Pad Down`");
+  m_dpad->SetControlExpression(2, "`D-Pad Left`");
+  m_dpad->SetControlExpression(3, "`D-Pad Right`");
 
   m_rumble->SetControlExpression(0, "Motor");
 #elif defined(ANDROID)

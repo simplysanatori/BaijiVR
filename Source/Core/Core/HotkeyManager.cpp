@@ -459,8 +459,9 @@ void HotkeyManager::LoadDefaults(const ControllerInterface& ciface)
 
 #ifdef ENABLE_VR
   SetDefaultDevice("OpenXR/0/OpenXR Controller");
-  // Keep Right Button Menu available for GameCube Start.
-  set_key_expression(HK_STOP, "`Left Button View`");
+  // In the headset holding View is one of the VR controls (PadFilter.h) and never reaches this;
+  // this is for Flat, which has no VR session.
+  set_key_expression(HK_STOP, "hold(`View`, 1.5)");
   // Steam Frame provides headset recentering at the OS/runtime level; leave the app hotkey unset.
   return;
 #endif

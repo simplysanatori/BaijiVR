@@ -224,8 +224,40 @@ OpenXRWiimoteState BuildOpenXRState(const Common::VR::OpenXRControllerState& con
   return out;
 }
 
+// With the pointer on the controller's ray, the sticks are free: the right one is the Wii Remote's
+// D-Pad (the left thumb is on the Nunchuk's stick), and so is the left one without an extension.
+std::optional<ControlState> StickDPad(const Common::VR::OpenXRInputSnapshot& snapshot,
+                                      bool left_stick_too, std::string_view direction,
+                                      ControlState bound)
+{
+  if (bound > 0.5)
+    return bound;
+
+  constexpr float THRESHOLD = 0.5f;
+  for (const std::size_t hand : {std::size_t(1), std::size_t(0)})
+  {
+    if (hand == 0 && !left_stick_too)
+      continue;
+    const auto& controller = snapshot.controllers[hand];
+    const float x = controller.thumbstick_x;
+    const float y = controller.thumbstick_y;
+    // Diagonals need both axes well over: a push to one side with a little lean is one direction.
+    const bool vertical = std::abs(y) > THRESHOLD && std::abs(y) > std::abs(x) * 0.5f;
+    const bool horizontal = std::abs(x) > THRESHOLD && std::abs(x) > std::abs(y) * 0.5f;
+    if ((direction == "Up" && vertical && y > 0) || (direction == "Down" && vertical && y < 0) ||
+        (direction == "Left" && horizontal && x < 0) ||
+        (direction == "Right" && horizontal && x > 0))
+    {
+      return 1.0;
+    }
+  }
+  return bound;
+}
+
+// `attachment` is for an extension: it has its own sticks, and its own D-Pad.
 ControllerEmu::InputOverrideFunction CreateOpenXRInputOverrideFunction(unsigned int wiimote_index,
-                                                                       bool prefer_left_hand)
+                                                                       bool prefer_left_hand,
+                                                                       bool attachment)
 {
   OpenXRWiimoteState cached_state;
   OpenXRVelocityHistory left_velocity_history;
@@ -235,10 +267,10 @@ ControllerEmu::InputOverrideFunction CreateOpenXRInputOverrideFunction(unsigned 
   float held_ir_y = 0.0f;
   float held_ir_z = 0.0f;
 
-  return [wiimote_index, prefer_left_hand, cached_state, left_velocity_history,
+  return [wiimote_index, prefer_left_hand, attachment, cached_state, left_velocity_history,
           right_velocity_history, offscreen_snapshots, held_ir_x, held_ir_y,
           held_ir_z](std::string_view group_name, std::string_view control_name,
-                     ControlState) mutable -> std::optional<ControlState> {
+                     ControlState control_state) mutable -> std::optional<ControlState> {
     if (s_wiimote_sources[wiimote_index].load() != WiimoteSource::OpenXR)
       return std::nullopt;
 
@@ -296,7 +328,25 @@ ControllerEmu::InputOverrideFunction CreateOpenXRInputOverrideFunction(unsigned 
       cached_state.generation = snapshot.generation;
     }
 
-    if (group_name == WiimoteEmu::Wiimote::ACCELEROMETER_GROUP)
+    if (group_name == WiimoteEmu::Wiimote::BUTTONS_GROUP)
+    {
+      if (!attachment && control_name == WiimoteEmu::Wiimote::HOME_BUTTON &&
+          Common::VR::OpenXRInputState::IsHomePressed())
+      {
+        return 1.0;
+      }
+    }
+    else if (group_name == WiimoteEmu::Wiimote::DPAD_GROUP)
+    {
+      if (attachment)
+        return std::nullopt;
+      auto* const wiimote =
+          static_cast<WiimoteEmu::Wiimote*>(::Wiimote::GetConfig()->GetController(wiimote_index));
+      const bool no_extension =
+          wiimote && wiimote->GetActiveExtensionNumber() == WiimoteEmu::ExtensionNumber::NONE;
+      return StickDPad(snapshot, no_extension, control_name, control_state);
+    }
+    else if (group_name == WiimoteEmu::Wiimote::ACCELEROMETER_GROUP)
     {
       if (control_name == ControllerEmu::ReshapableInput::X_INPUT_OVERRIDE)
         return cached_state.acceleration.x;
@@ -366,8 +416,8 @@ void UpdateOpenXRInputOverride(unsigned int index, WiimoteSource source)
         Config::Get(Config::Info<bool>{{Config::System::Main, "Android", "QuestLeftHanded"},
                                        false});
     wiimote->SetInputOverrideFunction(
-        CreateOpenXRInputOverrideFunction(index, prefer_left_hand));
-    apply_to_attachments(CreateOpenXRInputOverrideFunction(index, !prefer_left_hand));
+        CreateOpenXRInputOverrideFunction(index, prefer_left_hand, false));
+    apply_to_attachments(CreateOpenXRInputOverrideFunction(index, !prefer_left_hand, true));
     s_openxr_overrides_enabled[index] = true;
   }
   else if (s_openxr_overrides_enabled[index])

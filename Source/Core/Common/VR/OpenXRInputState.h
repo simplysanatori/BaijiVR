@@ -6,6 +6,8 @@
 #ifdef ENABLE_VR
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -158,6 +160,13 @@ public:
     ++s_state.generation;
   }
 
+  // The Wii Remote's Home button, pressed from the VR menu.
+  static void PressHome()
+  {
+    s_home_until.store(std::chrono::steady_clock::now() + std::chrono::milliseconds(250));
+  }
+  static bool IsHomePressed() { return std::chrono::steady_clock::now() < s_home_until.load(); }
+
   static OpenXRHapticsState GetHaptics()
   {
     std::lock_guard lk(s_state_mutex);
@@ -195,6 +204,7 @@ private:
     return value;
   }
 
+  static inline std::atomic<std::chrono::steady_clock::time_point> s_home_until{};
   static inline std::mutex s_state_mutex;
   static inline OpenXRInputSnapshot s_state{};
   static inline OpenXRHapticsState s_haptics{};

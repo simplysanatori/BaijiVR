@@ -146,6 +146,8 @@ endif()
 
 if(ENABLE_VR)
   target_sources(inputcommon PRIVATE
+    ControllerInterface/OpenXR/FrameControllerNames.cpp
+    ControllerInterface/OpenXR/FrameControllerNames.h
     ControllerInterface/OpenXR/OpenXR.cpp
     ControllerInterface/OpenXR/OpenXR.h
   )

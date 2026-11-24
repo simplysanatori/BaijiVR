@@ -696,27 +696,27 @@ void Wiimote::LoadDefaults(const ControllerInterface& ciface)
 #ifdef ENABLE_VR
   SetDefaultDevice("OpenXR/0/OpenXR Controller");
 
-  m_buttons->SetControlExpression(0, "`Right Button A`");
+  m_buttons->SetControlExpression(0, "`A`");
   m_buttons->SetControlExpression(1, "`Right Trigger`");
-  m_buttons->SetControlExpression(2, "`Right Button X`");
-  m_buttons->SetControlExpression(3, "`Right Button Y`");
-  m_buttons->SetControlExpression(4, "`Left Button View`");
-  m_buttons->SetControlExpression(5, "`Right Button Menu`");
-  m_buttons->SetControlExpression(6, "`Left Button System`");
+  m_buttons->SetControlExpression(2, "`X`");
+  m_buttons->SetControlExpression(3, "`Y`");
+  m_buttons->SetControlExpression(4, "`View`");
+  m_buttons->SetControlExpression(5, "`Menu`");
+  // Home is in the VR menu: no button on the Frame is free for it.
 
-  m_dpad->SetControlExpression(0, "`Left D-Pad Up`");
-  m_dpad->SetControlExpression(1, "`Left D-Pad Down`");
-  m_dpad->SetControlExpression(2, "`Left D-Pad Left`");
-  m_dpad->SetControlExpression(3, "`Left D-Pad Right`");
+  m_dpad->SetControlExpression(0, "`D-Pad Up`");
+  m_dpad->SetControlExpression(1, "`D-Pad Down`");
+  m_dpad->SetControlExpression(2, "`D-Pad Left`");
+  m_dpad->SetControlExpression(3, "`D-Pad Right`");
 
-  m_ir->SetControlExpression(0, "`Right Thumbstick Y-`");
-  m_ir->SetControlExpression(1, "`Right Thumbstick Y+`");
-  m_ir->SetControlExpression(2, "`Right Thumbstick X-`");
-  m_ir->SetControlExpression(3, "`Right Thumbstick X+`");
+  m_ir->SetControlExpression(0, "`Right Stick Down`");
+  m_ir->SetControlExpression(1, "`Right Stick Up`");
+  m_ir->SetControlExpression(2, "`Right Stick Left`");
+  m_ir->SetControlExpression(3, "`Right Stick Right`");
   m_ir->SetRelativeInput(false);
 
   for (int i = 0; i < 3; ++i)
-    m_shake->SetControlExpression(i, "`Right Button Squeeze`");
+    m_shake->SetControlExpression(i, "`Right Bumper`");
 
   m_rumble->SetControlExpression(0, "Motor");
 #elif defined(ANDROID)
