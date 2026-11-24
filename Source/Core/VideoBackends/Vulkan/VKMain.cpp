@@ -110,7 +110,9 @@ static bool ShouldEnableDebugUtils(bool enable_validation_layers)
 // Never destroyed on process exit by design: the runtime may still reference it, and the OS
 // reclaims it anyway.
 #ifdef ENABLE_VR
-static std::unique_ptr<VulkanContext> s_persisted_vr_context;
+// Never destroyed at exit: the Vulkan library (another static) may be unmapped by then.
+static std::unique_ptr<VulkanContext>& s_persisted_vr_context =
+    *new std::unique_ptr<VulkanContext>();
 #endif
 
 bool VideoBackend::Initialize(const WindowSystemInfo& wsi)
