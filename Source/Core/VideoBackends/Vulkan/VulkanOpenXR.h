@@ -220,6 +220,10 @@ private:
   // StereoScreen keeps acquired eye images until their blits finish on the GPU while the
   // Vulkan submit worker waits for the pair fence and finalizes the handoff.
   std::atomic<bool> m_stereo_finalization_in_flight{false};
+  // Every image the Flat quad, or the Stereo 3D Screen's pair of quads, names has been released at
+  // least once. Until then there is nothing to show, and the runtime refuses a frame naming them.
+  std::atomic<bool> m_flat_image_released{false};
+  std::atomic<bool> m_stereo_pair_released{false};
 };
 
 // Global Vulkan OpenXR instance — valid between VideoBackend::Initialize() and Shutdown().

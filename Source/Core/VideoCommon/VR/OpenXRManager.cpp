@@ -3869,9 +3869,10 @@ void OpenXRManager::ComputeVirtualScreenHit(const Common::VR::OpenXRPoseState& a
   if (!aim.valid)
     return;
 
-  if (g_ActiveConfig.vr_flat_screen)
+  if (g_ActiveConfig.vr_flat_screen || g_ActiveConfig.vr_stereo_screen)
   {
-    // Flat panel: a world-locked quad in reference space (meters), yaw-only orientation.
+    // Flat or Stereo 3D screen: a world-locked quad in reference space (meters), yaw-only
+    // orientation.
     // Bring the aim ray into quad-local space (quad plane is z=0, +z toward the viewer).
     const XrPosef quad = GetFlatScreenPose();
     const float yaw = 2.0f * std::atan2(quad.orientation.y, quad.orientation.w);

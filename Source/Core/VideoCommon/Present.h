@@ -139,6 +139,8 @@ private:
   void PrepareNextOpenXRFrame();
   void BlitCurrentSourceToOpenXREyes(const AbstractTexture* source_texture,
                                      const MathUtil::Rectangle<int>& source_rc);
+  // Width over height of the screen in the headset (Flat and Stereo 3D Screen).
+  float CalculateOpenXRScreenAspect() const;
   // Flat mono panel path: blit the mono XFB into the flat swapchain image and set the quad aspect.
   void BlitCurrentSourceToOpenXRFlat(const AbstractTexture* source_texture,
                                      const MathUtil::Rectangle<int>& source_rc);

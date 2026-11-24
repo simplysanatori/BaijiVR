@@ -1111,6 +1111,25 @@ bool Presenter::IsOpenXRStereoScreen() const
          g_ActiveConfig.stereo_mode == StereoMode::SBS;
 }
 
+float Presenter::CalculateOpenXRScreenAspect() const
+{
+  // The shape the picture is meant to be seen in, not the XFB's pixels: a Wii game's 16:9 picture
+  // is anamorphic (its XFB is as wide as a 4:3 one), and games change the XFB's height freely.
+  // There is no window to stretch to, so "Stretch to Window" is the game's own shape.
+  float aspect = CalculateDrawAspectRatio(false);
+
+  // Each eye has its own image here, so the doubled width or height of a full-resolution
+  // side-by-side or top-and-bottom picture does not apply.
+  if (g_ActiveConfig.stereo_per_eye_resolution_full)
+  {
+    if (g_ActiveConfig.stereo_mode == StereoMode::SBS)
+      aspect /= 2.0f;
+    else if (g_ActiveConfig.stereo_mode == StereoMode::TAB)
+      aspect *= 2.0f;
+  }
+  return std::clamp(aspect, 0.5f, 4.0f);
+}
+
 void Presenter::BlitCurrentSourceToOpenXRFlat(const AbstractTexture* source_texture,
                                               const MathUtil::Rectangle<int>& source_rc)
 {
@@ -1129,10 +1148,7 @@ void Presenter::BlitCurrentSourceToOpenXRFlat(const AbstractTexture* source_text
 
   // The game aspect drives the world size of the quad; the mono frame is stretched to fill the
   // (roughly square) eye-0 image, and the non-square quad undoes the stretch.
-  const int src_w = source_rc.GetWidth();
-  const int src_h = source_rc.GetHeight();
-  if (src_w > 0 && src_h > 0)
-    VR::g_openxr->SetFlatScreenAspect(static_cast<float>(src_w) / static_cast<float>(src_h));
+  VR::g_openxr->SetFlatScreenAspect(CalculateOpenXRScreenAspect());
 
   const MathUtil::Rectangle<int> flat_rect{
       0, 0, static_cast<int>(sc->GetEyeWidth()), static_cast<int>(sc->GetEyeHeight())};
@@ -1173,10 +1189,7 @@ bool Presenter::SubmitOpenXRFrameFromCurrentSource(const AbstractTexture* source
       // Classic SBS stereo: layer 0 is left eye, layer 1 is right eye. Blit each layer into the
       // corresponding OpenXR eye swapchain and submit as two quad layers at the virtual screen pose.
       BlitCurrentSourceToOpenXREyes(source_texture, source_rc);
-      const int src_w = source_rc.GetWidth();
-      const int src_h = source_rc.GetHeight();
-      if (src_w > 0 && src_h > 0)
-        VR::g_openxr->SetFlatScreenAspect(static_cast<float>(src_w) / static_cast<float>(src_h));
+      VR::g_openxr->SetFlatScreenAspect(CalculateOpenXRScreenAspect());
       return sc->SubmitStereoFlatFrame();
     }
 

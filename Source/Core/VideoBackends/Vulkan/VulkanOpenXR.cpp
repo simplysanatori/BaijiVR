@@ -1756,6 +1756,9 @@ bool VulkanOpenXR::CreateEyeSwapchains(int64_t swapchain_format)
 
 void VulkanOpenXR::DestroySwapchains()
 {
+  m_flat_image_released.store(false, std::memory_order_release);
+  m_stereo_pair_released.store(false, std::memory_order_release);
+
   // Finish and submit the current command buffer as well as waiting for queued GPU work. A plain
   // vkDeviceWaitIdle does not make it safe to destroy objects referenced by an unsubmitted buffer.
   // Do not submit again after VK_ERROR_DEVICE_LOST; the command buffer manager has already queued
@@ -2049,6 +2052,11 @@ void VulkanOpenXR::ReleaseEyeTexture(uint32_t eye_index)
                  static_cast<int>(result));
   }
 
+  else if (eye_index == 0)
+  {
+    m_flat_image_released.store(true, std::memory_order_release);
+  }
+
   m_image_acquired[eye_index] = false;
 #endif
 }
@@ -2286,6 +2294,12 @@ bool VulkanOpenXR::SubmitFlatFrame()
   }
 #endif
 
+#if !defined(ANDROID)
+  // Nothing has been drawn yet (no XFB, or the runtime is not asking for frames).
+  if (!m_flat_image_released.load(std::memory_order_acquire))
+    return VR::g_openxr->IsFrameThreadActive() ? true : VR::g_openxr->EndFrame({});
+#endif
+
   return VR::g_openxr->SubmitFlatQuadFrame(m_eye_swapchains[0].swapchain,
                                            m_eye_swapchains[0].width, m_eye_swapchains[0].height);
 }
@@ -2351,6 +2365,9 @@ void VulkanOpenXR::FinalizeStereoFlatFrameAfterGPU(VkFence fence, bool have_pair
 
     if (!released || submit_result != VK_SUCCESS)
       return;
+
+    if (have_pair)
+      m_stereo_pair_released.store(true, std::memory_order_release);
 
     if (have_pair && VR::g_openxr->IsFrameThreadActive())
     {
@@ -2432,7 +2449,12 @@ bool VulkanOpenXR::SubmitStereoFlatFrame()
     }
     if (!have_pair || !released)
       return false;
+    m_stereo_pair_released.store(true, std::memory_order_release);
   }
+
+  // Nothing has been drawn yet (no XFB, or the runtime is not asking for frames).
+  if (!m_stereo_pair_released.load(std::memory_order_acquire))
+    return VR::g_openxr->IsFrameThreadActive() ? true : VR::g_openxr->EndFrame({});
 #elif defined(ANDROID)
   // On Android the per-eye ReleaseEyeTexture only ends the render pass; the command-buffer
   // submit and xrReleaseSwapchainImage are deferred to submit time. End the render pass once,
