@@ -202,8 +202,9 @@
 
 ## Baiji VR fork
 
-Technical detail moved out of the README. The README is for players and stays short; settings and controls in full
-are in `docs/USER_GUIDE.md`; `docs/UPSTREAM-README.md` is Baiji's README as it was at 75d194fd95 and is not edited.
+Technical detail moved out of the README. The README is for players and stays short, in Azahar for Frame's layout; the
+rest is in `docs/USER_GUIDE.md`, `docs/CONTROLS.md`, `docs/SETTINGS.md` and `docs/CHANGELOG.md`. `README.upstream.md`
+is Baiji's README as it was at 75d194fd95 and is not edited.
 
 - The fork starts at Baiji's 75d194fd95 (`develop`). The plan is to bring its changes upstream.
 - Path of Radiance had three causes: a dual-core FIFO reset beside the GPU thread (`ProcessorInterface` waits for
