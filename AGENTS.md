@@ -32,6 +32,18 @@
   github.com/simplysanatori/gc-wii-game-fixes, shipped in `Data/Sys/GameMods/`). The VR menu's Mods
   tab and the Qt Mods page are its only users. `SetEnabled`/`Remove` read and write files: never call
   them on the XR pacing thread. Tests: `GameModsTest` (two need the Sys folder).
+- The controller diagrams (`FrameUI/PadArt.*`) are line drawings in the look of Azahar for Frame's help; the
+  Wii Remote's and Nunchuk's places are measured from photos.
+- Performance switches are `VideoCommon/VR/Perf/` and `GFX_VR_*` keys, all off by default: off must stay exactly
+  as it was. `VR::Perf` counts on the pacing and video threads; `Consume` runs once a second as a host job
+  (`Logs/perf.csv`). Dynamic Resolution (Stereoscopic 3D only) keeps the Internal Resolution setting as its floor,
+  up to two steps more; `DynamicResolutionController.h` holds its rules (from Azahar for Frame, GPLv3) and
+  `UpdateActiveConfig` applies it. `docs/perf-test.example.txt` is the A/B test a running game goes through. Core pinning
+  and the performance hint are read at a game start. The GPU-wait switches only matter in games that copy the
+  EFB to RAM or read perf queries (not Double Dash, Kirby RTDL or Path of Radiance).
+- A dual-core FIFO reset must not run beside the GPU thread: `CommandProcessor` flushes it after reads are turned
+  off and before CTRL turns them off, and `ProcessorInterface` waits for the buffer reset. Path of Radiance's own
+  GPU watchdog, which halts the game, is patched off in `GFEE01.ini`.
 - Box art is `UICommon/GameCovers.*`, cached per game ID in `Cache/GameCovers/` for the list, the Grid
   View and the VR UI.
 - In Game Mode every Qt window is fitted to the main window by `DolphinQt/GameModeWindows.*`

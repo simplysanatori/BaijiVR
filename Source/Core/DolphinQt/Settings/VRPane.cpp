@@ -178,8 +178,8 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
       // Performance
       {Config::GFX_VR_DYNAMIC_RESOLUTION.GetLocation(),
        {tr("Dynamic Resolution"),
-        tr("Lowers the game's resolution when the headset cannot keep up, and raises it again "
-           "when it can.")}},
+        tr("Goes up to two steps over the Internal Resolution setting while the GPU has room. "
+           "Stereoscopic 3D only.")}},
       {Config::GFX_VR_PIN_EMULATION_CORES.GetLocation(),
        {tr("Pin Emulation Threads"),
         tr("Keeps the main emulation threads on the fastest CPU cores. For the next game "
@@ -197,7 +197,7 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
         tr("Does not wait for the GPU to answer the game's questions about what was drawn.")}},
       {Config::GFX_VR_SKIP_OVERWRITTEN_CLEARS.GetLocation(),
        {tr("Skip Overwritten Clears"),
-        tr("Leaves out clears of the picture that the game draws over anyway.")}},
+        tr("Leaves out clears of the picture that are drawn over anyway. Immersive only.")}},
       {Config::GFX_VR_PERF_LOG.GetLocation(),
        {tr("Performance Log"), tr("Writes a line a second to perf.csv in the Logs folder.")}},
 
@@ -647,18 +647,18 @@ QVBoxLayout* VRSettingsPage::AddAdvanced()
   auto* const shaders = AddGroup(tr("Shaders"), ALL, box_layout);
   AddBool(shaders, ALL, Config::GFX_VR_LOAD_CUSTOM_SHADERS);
 
-  auto* const performance = AddGroup(tr("Performance"), ALL, box_layout);
-  AddBool(performance, ALL, Config::GFX_VR_DYNAMIC_RESOLUTION);
+  auto* const performance = AddGroup(tr("Performance"), TWO_EYES, box_layout);
+  AddBool(performance, Screen3D, Config::GFX_VR_DYNAMIC_RESOLUTION);
   if (!m_layer)  // not per game: these are read once, or are a log
   {
-    AddBool(performance, ALL, Config::GFX_VR_PIN_EMULATION_CORES);
-    AddBool(performance, ALL, Config::GFX_VR_PERFORMANCE_HINT);
+    AddBool(performance, TWO_EYES, Config::GFX_VR_PIN_EMULATION_CORES);
+    AddBool(performance, TWO_EYES, Config::GFX_VR_PERFORMANCE_HINT);
   }
-  AddBool(performance, ALL, Config::GFX_VR_ASYNC_EFB_COPIES);
-  AddBool(performance, ALL, Config::GFX_VR_NON_BLOCKING_PERF_QUERIES);
-  AddBool(performance, ALL, Config::GFX_VR_SKIP_OVERWRITTEN_CLEARS);
+  AddBool(performance, TWO_EYES, Config::GFX_VR_ASYNC_EFB_COPIES);
+  AddBool(performance, TWO_EYES, Config::GFX_VR_NON_BLOCKING_PERF_QUERIES);
+  AddBool(performance, Immersive, Config::GFX_VR_SKIP_OVERWRITTEN_CLEARS);
   if (!m_layer)
-    AddBool(performance, ALL, Config::GFX_VR_PERF_LOG);
+    AddBool(performance, TWO_EYES, Config::GFX_VR_PERF_LOG);
   return box_layout;
 }
 
