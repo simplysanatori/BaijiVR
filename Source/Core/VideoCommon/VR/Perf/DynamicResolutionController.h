@@ -409,7 +409,7 @@ private:
 
 // What the screen can show: a scale with more than SCREEN_OVERSAMPLE times the display's pixels that the
 // screen covers, on both axes, only costs GPU time.
-constexpr double SCREEN_OVERSAMPLE = 2.0;
+constexpr double SCREEN_OVERSAMPLE = 2.5;
 constexpr int PICTURE_WIDTH = 640;
 constexpr int PICTURE_HEIGHT = 480;
 struct ScreenCover

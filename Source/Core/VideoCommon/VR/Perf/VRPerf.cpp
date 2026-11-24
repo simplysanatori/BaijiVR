@@ -52,6 +52,7 @@ Window s_window;
 void WriteLine(const Second& s)
 {
   const std::string path = File::GetUserPath(D_LOGS_IDX) + "perf.csv";
+  File::CreateFullPath(path);
   const bool is_new = !File::Exists(path);
   File::IOFile file(path, "ab");
   if (!file)
@@ -127,7 +128,9 @@ void Tick(bool fresh, bool empty, bool running, s64 period_ns, u64 wait_frame_us
   s.gpu_wait_ms = s_gpu_wait_us.exchange(0, std::memory_order_relaxed) * 1e-3;
   s.running = w.running;
 
-  if (!g_ActiveConfig.vr_perf_log && !g_ActiveConfig.vr_dynamic_resolution && !Test::IsRequested())
+  // First: it is what looks for a test.
+  const bool test = Test::IsRequested();
+  if (!test && !g_ActiveConfig.vr_perf_log && !g_ActiveConfig.vr_dynamic_resolution)
     return;
 
   Core::QueueHostJob([s](Core::System&) mutable {
@@ -141,7 +144,7 @@ void Tick(bool fresh, bool empty, bool running, s64 period_ns, u64 wait_frame_us
 
 void Consume(const Second& second)
 {
-  if (g_ActiveConfig.vr_perf_log || Test::IsRequested())
+  if (Test::IsRequested() || g_ActiveConfig.vr_perf_log)
     WriteLine(second);
   DynamicResolution::OnSecond(second);
   Test::OnSecond(second);

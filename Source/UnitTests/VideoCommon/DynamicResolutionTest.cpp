@@ -394,11 +394,11 @@ TEST(DynamicResolution, ScreenCoverage)
 {
   // A 16:9 screen 1.5 m high 2 m away, an eye of 2160 pixels over 100 degrees.
   ScreenCover cover{1.5 * 16.0 / 9.0 / 2.0, 0.75, 2.3835, 2.3835, 2160.0, 2160.0};
-  EXPECT_NEAR(ScreenCoverage(cover), 3.78, 0.01);
+  EXPECT_NEAR(ScreenCoverage(cover), 4.72, 0.02);
   // Twice as near.
   cover.tan_w *= 2.0;
   cover.tan_h *= 2.0;
-  EXPECT_NEAR(ScreenCoverage(cover), 7.56, 0.03);
+  EXPECT_NEAR(ScreenCoverage(cover), 9.44, 0.04);
   cover.eye_px_w = 0.0;
   EXPECT_EQ(ScreenCoverage(cover), 0.0);
 }
