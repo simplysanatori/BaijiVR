@@ -27,7 +27,7 @@ This is my testing area for fixes and optimizations, and I plan to bring all of 
 
 Hold **Menu** for 1 second to open the completely redesigned VR menu. Its **Mods** tab has:
 
-- **Mods and Cheats**: 41 mods, patches and cheats for 24 games
+- **Mods and Cheats**: 38 cheats, patches and game settings, and 3 mods, for 24 games
 - **Textures**: 23 texture packs, from their creators' own pages
 
 <img src="docs/images/menu-main.png" width="48%" alt="VR menu"> <img src="docs/images/menu-mods.png" width="48%" alt="Mods and Cheats">
