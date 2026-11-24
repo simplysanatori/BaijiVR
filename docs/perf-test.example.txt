@@ -1,0 +1,25 @@
+# Baiji performance test. Copy to perf-test.txt in the config folder
+# (~/.config/baiji/perf-test.txt on the Frame), then start a game.
+# It begins 15 running seconds into the game, goes through the steps in turns
+# (A B C, then C B A, then A B C) and puts every setting back at the end. The numbers
+# are in Logs/perf-test-<date-time>.txt, and this file becomes perf-test.done.txt.
+#
+# Meant for Mario Kart: Double Dash!! Drive the same lap or stay on the same track view
+# for all of it; the headset has to be on (only seconds with the game running count).
+#
+# Keys: DynamicResolution, AsyncEFBCopies, NonBlockingPerfQueries, SkipOverwrittenClears,
+#       InternalResolution (0 is Auto), ShaderCompilationMode, EagerHeartbeat
+# Pin Emulation Threads and Performance Hint only apply at a game start: set them in the
+# settings, not here.
+# ShaderCompilationMode: 0 Specialized (default), 1 Exclusive Ubershaders, 2 Hybrid Ubershaders,
+#       3 Skip Drawing.
+
+seconds = 20
+settle = 4
+rounds = 3
+
+baseline:
+waits: AsyncEFBCopies=true; NonBlockingPerfQueries=true
+hybrid ubershaders: ShaderCompilationMode=2
+3x: InternalResolution=3
+dynamic: DynamicResolution=true

@@ -553,6 +553,19 @@ bool OpenXRManager::CreateInstance(const std::vector<const char*>& extra_extensi
     enabled_extensions.push_back(XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME);
 #endif
 
+#if !defined(ANDROID)
+  // Performance Hint: XR_EXT_performance_settings, only when the runtime lists it and the switch
+  // is on. Whether it is listed is always logged.
+  {
+    const bool listed = runtime_has(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME);
+    INFO_LOG_FMT(OPENXR, "OpenXR: Runtime {} XR_EXT_performance_settings (Performance Hint {}).",
+                 listed ? "lists" : "does not list",
+                 Config::Get(Config::GFX_VR_PERFORMANCE_HINT) ? "on" : "off");
+    if (listed && Config::Get(Config::GFX_VR_PERFORMANCE_HINT))
+      enabled_extensions.push_back(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME);
+  }
+#endif
+
   XrVersion requested_api_version = XR_CURRENT_API_VERSION;
   INFO_LOG_FMT(OPENXR, "OpenXR: Requesting API version {}.{}.{}.",
                XR_VERSION_MAJOR(requested_api_version), XR_VERSION_MINOR(requested_api_version),
@@ -770,6 +783,23 @@ bool OpenXRManager::CreateInstance(const std::vector<const char*>& extra_extensi
   }
 #endif
 
+#if !defined(ANDROID)
+  if (IsExtensionEnabled(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME))
+  {
+    const XrResult perf_settings_result =
+        xrGetInstanceProcAddr(m_instance, "xrPerfSettingsSetPerformanceLevelEXT",
+                              &m_xrPerfSettingsSetPerformanceLevelEXT);
+    if (XR_FAILED(perf_settings_result) || m_xrPerfSettingsSetPerformanceLevelEXT == nullptr)
+    {
+      WARN_LOG_FMT(OPENXR,
+                   "OpenXR: XR_EXT_performance_settings enabled but "
+                   "xrPerfSettingsSetPerformanceLevelEXT could not be loaded ({}).",
+                   static_cast<int>(perf_settings_result));
+      m_xrPerfSettingsSetPerformanceLevelEXT = nullptr;
+    }
+  }
+#endif
+
   return true;
 }
 
@@ -921,6 +951,34 @@ bool OpenXRManager::RequestAndroidHighPerformanceLevel()
   const bool cpu_ok = request_domain(XR_PERF_SETTINGS_DOMAIN_CPU_EXT);
   const bool gpu_ok = request_domain(XR_PERF_SETTINGS_DOMAIN_GPU_EXT);
   return cpu_ok && gpu_ok;
+}
+#endif
+
+#if !defined(ANDROID)
+bool OpenXRManager::RequestPerformanceHint()
+{
+  if (!Config::Get(Config::GFX_VR_PERFORMANCE_HINT) || m_session == XR_NULL_HANDLE ||
+      m_xrPerfSettingsSetPerformanceLevelEXT == nullptr)
+  {
+    return false;
+  }
+
+  const auto set_performance_level = reinterpret_cast<PFN_xrPerfSettingsSetPerformanceLevelEXT>(
+      m_xrPerfSettingsSetPerformanceLevelEXT);
+  bool all_ok = true;
+  for (const XrPerfSettingsDomainEXT domain :
+       {XR_PERF_SETTINGS_DOMAIN_CPU_EXT, XR_PERF_SETTINGS_DOMAIN_GPU_EXT})
+  {
+    const XrResult result =
+        set_performance_level(m_session, domain, XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT);
+    char result_string[XR_MAX_RESULT_STRING_SIZE]{};
+    xrResultToString(m_instance, result, result_string);
+    INFO_LOG_FMT(OPENXR, "OpenXR: Performance Hint: {} SUSTAINED_HIGH -> {} ({}).",
+                 domain == XR_PERF_SETTINGS_DOMAIN_CPU_EXT ? "CPU" : "GPU", result_string,
+                 static_cast<int>(result));
+    all_ok = all_ok && XR_SUCCEEDED(result);
+  }
+  return all_ok;
 }
 #endif
 
@@ -1353,6 +1411,15 @@ void OpenXRManager::FrameThreadLoop()
   {
     const int core =
         Common::PinCurrentThreadToPerformanceCore(Common::ThreadCoreRole::VRPacing);
+    if (core >= 0)
+      INFO_LOG_FMT(OPENXR, "OpenXR: Pinned pacing thread to performance core cpu{}.", core);
+  }
+#endif
+
+#if defined(__linux__) && !defined(ANDROID)
+  if (Config::Get(Config::GFX_VR_PIN_EMULATION_CORES))
+  {
+    const int core = Common::PinCurrentThreadToPerformanceCore(Common::ThreadCoreRole::VRPacing);
     if (core >= 0)
       INFO_LOG_FMT(OPENXR, "OpenXR: Pinned pacing thread to performance core cpu{}.", core);
   }
@@ -2903,6 +2970,9 @@ void OpenXRManager::HandleSessionStateChange(XrSessionState new_state)
       {
         RequestDisplayRefreshRate(static_cast<float>(g_ActiveConfig.vr_requested_refresh_rate));
       }
+#if !defined(ANDROID)
+      RequestPerformanceHint();
+#endif
 #if defined(ANDROID)
       // Quest 3/3S expose the extra sustained CPU level through the manifest
       // CPU-for-GPU trade hint. Request sustained high when the session starts,

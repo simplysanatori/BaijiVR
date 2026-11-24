@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <span>
 #include <thread>
+#include <vector>
 
 #ifndef _WIN32
 #include <tuple>
@@ -35,11 +37,38 @@ enum class ThreadCoreRole
   VRSubmit,  // Vulkan async command-submit worker
 };
 
-// Android only: pin the calling thread to one of the device's performance (highest
+// One CPU as the kernel reports it: cpu_capacity (0 when absent) and cpuinfo_max_freq (kHz, 0 when
+// absent).
+struct CpuCoreInfo
+{
+  int index = 0;
+  long capacity = 0;
+  long max_freq = 0;
+};
+
+// The cores the performance pin policy picked, -1 for none.
+struct CoreSelection
+{
+  int emu_cpu = -1;    // the fastest allowed core
+  int emu_video = -1;  // the second
+  int light = -1;      // the third, shared by the VR pacing thread and the submit worker
+};
+
+// Pure policy (Linux/Android big.LITTLE): rank the allowed cores by capacity (else max frequency),
+// fastest first, ties to the higher index. Cores within 5% of the slowest are not "fast" and are
+// never picked; with all allowed cores equal nothing is picked. Each role gets a distinct core, or
+// -1 when there is none left.
+CoreSelection SelectCoresForRoles(std::span<const CpuCoreInfo> cores, std::span<const int> allowed);
+
+// Linux only: undoes the single-core mask a pinned thread passes on to threads it creates. Called
+// by SetCurrentThreadName, which every worker thread calls first. No-op while nothing is pinned.
+void ResetInheritedThreadAffinity();
+
+// Android and Linux: pin the calling thread to one of the device's performance (highest
 // max-frequency) cores, chosen per role so these threads land on distinct fast cores
 // and don't migrate across the big.LITTLE boundary. Cores are classified from
 // cpufreq at runtime (correct on any Quest). Returns the pinned CPU index, or -1 if
-// unavailable (non-Android, topology unreadable, or the syscall failed).
+// unavailable (other platforms, no distinct fast core, topology unreadable, or the syscall failed).
 int PinCurrentThreadToPerformanceCore(ThreadCoreRole role);
 
 void SleepCurrentThread(int ms);

@@ -11,13 +11,17 @@
 #include <unistd.h>
 #endif
 
-#if defined(ANDROID)
-#include <sched.h>
 #include <algorithm>
+#include <string>
+
+#include <fmt/format.h>
+#if defined(ANDROID) || defined(__linux__)
+#include <sched.h>
+#include <atomic>
 #include <cstdio>
 #include <mutex>
 #include <utility>
-#include <vector>
+#include "Common/Logging/Log.h"
 #endif
 
 #ifdef __APPLE__
@@ -177,6 +181,7 @@ void SwitchCurrentThread()
 
 void SetCurrentThreadName(const char* name)
 {
+  ResetInheritedThreadAffinity();
 #ifdef __APPLE__
   pthread_setname_np(name);
 #elif defined __FreeBSD__ || defined __OpenBSD__
@@ -197,6 +202,59 @@ void SetCurrentThreadName(const char* name)
 }
 
 #endif  // !WIN32
+
+CoreSelection SelectCoresForRoles(std::span<const CpuCoreInfo> cores, std::span<const int> allowed)
+{
+  struct Candidate
+  {
+    int index;
+    long key;
+    long freq;
+  };
+  std::vector<Candidate> candidates;
+  const bool use_capacity =
+      std::ranges::any_of(cores, [](const CpuCoreInfo& core) { return core.capacity > 0; });
+  for (const CpuCoreInfo& core : cores)
+  {
+    if (std::ranges::find(allowed, core.index) == allowed.end())
+      continue;
+    const long key = use_capacity ? core.capacity : core.max_freq;
+    if (key <= 0)
+      continue;  // unreadable: neither fast nor slow, leave it out
+    candidates.push_back({core.index, key, core.max_freq});
+  }
+  if (candidates.size() < 2)
+    return {};
+
+  std::ranges::sort(candidates, [](const Candidate& a, const Candidate& b) {
+    if (a.key != b.key)
+      return a.key > b.key;
+    if (a.freq != b.freq)
+      return a.freq > b.freq;
+    return a.index > b.index;
+  });
+  const long fastest = candidates.front().key;
+  const long slowest = candidates.back().key;
+  if (fastest - slowest <= fastest / 20)
+    return {};  // all equal (the x86 desktop): nothing to choose
+
+  const long fast_floor = slowest + slowest / 20;  // above this, a core is not in the slowest tier
+  std::vector<int> fast;
+  for (const Candidate& candidate : candidates)
+  {
+    if (candidate.key > fast_floor)
+      fast.push_back(candidate.index);
+  }
+
+  CoreSelection selection;
+  if (fast.size() > 0)
+    selection.emu_cpu = fast[0];
+  if (fast.size() > 1)
+    selection.emu_video = fast[1];
+  if (fast.size() > 2)
+    selection.light = fast[2];
+  return selection;
+}
 
 #if defined(ANDROID)
 
@@ -274,6 +332,107 @@ int PinCurrentThreadToPerformanceCore(ThreadCoreRole role)
   return core;
 }
 
+#elif defined(__linux__)
+
+namespace
+{
+struct LinuxCorePlan
+{
+  CoreSelection selection;
+  cpu_set_t allowed_mask;
+};
+LinuxCorePlan s_plan;
+std::once_flag s_plan_once;
+std::atomic<bool> s_any_pinned{false};
+thread_local bool t_pinned = false;
+
+long ReadSysfsLong(int cpu, const char* file)
+{
+  char path[128];
+  std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/%s", cpu, file);
+  FILE* f = std::fopen(path, "r");
+  if (!f)
+    return 0;
+  long value = 0;
+  if (std::fscanf(f, "%ld", &value) != 1)
+    value = 0;
+  std::fclose(f);
+  return value;
+}
+
+void DetectPlan()
+{
+  CPU_ZERO(&s_plan.allowed_mask);
+  if (sched_getaffinity(0, sizeof(s_plan.allowed_mask), &s_plan.allowed_mask) != 0)
+  {
+    WARN_LOG_FMT(COMMON, "Core pinning: sched_getaffinity failed; no pinning.");
+    return;
+  }
+
+  std::vector<CpuCoreInfo> cores;
+  std::vector<int> allowed;
+  for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+  {
+    if (!CPU_ISSET(cpu, &s_plan.allowed_mask))
+      continue;
+    allowed.push_back(cpu);
+    cores.push_back({cpu, ReadSysfsLong(cpu, "cpu_capacity"),
+                     ReadSysfsLong(cpu, "cpufreq/cpuinfo_max_freq")});
+  }
+
+  std::string layout;
+  for (const CpuCoreInfo& core : cores)
+  {
+    layout += fmt::format("{}cpu{}(cap {}, {} MHz)", layout.empty() ? "" : ", ", core.index,
+                          core.capacity, core.max_freq / 1000);
+  }
+  s_plan.selection = SelectCoresForRoles(cores, allowed);
+  const CoreSelection& s = s_plan.selection;
+  INFO_LOG_FMT(COMMON, "Core pinning: allowed cores: {}. Chosen: emulated CPU {}, video {}, VR pacing "
+                       "and submit {} (-1 is not pinned).",
+               layout, s.emu_cpu, s.emu_video, s.light);
+}
+}  // namespace
+
+int PinCurrentThreadToPerformanceCore(ThreadCoreRole role)
+{
+  std::call_once(s_plan_once, DetectPlan);
+  int core = -1;
+  switch (role)
+  {
+  case ThreadCoreRole::EmuCPU:
+    core = s_plan.selection.emu_cpu;
+    break;
+  case ThreadCoreRole::EmuVideo:
+    core = s_plan.selection.emu_video;
+    break;
+  case ThreadCoreRole::VRPacing:
+  case ThreadCoreRole::VRSubmit:
+    core = s_plan.selection.light;
+    break;
+  }
+  if (core < 0 || !CPU_ISSET(core, &s_plan.allowed_mask))
+    return -1;
+
+  cpu_set_t set;
+  CPU_ZERO(&set);
+  CPU_SET(core, &set);
+  if (sched_setaffinity(0, sizeof(set), &set) != 0)
+    return -1;
+  t_pinned = true;
+  s_any_pinned.store(true, std::memory_order_relaxed);
+  return core;
+}
+
+void ResetInheritedThreadAffinity()
+{
+  if (t_pinned || !s_any_pinned.load(std::memory_order_relaxed))
+    return;
+  // Threads inherit the creator's affinity; a thread that is not itself pinned goes back to the
+  // process's allowed cores.
+  sched_setaffinity(0, sizeof(s_plan.allowed_mask), &s_plan.allowed_mask);
+}
+
 #else
 
 int PinCurrentThreadToPerformanceCore(ThreadCoreRole /*role*/)
@@ -282,6 +441,12 @@ int PinCurrentThreadToPerformanceCore(ThreadCoreRole /*role*/)
 }
 
 #endif  // ANDROID
+
+#if !defined(__linux__) || defined(ANDROID)
+void ResetInheritedThreadAffinity()
+{
+}
+#endif
 
 #ifndef _WIN32
 std::tuple<void*, size_t> GetCurrentThreadStack()

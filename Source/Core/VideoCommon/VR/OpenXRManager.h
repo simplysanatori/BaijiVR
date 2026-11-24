@@ -179,6 +179,10 @@ public:
 
   // Ask Quest/OpenXR runtimes for the highest available CPU/GPU performance level.
   bool RequestAndroidHighPerformanceLevel();
+#else
+  // XR_EXT_performance_settings: SUSTAINED_HIGH for CPU and GPU, when Performance Hint is on and
+  // the runtime lists the extension. Logs the result codes.
+  bool RequestPerformanceHint();
 #endif
 
   // Step 1: Create XrInstance.
@@ -666,9 +670,9 @@ private:
   XrCompositionLayerPassthroughFB m_fb_passthrough_composition_layer{
       XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB};
 
+  PFN_xrVoidFunction m_xrPerfSettingsSetPerformanceLevelEXT = nullptr;
 #if defined(ANDROID)
   PFN_xrVoidFunction m_xrSetAndroidApplicationThreadKHR = nullptr;
-  PFN_xrVoidFunction m_xrPerfSettingsSetPerformanceLevelEXT = nullptr;
 
   // Threads that called RegisterCurrentAndroidThread before the XrSession existed.
   // Replayed by FlushPendingAndroidThreadRegistrations() from SetSession().

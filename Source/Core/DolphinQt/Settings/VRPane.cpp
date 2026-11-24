@@ -175,6 +175,32 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
        {tr("Foveate the Game's Own Picture"),
         tr("Uses Foveated Rendering earlier in the picture too. Faster in some games, slower in "
            "others.")}},
+      // Performance
+      {Config::GFX_VR_DYNAMIC_RESOLUTION.GetLocation(),
+       {tr("Dynamic Resolution"),
+        tr("Lowers the game's resolution when the headset cannot keep up, and raises it again "
+           "when it can.")}},
+      {Config::GFX_VR_PIN_EMULATION_CORES.GetLocation(),
+       {tr("Pin Emulation Threads"),
+        tr("Keeps the main emulation threads on the fastest CPU cores. For the next game "
+           "start.")}},
+      {Config::GFX_VR_PERFORMANCE_HINT.GetLocation(),
+       {tr("Performance Hint"),
+        tr("Asks the VR runtime for high CPU and GPU speed, if it offers that. For the next game "
+           "start.")}},
+      {Config::GFX_VR_ASYNC_EFB_COPIES.GetLocation(),
+       {tr("Non-Blocking EFB Copies"),
+        tr("Does not wait for the GPU when the game copies the picture to memory. Turn it off if "
+           "a game's effects look wrong.")}},
+      {Config::GFX_VR_NON_BLOCKING_PERF_QUERIES.GetLocation(),
+       {tr("Non-Blocking Perf Queries"),
+        tr("Does not wait for the GPU to answer the game's questions about what was drawn.")}},
+      {Config::GFX_VR_SKIP_OVERWRITTEN_CLEARS.GetLocation(),
+       {tr("Skip Overwritten Clears"),
+        tr("Leaves out clears of the picture that the game draws over anyway.")}},
+      {Config::GFX_VR_PERF_LOG.GetLocation(),
+       {tr("Performance Log"), tr("Writes a line a second to perf.csv in the Logs folder.")}},
+
 #ifndef BAIJI_STEAMVR
       {Config::GFX_VR_MIRROR_VIEW.GetLocation(),
        {tr("Desktop Mirror View"), tr("What the window on the desktop shows.")}},
@@ -620,6 +646,19 @@ QVBoxLayout* VRSettingsPage::AddAdvanced()
 
   auto* const shaders = AddGroup(tr("Shaders"), ALL, box_layout);
   AddBool(shaders, ALL, Config::GFX_VR_LOAD_CUSTOM_SHADERS);
+
+  auto* const performance = AddGroup(tr("Performance"), ALL, box_layout);
+  AddBool(performance, ALL, Config::GFX_VR_DYNAMIC_RESOLUTION);
+  if (!m_layer)  // not per game: these are read once, or are a log
+  {
+    AddBool(performance, ALL, Config::GFX_VR_PIN_EMULATION_CORES);
+    AddBool(performance, ALL, Config::GFX_VR_PERFORMANCE_HINT);
+  }
+  AddBool(performance, ALL, Config::GFX_VR_ASYNC_EFB_COPIES);
+  AddBool(performance, ALL, Config::GFX_VR_NON_BLOCKING_PERF_QUERIES);
+  AddBool(performance, ALL, Config::GFX_VR_SKIP_OVERWRITTEN_CLEARS);
+  if (!m_layer)
+    AddBool(performance, ALL, Config::GFX_VR_PERF_LOG);
   return box_layout;
 }
 

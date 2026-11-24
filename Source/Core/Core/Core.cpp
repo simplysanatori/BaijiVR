@@ -132,17 +132,17 @@ static void RegisterCurrentThreadWithOpenXR(VR::OpenXRManager::AndroidThreadType
 #endif
 
 // Android big.LITTLE: pin the calling emulator thread to a dedicated performance core.
-// No-op off Android or when PinEmulationCores is disabled. Logs the chosen core.
+// No-op off Android/Linux or when PinEmulationCores is disabled. Logs the chosen core.
 static void PinEmulationThreadToPerformanceCore(Common::ThreadCoreRole role, const char* label)
 {
-#if defined(ANDROID)
+#if defined(ANDROID) || defined(__linux__)
   if (!Config::Get(Config::GFX_VR_PIN_EMULATION_CORES))
     return;
   const int core = Common::PinCurrentThreadToPerformanceCore(role);
   if (core >= 0)
     INFO_LOG_FMT(CORE, "Pinned {} to performance core cpu{}.", label, core);
   else
-    WARN_LOG_FMT(CORE, "Could not pin {} to a performance core.", label);
+    WARN_LOG_FMT(CORE, "Could not pin {} to a performance core (see the core pinning log).", label);
 #else
   (void)role;
   (void)label;
