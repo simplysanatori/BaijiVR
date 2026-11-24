@@ -202,6 +202,14 @@ void CommandProcessorManager::RegisterMMIO(MMIO::Mapping* mmio, u32 base)
                  MMIO::ComplexWrite<u16>([](Core::System& system_, u32, u16 val) {
                    auto& cp = system_.GetCommandProcessor();
                    UCPCtrlReg tmp(val & 0x3F);
+                   // The GP has read what is in the FIFO by the time a game stops its reads. Cut
+                   // off in the middle of a command, the GPU thread would go on with it in the
+                   // next FIFO.
+                   if (cp.m_fifo.bFF_GPReadEnable.load(std::memory_order_relaxed) &&
+                       !tmp.GPReadEnable)
+                   {
+                     system_.GetFifo().FlushGpu();
+                   }
                    cp.m_cp_ctrl_reg.Hex = tmp.Hex;
                    cp.SetCpControlRegister();
                    system_.GetFifo().RunGpu();
