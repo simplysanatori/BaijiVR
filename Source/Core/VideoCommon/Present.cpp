@@ -1127,6 +1127,18 @@ float Presenter::CalculateOpenXRScreenAspect() const
     else if (g_ActiveConfig.stereo_mode == StereoMode::TAB)
       aspect *= 2.0f;
   }
+
+  // The VI's shape is a little off 4:3 or 16:9 and moves with every video mode a game sets (menus,
+  // loading screens). The screen hangs in the room, so it keeps one shape.
+  if (g_ActiveConfig.aspect_mode == AspectMode::Auto ||
+      g_ActiveConfig.aspect_mode == AspectMode::Stretch)
+  {
+    for (const float shape : {4.0f / 3.0f, 16.0f / 9.0f})
+    {
+      if (std::abs(aspect / shape - 1.0f) < 0.06f)
+        return shape;
+    }
+  }
   return std::clamp(aspect, 0.5f, 4.0f);
 }
 
