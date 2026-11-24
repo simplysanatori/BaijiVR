@@ -95,7 +95,8 @@ void PadFilter::SwallowHeld(const Controllers& controllers)
   }
 }
 
-void PadFilter::Swallow(Controllers* controllers)
+// Let go or not is as read (`raw`): this may have taken it out of `controllers` already.
+void PadFilter::Swallow(Controllers* controllers, const Controllers& raw)
 {
   for (std::size_t hand = 0; hand < controllers->size(); ++hand)
   {
@@ -103,11 +104,11 @@ void PadFilter::Swallow(Controllers* controllers)
     for (std::size_t button = 0; button < NUM_BUTTONS; ++button)
     {
       bool& swallowed = m_swallowed[hand][button];
-      swallowed = swallowed && IsDown(state, button);
+      swallowed = swallowed && IsDown(raw[hand], button);
       if (swallowed)
         Clear(&state, button);
     }
-    m_stick_swallowed[hand] = m_stick_swallowed[hand] && Deflection(state) > 0.3f;
+    m_stick_swallowed[hand] = m_stick_swallowed[hand] && Deflection(raw[hand]) > 0.3f;
     if (m_stick_swallowed[hand])
       ClearStick(&state);
   }
@@ -140,7 +141,21 @@ PadEvents PadFilter::Update(Controllers* controllers, s64 now_ns, bool blocked, 
   // Swallowed controls look let go to everything below, but for the View combinations, which
   // swallow their own.
   const Controllers raw = *controllers;
-  Swallow(controllers);
+  Swallow(controllers, raw);
+
+  // ---- Both bumpers, View and Menu ----
+  const bool all = raw[LEFT].bumper_button && raw[RIGHT].bumper_button &&
+                   (raw[LEFT].view_button || raw[RIGHT].view_button) &&
+                   (raw[LEFT].menu_button || raw[RIGHT].menu_button);
+  if (all && !m_switch_down)
+  {
+    events.switch_mode = true;
+    SwallowHeld(raw);
+    Swallow(controllers, raw);
+    m_menu = MenuState::Idle;
+    m_view_used = true;
+  }
+  m_switch_down = all;
 
   // ---- Menu ----
   const bool menu = right.menu_button || left.menu_button;
@@ -195,6 +210,7 @@ PadEvents PadFilter::Update(Controllers* controllers, s64 now_ns, bool blocked, 
     m_left_bumper_done = false;
     m_right_bumper_down = false;
     m_left_bumper_down = false;
+    m_right_trigger_down = false;
     // What was down before View is the game's.
     m_right_bumper_ignored = true;
     m_left_bumper_ignored = true;
@@ -209,11 +225,9 @@ PadEvents PadFilter::Update(Controllers* controllers, s64 now_ns, bool blocked, 
     const bool left_bumper = left_bumper_raw && !m_left_bumper_ignored;
     const bool right_trigger = right_trigger_raw && !m_right_trigger_ignored;
 
-    if (right_bumper && !m_right_bumper_down)
-    {
+    if (m_right_bumper_down && !right_bumper)
       events.quick_save = true;
-      m_view_used = true;
-    }
+    m_view_used |= right_bumper;
     m_right_bumper_down = right_bumper;
 
     if (left_bumper && !m_left_bumper_down)
@@ -233,21 +247,22 @@ PadEvents PadFilter::Update(Controllers* controllers, s64 now_ns, bool blocked, 
     }
 
     const float trigger = raw[RIGHT].trigger_value;
-    m_fast_forward = right_trigger && (trigger > (m_fast_forward ? TRIGGER_OFF : TRIGGER_ON) ||
-                                       (raw[RIGHT].trigger_button && trigger <= 0.0f));
-    m_view_used |= m_fast_forward;
+    const bool pulled =
+        right_trigger && (trigger > (m_right_trigger_down ? TRIGGER_OFF : TRIGGER_ON) ||
+                          (raw[RIGHT].trigger_button && trigger <= 0.0f));
+    if (m_right_trigger_down && !pulled)
+      events.fast_forward = true;
+    m_view_used |= pulled;
+    m_right_trigger_down = pulled;
 
     if (!m_view_used)
     {
       const s64 held = now_ns - m_view_since;
-      if (held > VIEW_TAP_NS)
-      {
-        events.stop_progress = std::min(1.0f, static_cast<float>(held - VIEW_TAP_NS) /
-                                                  static_cast<float>(STOP_NS - VIEW_TAP_NS));
-      }
+      events.stopping = held >= STOP_NS / 2;
       if (held >= STOP_NS)
       {
         events.stop = true;
+        events.stopping = false;
         m_view_used = true;
       }
     }
@@ -261,7 +276,7 @@ PadEvents PadFilter::Update(Controllers* controllers, s64 now_ns, bool blocked, 
   {
     if (m_view_down && !m_view_used && now_ns - m_view_since < VIEW_TAP_NS)
       m_view_pulse_until = now_ns + PULSE_NS;
-    m_fast_forward = false;
+    m_right_trigger_down = false;
   }
   m_view_down = view;
   right.view_button = false;
@@ -296,7 +311,7 @@ PadEvents PadFilter::Update(Controllers* controllers, s64 now_ns, bool blocked, 
     ClearStick(&(*controllers)[hand]);
   }
 
-  Swallow(controllers);
+  Swallow(controllers, raw);
   return events;
 }
 }  // namespace VR::UI

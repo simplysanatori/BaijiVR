@@ -313,6 +313,10 @@ endif()
 if(ENABLE_VR)
   target_sources(videocommon PRIVATE
     VR/FrameUI/Overlay.h
+    VR/FrameUI/PadArt.cpp
+    VR/FrameUI/PadArt.h
+    VR/FrameUI/PadBindings.cpp
+    VR/FrameUI/PadBindings.h
     VR/FrameUI/PadFilter.cpp
     VR/FrameUI/PadFilter.h
     VR/FrameUI/ScreenPlacement.cpp

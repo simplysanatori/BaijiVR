@@ -49,6 +49,8 @@ public:
              const FrameXr::Input::Ray& ray);
   ScreenPlacement Update(const ScreenAnchor& anchor, ScreenPlacement placement,
                          const FrameXr::Input::Ray& ray) const;
+  // Round the anchor, under the beam as it is.
+  ScreenPlacement Nudge(ScreenPlacement placement, float yaw_deg);
 
 private:
   float m_yaw_offset = 0.0f;

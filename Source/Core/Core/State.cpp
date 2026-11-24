@@ -35,6 +35,7 @@
 #include "Common/WorkQueueThread.h"
 
 #include "Core/AchievementManager.h"
+#include "Core/Autosave.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
@@ -469,7 +470,10 @@ static void CompressAndDumpState(Core::System& system, const CompressAndDumpStat
   else
   {
     const std::filesystem::path temp_path(filename);
-    Core::DisplayMessage(fmt::format("Saved State to {}", temp_path.filename().string()), 2000);
+    const std::string name = temp_path.filename().string();
+    Core::DisplayMessage(
+        name.contains(Autosave::FILE_MARK) ? "Autosaved" : fmt::format("Saved State to {}", name),
+        2000);
   }
 }
 

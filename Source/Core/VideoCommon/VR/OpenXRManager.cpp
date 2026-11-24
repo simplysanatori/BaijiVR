@@ -1794,10 +1794,10 @@ bool OpenXRManager::InitializeInputActions()
   };
 
   const auto suggest_bindings = [this, &to_path](const char* profile,
-                                                 std::initializer_list<BindingDef> defs) {
+                                                 std::initializer_list<BindingDef> defs) -> bool {
     const XrPath profile_path = to_path(profile);
     if (profile_path == XR_NULL_PATH)
-      return;
+      return false;
 
     std::vector<XrActionSuggestedBinding> bindings;
     bindings.reserve(defs.size());
@@ -1812,7 +1812,7 @@ bool OpenXRManager::InitializeInputActions()
     }
 
     if (bindings.empty())
-      return;
+      return false;
 
     XrInteractionProfileSuggestedBinding suggested{
         XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
@@ -1832,6 +1832,7 @@ bool OpenXRManager::InitializeInputActions()
       INFO_LOG_FMT(OPENXR, "OpenXR: Suggested {} bindings for profile '{}'.",
                    bindings.size(), profile);
     }
+    return XR_SUCCEEDED(suggest_result);
   };
 
   suggest_bindings("/interaction_profiles/khr/simple_controller",
@@ -2105,7 +2106,9 @@ bool OpenXRManager::InitializeInputActions()
   {
     // Steam Frame exposes its native button layout through this profile. Touch and grip-pose
     // inputs are intentionally not mapped into Dolphin's emulated controller UI.
-    suggest_bindings(FRAME_CONTROLLER_PROFILE,
+    const auto suggest_frame = [&](bool grip_value) {
+      return suggest_bindings(
+          FRAME_CONTROLLER_PROFILE,
                      {
                          {m_action_primary_click, "/user/hand/right/input/a/click"},
                          {m_action_secondary_click, "/user/hand/right/input/b/click"},
@@ -2133,6 +2136,10 @@ bool OpenXRManager::InitializeInputActions()
                          {m_action_trigger_value, "/user/hand/right/input/trigger/value"},
                          {m_action_squeeze_click, "/user/hand/left/input/squeeze/click"},
                          {m_action_squeeze_click, "/user/hand/right/input/squeeze/click"},
+                         {grip_value ? m_action_squeeze_value : XR_NULL_HANDLE,
+                          "/user/hand/left/input/squeeze/value"},
+                         {grip_value ? m_action_squeeze_value : XR_NULL_HANDLE,
+                          "/user/hand/right/input/squeeze/value"},
                          {m_action_aim_pose, "/user/hand/left/input/aim/pose"},
                          {m_action_aim_pose, "/user/hand/right/input/aim/pose"},
                          {m_action_grip_pose, "/user/hand/left/input/grip/pose"},
@@ -2140,6 +2147,10 @@ bool OpenXRManager::InitializeInputActions()
                          {m_action_haptic, "/user/hand/left/output/haptic"},
                          {m_action_haptic, "/user/hand/right/output/haptic"},
                      });
+    };
+    // One path a runtime does not know fails them all.
+    if (!suggest_frame(true))
+      suggest_frame(false);
   }
 
   XrSessionActionSetsAttachInfo attach_info{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};

@@ -439,6 +439,10 @@ const Info<bool> MAIN_USE_BUILT_IN_TITLE_DATABASE{
 const Info<std::string> MAIN_THEME_NAME{{System::Main, "Interface", "ThemeName"},
                                         DEFAULT_THEME_DIR};
 const Info<bool> MAIN_PAUSE_ON_FOCUS_LOST{{System::Main, "Interface", "PauseOnFocusLost"}, false};
+const Info<bool> MAIN_AUTOSAVE_ENABLED{{System::Main, "Autosave", "Enabled"}, false};
+const Info<u32> MAIN_AUTOSAVE_MINUTES{{System::Main, "Autosave", "Minutes"}, 5};
+const Info<u32> MAIN_AUTOSAVE_KEEP{{System::Main, "Autosave", "Keep"}, 3};
+const Info<bool> MAIN_SAVE_STATE_NOTICE_SHOWN{{System::Main, "Autosave", "NoticeShown"}, false};
 const Info<bool> MAIN_ENABLE_DEBUGGING{{System::Main, "Interface", "DebugModeEnabled"}, false};
 
 // Main.Analytics

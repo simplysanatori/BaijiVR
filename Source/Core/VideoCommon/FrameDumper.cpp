@@ -7,6 +7,7 @@
 #include "Common/FileUtil.h"
 #include "Common/Image.h"
 
+#include "Core/Autosave.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
 
@@ -226,7 +227,9 @@ void FrameDumper::FrameDumpThreadFunc()
     {
       std::lock_guard<std::mutex> lk(m_screenshot_lock);
 
-      if (DumpFrameToPNG(frame, m_screenshot_name))
+      // An autosave's picture is not the player's screenshot.
+      if (DumpFrameToPNG(frame, m_screenshot_name) &&
+          !m_screenshot_name.contains(Autosave::FILE_MARK))
         OSD::AddMessage("Screenshot saved to " + m_screenshot_name);
 
       // Reset settings

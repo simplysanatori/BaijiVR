@@ -114,6 +114,9 @@ private:
   void SetSlider(const MenuWidget& widget, float t);
   void UpdatePause();
   void SetFastForward(bool on);
+  void SwitchMode();
+  void LoadState(std::string path, std::string undo_label, s64 time);
+  void RequestSaves();
   void ShowToast(std::string text, s64 duration_ns);
   void SaveScreenPlacement();
 
@@ -149,6 +152,8 @@ private:
   // Moving the screen.
   int m_grab_hand = -1;
   std::array<bool, 2> m_grip_down{};
+  int m_nudge = 0;
+  s64 m_nudge_at_ns = 0;
   ScreenGrab m_grab;
 
   // The menu.
@@ -161,11 +166,12 @@ private:
   int m_menu_hand = 1;
   bool m_press_down = false;
   MenuItem m_press_item = MenuItem::None;
+  int m_press_index = 0;
   std::optional<MenuWidget> m_drag;
   bool m_back_down = false;
   s64 m_last_refresh_ns = 0;
+  s64 m_pause_after_ns = 0;
   bool m_pause_wanted = false;
-  bool m_fast_forward_toggle = false;
   bool m_fast_forward = false;
 
   // Toasts: row 0 the message, row 1 the hint.
@@ -188,6 +194,8 @@ private:
   std::condition_variable m_draw_cv;
   bool m_draw_exit = false;
   std::optional<MenuState> m_draw_request;
+  bool m_saves_request = false;
+  std::optional<MenuSaves> m_saves;
   std::vector<u32> m_drawn;
   bool m_drawn_ready = false;
   std::optional<MenuState> m_last_drawn;

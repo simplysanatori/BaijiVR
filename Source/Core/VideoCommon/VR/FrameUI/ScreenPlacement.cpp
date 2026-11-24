@@ -120,4 +120,11 @@ ScreenPlacement ScreenGrab::Update(const ScreenAnchor& anchor, ScreenPlacement p
                  ScreenPlacement::MAX_PITCH_DEG);
   return placement;
 }
+
+ScreenPlacement ScreenGrab::Nudge(ScreenPlacement placement, float yaw_deg)
+{
+  m_yaw_offset += yaw_deg * DEG_TO_RAD;
+  placement.yaw_deg = WrapAngle((placement.yaw_deg + yaw_deg) * DEG_TO_RAD) / DEG_TO_RAD;
+  return placement;
+}
 }  // namespace VR::UI

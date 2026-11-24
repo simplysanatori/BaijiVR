@@ -265,6 +265,10 @@ extern const Info<bool> MAIN_SHOW_ACTIVE_TITLE;
 extern const Info<bool> MAIN_USE_BUILT_IN_TITLE_DATABASE;
 extern const Info<std::string> MAIN_THEME_NAME;
 extern const Info<bool> MAIN_PAUSE_ON_FOCUS_LOST;
+extern const Info<bool> MAIN_AUTOSAVE_ENABLED;
+extern const Info<u32> MAIN_AUTOSAVE_MINUTES;
+extern const Info<u32> MAIN_AUTOSAVE_KEEP;
+extern const Info<bool> MAIN_SAVE_STATE_NOTICE_SHOWN;
 extern const Info<bool> MAIN_ENABLE_DEBUGGING;
 
 // Main.Analytics

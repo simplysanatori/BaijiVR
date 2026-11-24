@@ -9,6 +9,8 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <ctime>
+#include <map>
 #include <string_view>
 #include <utility>
 
@@ -16,17 +18,22 @@
 
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
+#include "Common/Image.h"
 #include "Common/Logging/Log.h"
 #include "Common/VR/OpenXRInputState.h"
 
+#include "Core/Autosave.h"
 #include "Core/Config/GraphicsSettings.h"
+#include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
+#include "Core/HW/ProcessorInterface.h"
 #include "Core/NetPlayProto.h"
 #include "Core/State.h"
 #include "Core/System.h"
 
 #include "VideoCommon/FramebufferManager.h"
+#include "VideoCommon/VR/FrameUI/PadBindings.h"
 #include "VideoCommon/VR/OpenXRManager.h"
 #include "VideoCommon/VideoConfig.h"
 
@@ -60,14 +67,32 @@ constexpr int DOT_X = 160;
 constexpr float BEAM_WIDTH = 0.008f;
 constexpr float STUB_LENGTH = 0.5f;
 
+constexpr float GRIP_ON = 0.60f;
+constexpr float GRIP_OFF = 0.40f;
 constexpr float TRIGGER_ON = 0.55f;
 constexpr float TRIGGER_OFF = 0.40f;
 
 constexpr s64 REFRESH_NS = 250'000'000;
+// The autosave's picture is of the running game.
+constexpr s64 AUTOSAVE_PICTURE_NS = 250'000'000;
+
+constexpr float NUDGE_DEG = 0.5f;
+constexpr s64 NUDGE_FIRST_NS = 400'000'000;
+constexpr s64 NUDGE_REPEAT_NS = 80'000'000;
+
+// Of what Azahar calls turbo speed.
+constexpr float FAST_FORWARD_SPEED = 2.0f;
 
 std::atomic<bool> s_paused_by_menu{false};
 std::mutex s_toast_mutex;
 std::optional<std::pair<std::string, u32>> s_toast;
+// After the toast there is.
+std::optional<std::pair<std::string, u32>> s_next_toast;
+// The save states on disk changed.
+std::atomic<u32> s_saves_changed{0};
+std::atomic<bool> s_bindings_ready{false};
+std::mutex s_bindings_mutex;
+std::pair<PadKind, PadLabels> s_bindings;
 
 Vec3f ToVec(const std::array<float, 3>& v)
 {
@@ -143,6 +168,120 @@ void QueueConfig(std::function<void()> change)
   });
 }
 
+// Once, with the first save state.
+void ShowSaveStateNotice()
+{
+  if (Config::Get(Config::MAIN_SAVE_STATE_NOTICE_SHOWN))
+    return;
+  Config::SetBaseOrCurrent(Config::MAIN_SAVE_STATE_NOTICE_SHOWN, true);
+  std::lock_guard lock(s_toast_mutex);
+  s_next_toast.emplace("Save states are NOT a replacement for saving in the game", 5000);
+}
+
+void QueueSave(std::string path)
+{
+  Core::QueueHostJob([path = std::move(path)](Core::System& system) {
+    // Says it is saved (PostEmulatorMessage) once it is.
+    File::CreateFullPath(path);
+    State::SaveAs(system, path);
+    ShowSaveStateNotice();
+  });
+}
+
+std::string GetSlotPath(int slot)
+{
+  return fmt::format("{}{}.s{:02d}", File::GetUserPath(D_STATESAVES_IDX),
+                     SConfig::GetInstance().GetGameID(), slot);
+}
+
+// "GFEE01.s03": 3; 0 for another name.
+int GetSlotOf(std::string_view message)
+{
+  const std::size_t at = message.rfind(".s");
+  if (at == std::string_view::npos || message.size() != at + 4 ||
+      !std::isdigit(static_cast<unsigned char>(message[at + 2])) ||
+      !std::isdigit(static_cast<unsigned char>(message[at + 3])))
+  {
+    return 0;
+  }
+  return (message[at + 2] - '0') * 10 + (message[at + 3] - '0');
+}
+
+// The drawing thread: this waits for a save that is being written.
+MenuSaves ReadSaves()
+{
+  MenuSaves saves;
+  saves.has_quick_save = File::Exists(GetQuickSavePath());
+  for (int i = 0; i < NUM_SLOTS; ++i)
+  {
+    if (!File::Exists(GetSlotPath(i + 1)))
+      continue;
+    if (const u64 ms = State::GetUnixTimeOfSlot(i + 1))
+    {
+      saves.slots[static_cast<std::size_t>(i)] =
+          Autosave::LocalDateTime(static_cast<s64>(ms / 1000));
+    }
+  }
+  const s64 now = std::time(nullptr);
+  for (const Autosave::Entry& entry : Autosave::List(SConfig::GetInstance().GetGameID()))
+  {
+    saves.autosaves.push_back({entry.path, entry.picture, Autosave::AgoLocal(entry.time, now),
+                               Autosave::LocalDateTime(entry.time),
+                               Autosave::LocalTime(entry.time)});
+  }
+  return saves;
+}
+
+// A picture scaled down to what the menu shows.
+MenuPicture ReadPicture(const std::string& path)
+{
+  MenuPicture picture;
+  std::string file;
+  Common::UniqueBuffer<u8> data;
+  u32 width = 0;
+  u32 height = 0;
+  if (!File::ReadFileToString(path, file) ||
+      !Common::LoadPNG({reinterpret_cast<const u8*>(file.data()), file.size()}, &data, &width,
+                       &height) ||
+      width == 0 || height == 0)
+  {
+    return picture;
+  }
+  const u32 step = std::max(1u, width / 160);
+  picture.width = static_cast<int>(width / step);
+  picture.height = static_cast<int>(height / step);
+  picture.pixels.reserve(static_cast<std::size_t>(picture.width) * picture.height * 4);
+  for (u32 y = 0; y < static_cast<u32>(picture.height); ++y)
+  {
+    for (u32 x = 0; x < static_cast<u32>(picture.width); ++x)
+    {
+      std::array<u32, 3> sum{};
+      for (u32 j = 0; j < step; ++j)
+      {
+        for (u32 i = 0; i < step; ++i)
+        {
+          const u8* const p =
+              data.data() + (std::size_t{y * step + j} * width + x * step + i) * 4;
+          for (std::size_t c = 0; c < sum.size(); ++c)
+            sum[c] += p[c];
+        }
+      }
+      for (const u32 c : sum)
+        picture.pixels.push_back(static_cast<u8>(c / (step * step)));
+      picture.pixels.push_back(255);
+    }
+  }
+  return picture;
+}
+
+void QueueFastForward(bool on)
+{
+  Core::QueueHostJob([on](Core::System&) {
+    const float normal = Config::GetBase(Config::MAIN_EMULATION_SPEED);
+    Config::SetCurrent(Config::MAIN_EMULATION_SPEED, on ? FAST_FORWARD_SPEED : normal);
+  });
+}
+
 template <typename T>
 void QueueSet(const Config::Info<T>& info, T value)
 {
@@ -197,7 +336,7 @@ VrUi::~VrUi()
   // The game must not be left paused, or fast, without a menu to change that.
   Core::QueueHostJob(ResumeFromMenu);
   if (m_fast_forward)
-    Core::SetIsThrottlerTempDisabled(false);
+    QueueFastForward(false);
 }
 
 void VrUi::PostToast(std::string text, u32 ms)
@@ -208,15 +347,24 @@ void VrUi::PostToast(std::string text, u32 ms)
 
 void VrUi::PostEmulatorMessage(std::string_view message, u32 ms)
 {
-  const bool quick = message.contains(QUICK_SAVE_SUFFIX);
   if (message.starts_with("Saving State") || message.starts_with("Decompressing State"))
     return;
-  if (message.starts_with("Saved State"))
-    PostToast(quick ? "Quick Saved" : "State Saved", 2000);
-  else if (message.starts_with("Loaded State"))
-    PostToast(quick ? "Quick Loaded" : "State Loaded", 2000);
-  else
+  const bool saved = message.starts_with("Saved State") || message == "Autosaved";
+  const bool loaded = message.starts_with("Loaded State");
+  if (saved)
+    ++s_saves_changed;
+  if (!saved && !loaded)
     PostToast(std::string(message.substr(0, message.find('\n'))), ms);
+  else if (message.contains(QUICK_SAVE_SUFFIX))
+    PostToast(saved ? "Quick Saved" : "Quick Loaded", 2000);
+  else if (message == "Autosaved")
+    PostToast("Autosaved", 1500);
+  else if (message.contains(Autosave::FILE_MARK))
+    PostToast("Autosave Loaded", 2000);
+  else if (const int slot = GetSlotOf(message))
+    PostToast(fmt::format(fmt::runtime(saved ? "Saved to Slot {}" : "Slot {} Loaded"), slot), 2000);
+  else
+    PostToast(saved ? "State Saved" : "State Loaded", 2000);
 }
 
 bool VrUi::IsActive() const
@@ -250,7 +398,6 @@ void VrUi::Update(const Frame& frame, Controllers* controllers)
 void VrUi::OnFocusLost()
 {
   m_filter.Reset();
-  SetFastForward(m_fast_forward_toggle);
   if (m_grab_hand >= 0)
   {
     m_grab_hand = -1;
@@ -273,26 +420,13 @@ void VrUi::HandleEvents(const PadEvents& events)
     OpenMenu(m_frame);
 
   if (events.quick_save)
-  {
-    Core::QueueHostJob([](Core::System& system) {
-      // Says it is saved (PostEmulatorMessage) once it is.
-      const std::string path = GetQuickSavePath();
-      File::CreateFullPath(path);
-      State::SaveAs(system, path);
-    });
-  }
+    QueueSave(GetQuickSavePath());
   if (events.quick_load)
-  {
-    Core::QueueHostJob([](Core::System& system) {
-      const std::string path = GetQuickSavePath();
-      if (!File::Exists(path))
-      {
-        VrUi::PostToast("No Quick Save", 2000);
-        return;
-      }
-      State::LoadAs(system, path);
-    });
-  }
+    LoadState(GetQuickSavePath(), "Quick Save", 0);
+  if (events.fast_forward)
+    SetFastForward(!m_fast_forward);
+  if (events.switch_mode)
+    SwitchMode();
   if (events.reset_screen)
   {
     m_manager->ResetScreenPlacement();
@@ -306,11 +440,9 @@ void VrUi::HandleEvents(const PadEvents& events)
     Core::QueueHostJob([](Core::System& system) { Core::Stop(system); });
   }
 
-  SetFastForward(m_filter.IsFastForward() || m_fast_forward_toggle);
-
   if (m_grab_hand >= 0)
     m_hint = Hint::Grab;
-  else if (events.stop_progress > 0.0f && !events.stop)
+  else if (events.stopping)
     m_hint = Hint::Stop;
   else
     m_hint = Hint::None;
@@ -321,8 +453,37 @@ void VrUi::SetFastForward(bool on)
   if (on == m_fast_forward)
     return;
   m_fast_forward = on;
-  Core::SetIsThrottlerTempDisabled(on);
+  m_menu.fast_forward = on;
+  QueueFastForward(on);
   ShowToast(on ? "Fast Forward" : "Normal Speed", ToastFit::kShortNs);
+}
+
+void VrUi::SwitchMode()
+{
+  if (m_menu.can_switch_mode)
+    QueueSwitchMode(m_frame.has_screen);
+}
+
+void VrUi::LoadState(std::string path, std::string undo_label, s64 time)
+{
+  if (!File::Exists(path))
+  {
+    ShowToast("No Quick Save", ToastFit::kShortNs);
+    return;
+  }
+  m_menu.undo_load = fmt::format("{} Loaded: {}", undo_label,
+                                 Autosave::LocalTime(time ? time : std::time(nullptr)));
+  Core::QueueHostJob(
+      [path = std::move(path)](Core::System& system) { State::LoadAs(system, path); });
+}
+
+void VrUi::RequestSaves()
+{
+  {
+    std::lock_guard lock(m_draw_mutex);
+    m_saves_request = true;
+  }
+  m_draw_cv.notify_one();
 }
 
 void VrUi::SaveScreenPlacement()
@@ -345,7 +506,8 @@ void VrUi::UpdateGrab(const Frame& frame, const Controllers& controllers, float 
     const auto& c = controllers[static_cast<std::size_t>(hand)];
     bool& down = m_grip_down[static_cast<std::size_t>(hand)];
     const bool was_down = down;
-    down = c.connected && (c.squeeze_button || (was_down && c.squeeze_value > 0.3f));
+    down = c.connected && (c.squeeze_value > (was_down ? GRIP_OFF : GRIP_ON) ||
+                            (c.squeeze_button && c.squeeze_value <= 0.0f));
 
     if (m_grab_hand == hand && (!down || !frame.has_screen || !c.aim_pose.valid || m_menu_open))
     {
@@ -360,6 +522,7 @@ void VrUi::UpdateGrab(const Frame& frame, const Controllers& controllers, float 
       if (screen.visible && IntersectQuad(ray, screen).in_bounds)
       {
         m_grab_hand = hand;
+        m_nudge = 0;
         m_grab.Begin(m_manager->GetScreenAnchor(), m_manager->GetScreenPlacement(), ray);
         m_manager->PulseHaptics(static_cast<std::size_t>(hand));
       }
@@ -374,6 +537,20 @@ void VrUi::UpdateGrab(const Frame& frame, const Controllers& controllers, float 
   placement = MoveWithStick(placement, c.thumbstick_x, c.thumbstick_y, dt);
   placement = m_grab.Update(m_manager->GetScreenAnchor(), placement,
                             RayFromPose(ToPose(c.aim_pose)));
+
+  // The D-Pad moves it half a degree at a time, for an edge just out of view.
+  const int nudge = controllers[0].dpad_left ? 1 : controllers[0].dpad_right ? -1 : 0;
+  if (nudge != m_nudge || (nudge && frame.time_ns >= m_nudge_at_ns))
+  {
+    m_nudge_at_ns = frame.time_ns + (nudge != m_nudge ? NUDGE_FIRST_NS : NUDGE_REPEAT_NS);
+    if (nudge)
+    {
+      if (nudge != m_nudge)
+        ShowToast(nudge > 0 ? "Moved Left" : "Moved Right", ToastFit::kShortNs);
+      placement = m_grab.Nudge(placement, static_cast<float>(nudge) * NUDGE_DEG);
+    }
+    m_nudge = nudge;
+  }
   m_manager->SetScreenPlacement(placement);
 }
 
@@ -427,7 +604,26 @@ void VrUi::OpenMenu(const Frame& frame)
   m_press_item = MenuItem::None;
   m_drag.reset();
   m_menu.tab = MenuTab::Main;
+  m_menu.page = MenuPage::Main;
+  m_menu.autosave_list = false;
+  m_menu.hover = MenuItem::None;
   m_last_refresh_ns = 0;
+
+  // The autosave is of the moment it opened.
+  m_pause_after_ns = 0;
+  if (Config::Get(Config::MAIN_AUTOSAVE_ENABLED))
+  {
+    m_pause_after_ns = frame.time_ns + AUTOSAVE_PICTURE_NS;
+    Core::QueueHostJob(
+        [](Core::System& system) { Autosave::Request(system, Autosave::Reason::MenuOpen); });
+  }
+  Core::QueueHostJob([](Core::System& system) {
+    auto bindings = GetPadBindings(system.IsWii());
+    std::lock_guard lock(s_bindings_mutex);
+    s_bindings = std::move(bindings);
+    s_bindings_ready = true;
+  });
+  RequestSaves();
   RefreshMenuState();
   UpdatePause();
 }
@@ -445,7 +641,8 @@ void VrUi::CloseMenu()
 void VrUi::UpdatePause()
 {
   // The Screen tab's settings show on the running game.
-  const bool wanted = m_menu_open && m_menu.tab != MenuTab::Screen;
+  const bool wanted = m_menu_open && m_menu.tab != MenuTab::Screen &&
+                      m_frame.time_ns >= m_pause_after_ns;
   if (wanted == m_pause_wanted)
     return;
   m_pause_wanted = wanted;
@@ -475,8 +672,7 @@ void VrUi::RefreshMenuState()
   m_menu.immersive = !m_frame.has_screen;
   m_menu.can_switch_mode =
       mode == OpenXRPresentationMode::Immersive || mode == OpenXRPresentationMode::StereoScreen;
-  m_menu.has_quick_save = File::Exists(GetQuickSavePath());
-  m_menu.fast_forward = m_fast_forward_toggle;
+  m_menu.fast_forward = m_fast_forward;
   m_menu.distance = placement.distance;
   m_menu.size = placement.height;
   if (!m_drag || m_drag->item != MenuItem::Depth)
@@ -504,6 +700,19 @@ void VrUi::RefreshMenuState()
   m_menu.beams = Config::Get(Config::GFX_VR_POINTER_BEAMS);
   m_menu.toasts = Config::Get(Config::GFX_VR_TOASTS);
   m_menu.eager = Config::Get(Config::GFX_VR_EAGER_HEARTBEAT);
+  m_menu.autosave = Config::Get(Config::MAIN_AUTOSAVE_ENABLED);
+  const auto minutes = static_cast<int>(Config::Get(Config::MAIN_AUTOSAVE_MINUTES));
+  m_menu.autosave_every = 0;
+  while (m_menu.autosave_every + 1 < static_cast<int>(AUTOSAVE_MINUTES.size()) &&
+         AUTOSAVE_MINUTES[static_cast<std::size_t>(m_menu.autosave_every) + 1] <= minutes)
+  {
+    ++m_menu.autosave_every;
+  }
+  if (!m_drag || m_drag->item != MenuItem::AutosaveKeep)
+  {
+    m_menu.autosave_keep =
+        std::clamp(static_cast<int>(Config::Get(Config::MAIN_AUTOSAVE_KEEP)), 1, 10);
+  }
 }
 
 void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
@@ -516,6 +725,21 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
     m_last_refresh_ns = frame.time_ns;
     RefreshMenuState();
   }
+  UpdatePause();
+  if (s_saves_changed.exchange(0) != 0)
+    RequestSaves();
+  if (s_bindings_ready.exchange(false))
+  {
+    std::lock_guard lock(s_bindings_mutex);
+    std::tie(m_menu.pad, m_menu.pad_labels) = s_bindings;
+  }
+  if (m_draw_mutex.try_lock())
+  {
+    if (m_saves)
+      m_menu.saves = std::move(*std::exchange(m_saves, std::nullopt));
+    m_draw_mutex.unlock();
+  }
+  m_menu.autosave_list &= m_menu.saves.autosaves.size() > 1;
 
   const bool back = controllers[1].secondary_button || controllers[1].menu_button ||
                     controllers[0].menu_button;
@@ -529,8 +753,21 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
   }
   else if (back_pressed)
   {
-    CloseMenu();
-    return;
+    // Menu closes it; B goes back first.
+    if (controllers[1].secondary_button && m_menu.autosave_list)
+    {
+      m_menu.autosave_list = false;
+    }
+    else if (controllers[1].secondary_button && m_menu.tab == MenuTab::Main &&
+             m_menu.page != MenuPage::Main)
+    {
+      m_menu.page = MenuPage::Main;
+    }
+    else
+    {
+      CloseMenu();
+      return;
+    }
   }
 
   // The hand that points: the one that pressed last, or the one that is on the menu.
@@ -562,10 +799,12 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
   const MenuWidget* const hovered =
       hit.in_bounds && !m_drag ? VrMenu::At(m_widgets, x, y) : nullptr;
   const MenuItem hover = m_drag ? m_drag->item : hovered ? hovered->item : MenuItem::None;
+  const int index = m_drag ? m_drag->index : hovered ? hovered->index : 0;
   const int option = hovered ? VrMenu::OptionAt(*hovered, x) : -1;
-  if (hover != m_menu.hover && hover != MenuItem::None)
+  if (hover != MenuItem::None && (hover != m_menu.hover || index != m_menu.hover_index))
     m_manager->PulseHaptics(hand);
   m_menu.hover = hover;
+  m_menu.hover_index = index;
   m_menu.hover_option = option;
 
   const bool down = m_menu_armed &&
@@ -579,6 +818,7 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
   if (pressed)
   {
     m_press_item = hover;
+    m_press_index = index;
     if (hovered && hovered->kind == MenuWidget::Kind::Slider)
       m_drag = *hovered;
   }
@@ -593,7 +833,13 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
         SaveScreenPlacement();
       m_drag.reset();
     }
-    else if (hovered && item == hovered->item)
+    else if (m_menu.autosave_list && item != MenuItem::AutosaveEntry &&
+             item != MenuItem::AutosaveList)
+    {
+      // Beside the list: it closes.
+      m_menu.autosave_list = false;
+    }
+    else if (hovered && item == hovered->item && m_press_index == index)
     {
       // A copy: the menu changes under it.
       const MenuWidget widget = *hovered;
@@ -631,6 +877,14 @@ void VrUi::SetSlider(const MenuWidget& widget, float t)
     m_menu.depth = value;
     break;
   }
+  case MenuItem::AutosaveKeep:
+  {
+    const int value = 1 + static_cast<int>(std::lround(t * 9.0f));
+    if (value != m_menu.autosave_keep)
+      QueueSet(Config::MAIN_AUTOSAVE_KEEP, static_cast<u32>(value));
+    m_menu.autosave_keep = value;
+    break;
+  }
   case MenuItem::Convergence:
   {
     const float value = std::round(t * Config::GFX_STEREO_CONVERGENCE_MAXIMUM);
@@ -651,15 +905,19 @@ void VrUi::Activate(const MenuWidget& widget, int option)
   {
   case MenuItem::TabMain:
     m_menu.tab = MenuTab::Main;
+    m_menu.page = MenuPage::Main;
     break;
   case MenuItem::TabScreen:
     m_menu.tab = MenuTab::Screen;
+    m_menu.page = MenuPage::Main;
     break;
   case MenuItem::TabControls:
     m_menu.tab = MenuTab::Controls;
+    m_menu.page = MenuPage::Main;
     break;
   case MenuItem::TabSettings:
     m_menu.tab = MenuTab::Settings;
+    m_menu.page = MenuPage::Main;
     break;
   case MenuItem::Resume:
     CloseMenu();
@@ -684,9 +942,75 @@ void VrUi::Activate(const MenuWidget& widget, int option)
     CloseMenu();
     break;
   case MenuItem::FastForward:
-    m_fast_forward_toggle = !m_fast_forward_toggle;
-    m_menu.fast_forward = m_fast_forward_toggle;
-    SetFastForward(m_fast_forward_toggle);
+    SetFastForward(!m_fast_forward);
+    break;
+  case MenuItem::SaveState:
+    m_menu.page = MenuPage::Save;
+    RequestSaves();
+    break;
+  case MenuItem::LoadState:
+    m_menu.page = MenuPage::Load;
+    RequestSaves();
+    break;
+  case MenuItem::Back:
+    m_menu.page = MenuPage::Main;
+    break;
+  case MenuItem::Slot:
+    if (m_menu.page == MenuPage::Save)
+      QueueSave(GetSlotPath(widget.index));
+    else
+      LoadState(GetSlotPath(widget.index), widget.label, 0);
+    CloseMenu();
+    break;
+  case MenuItem::AutosaveCard:
+  case MenuItem::AutosaveEntry:
+    if (widget.item == MenuItem::AutosaveCard && m_menu.saves.autosaves.size() > 1)
+    {
+      m_menu.autosave_list = true;
+      break;
+    }
+    if (const auto at = static_cast<std::size_t>(widget.index); at < m_menu.saves.autosaves.size())
+    {
+      LoadState(m_menu.saves.autosaves[at].path, "Autosave", 0);
+      CloseMenu();
+    }
+    break;
+  case MenuItem::AutosaveSettings:
+    m_menu.tab = MenuTab::Settings;
+    m_menu.page = MenuPage::Main;
+    break;
+  case MenuItem::UndoLoad:
+    m_menu.undo_load.clear();
+    Core::QueueHostJob([](Core::System& system) {
+      State::UndoLoadState(system);
+      VrUi::PostToast("Load Undone", 2000);
+    });
+    CloseMenu();
+    break;
+  case MenuItem::Restart:
+    CloseMenu();
+    Core::QueueHostJob(
+        [](Core::System& system) { system.GetProcessorInterface().ResetButton_Tap(); });
+    break;
+  case MenuItem::Screenshot:
+    CloseMenu();
+    Core::QueueHostJob([](Core::System&) { Core::SaveScreenShot(); });
+    break;
+  case MenuItem::ControlsPage:
+    if (option >= 0)
+      m_menu.controls_page = option;
+    break;
+  case MenuItem::Autosave:
+    m_menu.autosave = !m_menu.autosave;
+    QueueSet(Config::MAIN_AUTOSAVE_ENABLED, m_menu.autosave);
+    break;
+  case MenuItem::AutosaveEvery:
+    if (option >= 0)
+    {
+      m_menu.autosave_every = option;
+      QueueSet(Config::MAIN_AUTOSAVE_MINUTES,
+               static_cast<u32>(AUTOSAVE_MINUTES[static_cast<std::size_t>(option)]));
+    }
     break;
   case MenuItem::Stop:
     events.stop = true;
@@ -737,6 +1061,8 @@ void VrUi::Activate(const MenuWidget& widget, int option)
   case MenuItem::Size:
   case MenuItem::Depth:
   case MenuItem::Convergence:
+  case MenuItem::AutosaveKeep:
+  case MenuItem::AutosaveList:
     break;
   }
   // What was just set is on its way to the config: do not read the old value back over it.
@@ -844,6 +1170,8 @@ void VrUi::UpdateToasts(const Frame& frame)
   {
     std::lock_guard lock(s_toast_mutex);
     posted = std::exchange(s_toast, std::nullopt);
+    if (!posted && m_toast_until_ns == 0 && !m_menu_open)
+      posted = std::exchange(s_next_toast, std::nullopt);
   }
   if (posted && g_ActiveConfig.vr_toasts)
   {
@@ -858,7 +1186,7 @@ void VrUi::UpdateToasts(const Frame& frame)
   {
     m_hint_drawn = m_hint;
     DrawToastRow(HINT_ROW,
-                 m_hint == Hint::Grab ? "Stick: Distance, Size" : "Keep Holding to Stop");
+                 m_hint == Hint::Grab ? "Stick: Distance, Size   D-Pad: Move" : "Stopping...");
   }
 }
 
@@ -1029,17 +1357,35 @@ void VrUi::DrawThread()
   FrameXr::Menu::Kit kit(MENU_PX_PER_DP);
   FrameXr::Menu::Canvas canvas;
   canvas.Init(static_cast<int>(MENU_TEX_WIDTH), static_cast<int>(MENU_TEX_HEIGHT));
+  std::map<std::string, std::optional<MenuPicture>> pictures;
 
   std::unique_lock lock(m_draw_mutex);
   while (true)
   {
-    m_draw_cv.wait(lock, [this] { return m_draw_exit || m_draw_request.has_value(); });
+    m_draw_cv.wait(lock, [this] {
+      return m_draw_exit || m_saves_request || m_draw_request.has_value();
+    });
     if (m_draw_exit)
       return;
+    if (m_saves_request)
+    {
+      m_saves_request = false;
+      lock.unlock();
+      MenuSaves saves = ReadSaves();
+      pictures.clear();
+      lock.lock();
+      m_saves = std::move(saves);
+      continue;
+    }
     const MenuState state = std::move(*m_draw_request);
     m_draw_request.reset();
     lock.unlock();
-    VrMenu::Draw(&kit, &canvas, state);
+    VrMenu::Draw(&kit, &canvas, state, [&pictures](const std::string& path) {
+      const auto it = pictures.try_emplace(path).first;
+      if (!it->second)
+        it->second = ReadPicture(path);
+      return it->second->width > 0 ? &*it->second : nullptr;
+    });
     lock.lock();
     m_drawn = canvas.px;
     m_drawn_ready = true;

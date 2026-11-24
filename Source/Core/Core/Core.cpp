@@ -38,6 +38,7 @@
 #include "Common/Version.h"
 
 #include "Core/AchievementManager.h"
+#include "Core/Autosave.h"
 #include "Core/Boot/Boot.h"
 #include "Core/BootManager.h"
 #include "Core/CPUThreadConfigCallback.h"
@@ -296,6 +297,9 @@ static void ResetRumble()
 // Called from GUI thread
 void Stop(Core::System& system)  // - Hammertime!
 {
+  if (!IsCPUThread() && !IsGPUThread())
+    Autosave::BeforeStop(system);
+
   {
     std::lock_guard lock(s_core_mutex);
 
@@ -949,6 +953,7 @@ void Callback_NewField(Core::System& system)
   }
 
   AchievementManager::GetInstance().DoFrame();
+  Autosave::OnField(system);
 }
 
 void UpdateTitle(Core::System& system)

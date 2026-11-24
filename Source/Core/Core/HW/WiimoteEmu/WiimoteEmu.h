@@ -173,6 +173,8 @@ public:
 
   // Active extension number is exposed for TAS.
   ExtensionNumber GetActiveExtensionNumber() const;
+  bool IsSideways() const;
+  bool IsUpright() const;
   ControllerEmu::SubscribableSettingValue<bool>& GetMotionPlusSetting();
 
   static Common::Vec3
@@ -240,8 +242,6 @@ private:
 
   void SendAck(WiimoteCommon::OutputReportID rpt_id, WiimoteCommon::ErrorCode err);
 
-  bool IsSideways() const;
-  bool IsUpright() const;
 
   Extension* GetActiveExtension() const;
   Extension* GetNoneExtension() const;

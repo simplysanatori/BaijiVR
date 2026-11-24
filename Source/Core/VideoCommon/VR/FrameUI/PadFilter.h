@@ -16,8 +16,9 @@
 //
 //   Menu tapped: the game's button. Held 1 s: the VR menu.
 //   View tapped: the game's button. Held 1.5 s: stop the game.
-//   View + Right Bumper: Quick Save. View + Left Bumper held half a second: Quick Load.
-//   View + Right Trigger: fast forward while held.
+//   View + Right Bumper, let go: Quick Save. View + Left Bumper held half a second: Quick Load.
+//   View + Right Trigger, let go: Fast Forward on or off.
+//   Both bumpers, then View and Menu: 3D Screen or Immersive VR.
 //   Right Stick clicked and held 1 s: reset the screen.
 //
 // A control that did one of these, or was down when the menu closed, stays away from the game
@@ -33,8 +34,10 @@ struct PadEvents
   bool quick_save = false;
   bool quick_load = false;
   bool reset_screen = false;
-  // While View is held towards the stop: 0 (not yet) to 1.
-  float stop_progress = 0.0f;
+  bool fast_forward = false;
+  bool switch_mode = false;
+  // View is held, more than half way to the stop.
+  bool stopping = false;
 };
 
 class PadFilter
@@ -59,8 +62,6 @@ public:
   // The session lost focus: nothing held counts any more.
   void Reset();
 
-  bool IsFastForward() const { return m_fast_forward; }
-
 private:
   static constexpr std::size_t NUM_BUTTONS = 15;
 
@@ -72,7 +73,7 @@ private:
     Done,
   };
 
-  void Swallow(Controllers* controllers);
+  void Swallow(Controllers* controllers, const Controllers& raw);
   void SwallowHeld(const Controllers& controllers);
 
   MenuState m_menu = MenuState::Idle;
@@ -90,7 +91,8 @@ private:
   bool m_left_bumper_ignored = false;
   bool m_right_trigger_ignored = false;
   s64 m_left_bumper_since = 0;
-  bool m_fast_forward = false;
+  bool m_right_trigger_down = false;
+  bool m_switch_down = false;
 
   bool m_reset_down = false;
   bool m_reset_done = false;
