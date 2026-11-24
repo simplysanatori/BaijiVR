@@ -111,7 +111,8 @@ void ProcessorInterfaceManager::RegisterMMIO(MMIO::Mapping* mmio, u32 base)
                      // NOTE: GPFifo::ResetGatherPipe() only affects
                      // CPU state, so we can call it directly
 
-                     AsyncRequests::GetInstance()->PushEvent(
+                     // Waited for: the GPU thread must not read the new FIFO into the old buffer.
+                     AsyncRequests::GetInstance()->PushBlockingEvent(
                          [] { Core::System::GetInstance().GetFifo().ResetVideoBuffer(); });
                    }
                  }));

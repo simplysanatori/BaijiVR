@@ -574,11 +574,16 @@ void CommandProcessorManager::SetCpStatusRegister()
 void CommandProcessorManager::SetCpControlRegister()
 {
   // Just before disabling reads, give the GPU a chance to catch up.
-  if (m_fifo.bFF_GPReadEnable.load(std::memory_order_relaxed) && !m_cp_ctrl_reg.GPReadEnable)
-  {
+  const bool stop_reads =
+      m_fifo.bFF_GPReadEnable.load(std::memory_order_relaxed) && !m_cp_ctrl_reg.GPReadEnable;
+  if (stop_reads)
     m_system.GetFifo().SyncGPUForRegisterAccess();
-  }
   m_fifo.bFF_GPReadEnable.store(m_cp_ctrl_reg.GPReadEnable, std::memory_order_relaxed);
+  // The GPU thread may be in the middle of the FIFO. What it does at the end of a read (the read
+  // pointer, the distance) must not come after the game has set these up anew: games that abort
+  // frames (GXAbortFrame; Path of Radiance on every slow one) lose the FIFO otherwise.
+  if (stop_reads)
+    m_system.GetFifo().FlushGpu();
   m_fifo.bFF_BPInt.store(m_cp_ctrl_reg.BPInt, std::memory_order_relaxed);
   m_fifo.bFF_BPEnable.store(m_cp_ctrl_reg.BPEnable, std::memory_order_relaxed);
   m_fifo.bFF_HiWatermarkInt.store(m_cp_ctrl_reg.FifoOverflowIntEnable, std::memory_order_relaxed);
