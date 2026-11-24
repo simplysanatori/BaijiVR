@@ -333,6 +333,12 @@ if(ENABLE_VR)
     VR/FrameUI/ui_ttf.cpp
     VR/OpenXRManager.cpp
     VR/OpenXRManager.h
+    VR/Perf/DynamicResolution.cpp
+    VR/Perf/DynamicResolution.h
+    VR/Perf/PerfTest.cpp
+    VR/Perf/PerfTest.h
+    VR/Perf/VRPerf.cpp
+    VR/Perf/VRPerf.h
   )
   # stb_truetype is vendored unchanged.
   set_source_files_properties(VR/FrameUI/stb_truetype.cpp PROPERTIES COMPILE_OPTIONS "-w")

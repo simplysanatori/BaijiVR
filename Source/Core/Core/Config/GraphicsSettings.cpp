@@ -243,6 +243,13 @@ constexpr bool DEFAULT_VR_PIN_EMULATION_CORES = false;
 const Info<bool> GFX_VR_PIN_EMULATION_CORES{{System::GFX, "VR", "PinEmulationCores"},
                                             DEFAULT_VR_PIN_EMULATION_CORES};
 const Info<bool> GFX_VR_EAGER_HEARTBEAT{{System::GFX, "VR", "EagerHeartbeat"}, true};
+const Info<bool> GFX_VR_DYNAMIC_RESOLUTION{{System::GFX, "VR", "DynamicResolution"}, false};
+const Info<bool> GFX_VR_PERFORMANCE_HINT{{System::GFX, "VR", "PerformanceHint"}, false};
+const Info<bool> GFX_VR_ASYNC_EFB_COPIES{{System::GFX, "VR", "AsyncEFBCopies"}, false};
+const Info<bool> GFX_VR_EFB_COPY_DIAGNOSTICS{{System::GFX, "VR", "EFBCopyDiagnostics"}, false};
+const Info<bool> GFX_VR_NON_BLOCKING_PERF_QUERIES{{System::GFX, "VR", "NonBlockingPerfQueries"}, false};
+const Info<bool> GFX_VR_SKIP_OVERWRITTEN_CLEARS{{System::GFX, "VR", "SkipOverwrittenClears"}, false};
+const Info<bool> GFX_VR_PERF_LOG{{System::GFX, "VR", "PerfLog"}, false};
 #if defined(__ANDROID__) && defined(ENABLE_VR)
 constexpr bool DEFAULT_VR_ANDROID_DIRECT_TO_HMD = true;
 constexpr bool DEFAULT_IMMEDIATE_XFB = true;

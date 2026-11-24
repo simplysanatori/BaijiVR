@@ -201,6 +201,10 @@ static void ClearAppliedVRSettings()
   ClearAppliedVRSetting("TrackingMode", Config::GFX_VR_TRACKING_MODE);
   ClearAppliedVRSetting("UseOpenXRPlaySpaceCenter", Config::GFX_VR_USE_OPENXR_PLAY_SPACE_CENTER);
   ClearAppliedVRSetting("EagerHeartbeat", Config::GFX_VR_EAGER_HEARTBEAT);
+  ClearAppliedVRSetting("DynamicResolution", Config::GFX_VR_DYNAMIC_RESOLUTION);
+  ClearAppliedVRSetting("AsyncEFBCopies", Config::GFX_VR_ASYNC_EFB_COPIES);
+  ClearAppliedVRSetting("NonBlockingPerfQueries", Config::GFX_VR_NON_BLOCKING_PERF_QUERIES);
+  ClearAppliedVRSetting("SkipOverwrittenClears", Config::GFX_VR_SKIP_OVERWRITTEN_CLEARS);
   ClearAppliedVRSetting("ForcedVBIFrequency", Config::GFX_VR_FORCED_VBI_FREQUENCY);
   ClearAppliedVRSetting("AutoVBIFromHMD", Config::GFX_VR_AUTO_VBI_FROM_HMD);
   ClearAppliedVRSetting("ExactScreenDepth", Config::GFX_VR_EXACT_SCREEN_DEPTH);
@@ -286,6 +290,10 @@ static void ApplyGameVRConfigOverrides(std::string_view game_id, std::optional<u
   ApplyVRSetting(values, "TrackingMode", Config::GFX_VR_TRACKING_MODE);
   ApplyVRSetting(values, "UseOpenXRPlaySpaceCenter", Config::GFX_VR_USE_OPENXR_PLAY_SPACE_CENTER);
   ApplyVRSetting(values, "EagerHeartbeat", Config::GFX_VR_EAGER_HEARTBEAT);
+  ApplyVRSetting(values, "DynamicResolution", Config::GFX_VR_DYNAMIC_RESOLUTION);
+  ApplyVRSetting(values, "AsyncEFBCopies", Config::GFX_VR_ASYNC_EFB_COPIES);
+  ApplyVRSetting(values, "NonBlockingPerfQueries", Config::GFX_VR_NON_BLOCKING_PERF_QUERIES);
+  ApplyVRSetting(values, "SkipOverwrittenClears", Config::GFX_VR_SKIP_OVERWRITTEN_CLEARS);
   const bool has_forced_vbi_frequency = values.find("ForcedVBIFrequency") != values.end();
   ApplyVRSetting(values, "ForcedVBIFrequency", Config::GFX_VR_FORCED_VBI_FREQUENCY);
   if (!has_forced_vbi_frequency)

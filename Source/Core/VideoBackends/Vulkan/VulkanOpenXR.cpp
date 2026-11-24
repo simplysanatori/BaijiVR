@@ -42,6 +42,7 @@
 #include "VideoCommon/VideoConfig.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/VR/OpenXRManager.h"
+#include "VideoCommon/VR/Perf/VRPerf.h"
 
 #ifdef _WIN32
 #include <windows.h>  // for SEH __try/__except
@@ -2322,8 +2323,10 @@ void VulkanOpenXR::FinalizeStereoFlatFrameAfterGPU(VkFence fence, bool have_pair
 
   if (submit_result == VK_SUCCESS)
   {
+    const u64 wait_start_us = Common::Timer::NowUs();
     const VkResult wait_result =
         vkWaitForFences(g_vulkan_context->GetDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
+    VR::Perf::AddGpuFrame(Common::Timer::NowUs() - wait_start_us);
     if (wait_result != VK_SUCCESS)
     {
       LOG_VULKAN_ERROR(wait_result, "StereoScreen async completion fence wait failed: ");
@@ -2398,7 +2401,10 @@ bool VulkanOpenXR::SubmitStereoFlatFrame()
 #if defined(BAIJI_STEAMVR)
   // Keep displaying the last completed pair while the submit worker finishes the prior pair.
   if (m_stereo_finalization_in_flight.load(std::memory_order_acquire))
+  {
+    VR::Perf::CountSkippedPair();
     return true;
+  }
 
   if (m_image_acquired[0] || m_image_acquired[1])
   {

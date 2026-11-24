@@ -61,6 +61,7 @@
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/VR/FrameUI/Overlay.h"
 #include "VideoCommon/VR/FrameUI/VrUi.h"
+#include "VideoCommon/VR/Perf/VRPerf.h"
 #include "VideoCommon/VideoConfig.h"
 
 namespace VR
@@ -1586,6 +1587,10 @@ void OpenXRManager::FrameThreadLoop()
     stat_wait_ms += (t1 - t0) / 1000.0;
     stat_content_wait_ms += (t3 - t2) / 1000.0;
     stat_end_ms += (t4 - t3) / 1000.0;
+    Perf::Tick(fresh, !submit_content,
+               !(m_ui && m_ui->IsMenuOpen()) &&
+                   Core::GetState(Core::System::GetInstance()) == Core::State::Running,
+               period_ns, t1 - t0, t4 - t3);
 
     const u64 now_us = Common::Timer::NowUs();
     if (fresh || Core::GetState(Core::System::GetInstance()) != Core::State::Running)

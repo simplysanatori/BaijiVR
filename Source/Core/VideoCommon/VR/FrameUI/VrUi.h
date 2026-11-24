@@ -72,6 +72,7 @@ public:
 
   // Something is moving or can be pointed at: every refresh counts, whatever the game's pacing.
   bool IsActive() const;
+  bool IsMenuOpen() const { return m_menu_open; }
 
   // Any thread: a message in the headset for `ms`. A newer one replaces it.
   static void PostToast(std::string text, u32 ms);

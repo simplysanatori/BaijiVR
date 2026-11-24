@@ -242,6 +242,14 @@ extern const Info<bool> GFX_VR_PIN_EMULATION_CORES;
 // smoothing (Quest standalone). Lazy (default on PC): pace to the game's cadence so the
 // runtime's SSW/ASW motion smoothing engages; heartbeat only as a keep-alive.
 extern const Info<bool> GFX_VR_EAGER_HEARTBEAT;
+// Performance: all off by default, and with all of them off nothing is different.
+extern const Info<bool> GFX_VR_DYNAMIC_RESOLUTION;
+extern const Info<bool> GFX_VR_PERFORMANCE_HINT;
+extern const Info<bool> GFX_VR_ASYNC_EFB_COPIES;
+extern const Info<bool> GFX_VR_EFB_COPY_DIAGNOSTICS;
+extern const Info<bool> GFX_VR_NON_BLOCKING_PERF_QUERIES;
+extern const Info<bool> GFX_VR_SKIP_OVERWRITTEN_CLEARS;
+extern const Info<bool> GFX_VR_PERF_LOG;
 extern const Info<bool> GFX_VR_AUTO_VBI_FROM_HMD;
 extern const Info<bool> GFX_VR_EXACT_SCREEN_DEPTH;
 // Auto-detect ortho draws sampling EFB copies (bloom, motion blur, post-processing) and render
