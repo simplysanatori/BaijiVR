@@ -29,6 +29,7 @@
 #include "Core/Core.h"
 #include "Core/GameMods/GameMods.h"
 #include "Core/HW/ProcessorInterface.h"
+#include "Core/ModeSwitch.h"
 #include "Core/NetPlayProto.h"
 #include "Core/State.h"
 #include "Core/System.h"
@@ -349,7 +350,8 @@ void QueueSwitchMode(bool to_immersive, std::optional<SettingScope> keep = std::
 
 void RequestSwitchToFlat()
 {
-  VrUi::PostToast("Switch to Flat Is Not Available Yet", 5000);
+  if (!ModeSwitch::Request(ModeSwitch::Mode::Flat))
+    VrUi::PostToast("Switch to Flat Needs Baiji VR's Window", 5000);
 }
 
 VrUi::VrUi(OpenXRManager* manager, CreateOverlay create_overlay, u32 max_layers)
