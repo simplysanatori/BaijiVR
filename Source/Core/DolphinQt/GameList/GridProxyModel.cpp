@@ -4,14 +4,12 @@
 #include "DolphinQt/GameList/GridProxyModel.h"
 
 #include <QGuiApplication>
-#include <QImage>
-#include <QPainter>
 #include <QPixmap>
 #include <QSize>
 
 #include "DolphinQt/GameList/GameListModel.h"
-
-#include "Core/Config/UISettings.h"
+#include "DolphinQt/QtUtils/ImageConverter.h"
+#include "DolphinQt/Resources.h"
 
 #include "UICommon/GameFile.h"
 
@@ -33,40 +31,15 @@ QVariant GridProxyModel::data(const QModelIndex& i, int role) const
   {
     auto* model = static_cast<GameListModel*>(sourceModel());
 
-    const auto& buffer = model->GetGameFile(source_index.row())->GetCoverImage().buffer;
+    // In the screen's own pixels: GridDelegate draws it at the size of the tile. (Not the list's, which
+    // is scaled down to a row.)
+    const QSize size =
+        (QSizeF(GRID_BANNER_SIZE) * model->GetScale() * qGuiApp->devicePixelRatio()).toSize();
+    QPixmap banner = ToQPixmap(model->GetGameFile(source_index.row())->GetBannerImage());
+    if (banner.isNull())
+      banner = Resources::GetMisc(Resources::MiscID::BannerMissing).pixmap(size, 1.0);
 
-    QSize size = Config::Get(Config::MAIN_USE_GAME_COVERS) ? GRID_COVER_SIZE : GRID_BANNER_SIZE;
-    // In the screen's own pixels: GridDelegate draws it at the size of the tile.
-    const qreal ratio = qGuiApp->devicePixelRatio();
-    QPixmap pixmap(size * model->GetScale() * ratio);
-
-    if (buffer.empty() || !Config::Get(Config::MAIN_USE_GAME_COVERS))
-    {
-      QPixmap banner = model
-                           ->data(model->index(source_index.row(),
-                                               static_cast<int>(GameListModel::Column::Banner)),
-                                  Qt::DecorationRole)
-                           .value<QPixmap>();
-
-      banner = banner.scaled(pixmap.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-
-      pixmap.fill(Qt::transparent);
-
-      QPainter painter(&pixmap);
-
-      painter.drawPixmap(0, pixmap.height() / 2 - banner.height() / 2, banner.width(),
-                         banner.height(), banner);
-
-      return pixmap;
-    }
-    else
-    {
-      pixmap = QPixmap::fromImage(QImage::fromData(
-          reinterpret_cast<const unsigned char*>(&buffer[0]), static_cast<int>(buffer.size())));
-
-      return pixmap.scaled(GRID_COVER_SIZE * model->GetScale() * ratio, Qt::KeepAspectRatio,
-                           Qt::SmoothTransformation);
-    }
+    return banner.scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
   }
   return QVariant();
 }

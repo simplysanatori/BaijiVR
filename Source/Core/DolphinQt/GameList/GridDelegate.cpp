@@ -10,10 +10,10 @@
 #include <QFontMetrics>
 #include <QPainter>
 #include <QPixmap>
+#include <QScrollBar>
+#include <QStyle>
 #include <QTextLayout>
 #include <QTextOption>
-
-#include "Core/Config/UISettings.h"
 
 #include "DolphinQt/GameList/GameListModel.h"
 #include "DolphinQt/GameList/GridProxyModel.h"
@@ -21,8 +21,8 @@
 namespace
 {
 constexpr int MARGIN = 14;       // around the tile
-constexpr int HIGHLIGHT_PAD = 8;  // the selection, outside the cover
-constexpr int TITLE_GAP = 10;    // from the cover to the name
+constexpr int HIGHLIGHT_PAD = 8;  // the selection, outside the banner
+constexpr int TITLE_GAP = 10;    // from the banner to the name
 constexpr int TITLE_LINES = 2;
 }  // namespace
 
@@ -31,24 +31,25 @@ GridDelegate::GridDelegate(const GameListModel& model, QObject* parent)
 {
 }
 
-QSize GridDelegate::CoverSize() const
+QSize GridDelegate::BannerSize() const
 {
-  const QSize size =
-      Config::Get(Config::MAIN_USE_GAME_COVERS) ? GRID_COVER_SIZE : GRID_BANNER_SIZE;
-  return size * m_model.GetScale();
+  return GRID_BANNER_SIZE * m_model.GetScale();
 }
 
 QSize GridDelegate::sizeHint(const QStyleOptionViewItem& option, const QModelIndex&) const
 {
-  const QSize cover = CoverSize();
-  int width = cover.width() + 2 * MARGIN;
+  const QSize banner = BannerSize();
+  int width = banner.width() + 2 * MARGIN;
   if (const auto* view = qobject_cast<const QAbstractItemView*>(option.widget))
   {
-    // (Qt wraps a row that fills the view to the last pixel.)
-    const int room = view->viewport()->width() - 2;
+    // Qt keeps room for the scroll bar, also while there is none, and wraps a row that fills the rest to
+    // the last pixel.
+    const int scroll_bar = view->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr,
+                                                      view->verticalScrollBar());
+    const int room = view->maximumViewportSize().width() - scroll_bar - 2;
     width = std::max(width, room / std::max(1, room / width));
   }
-  const int height = cover.height() + TITLE_GAP +
+  const int height = banner.height() + TITLE_GAP +
                      QFontMetrics(option.font).lineSpacing() * TITLE_LINES + 2 * MARGIN;
   return QSize(width, height);
 }
@@ -60,9 +61,9 @@ void GridDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
   painter->setRenderHint(QPainter::Antialiasing);
   painter->setRenderHint(QPainter::SmoothPixmapTransform);
 
-  const QSize cover = CoverSize();
-  const QRect tile((option.rect.center().x() - cover.width() / 2), option.rect.top() + MARGIN,
-                   cover.width(), option.rect.height() - 2 * MARGIN);
+  const QSize banner = BannerSize();
+  const QRect tile((option.rect.center().x() - banner.width() / 2), option.rect.top() + MARGIN,
+                   banner.width(), option.rect.height() - 2 * MARGIN);
 
   const bool selected = option.state & QStyle::State_Selected;
   if (selected || option.state & QStyle::State_MouseOver)
@@ -78,10 +79,8 @@ void GridDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
   const QPixmap pixmap = index.data(Qt::DecorationRole).value<QPixmap>();
   if (!pixmap.isNull())
   {
-    // Covers differ in shape a little: all of them stand on the same line.
-    QRect target(QPoint(), pixmap.size().scaled(cover, Qt::KeepAspectRatio));
-    target.moveCenter(QRect(tile.topLeft(), cover).center());
-    target.moveBottom(tile.top() + cover.height() - 1);
+    QRect target(QPoint(), pixmap.size().scaled(banner, Qt::KeepAspectRatio));
+    target.moveCenter(QRect(tile.topLeft(), banner).center());
     painter->drawPixmap(target, pixmap);
   }
 
@@ -92,7 +91,7 @@ void GridDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
   text_option.setWrapMode(QTextOption::WordWrap);
   layout.setTextOption(text_option);
   painter->setPen(option.palette.color(QPalette::Text));
-  int y = tile.top() + cover.height() + TITLE_GAP;
+  int y = tile.top() + banner.height() + TITLE_GAP;
   layout.beginLayout();
   for (int line_number = 0; line_number < TITLE_LINES; ++line_number)
   {
