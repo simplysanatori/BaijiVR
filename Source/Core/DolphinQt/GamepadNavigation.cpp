@@ -262,6 +262,13 @@ void GamepadNavigation::Tick()
     pad = {};
   m_pad = pad;
 
+  // A dialog that closes may leave no window with the keys.
+  if (m_target == Target::Window && m_main && QApplication::activeWindow() == nullptr &&
+      (!m_window || !m_window->isVisible()))
+  {
+    m_main->activateWindow();
+  }
+
   // The first tick on something else: what is held was meant for what was there before.
   const Target target = GetTarget();
   QWidget* const window = target == Target::Window ? GetWindow() : nullptr;
