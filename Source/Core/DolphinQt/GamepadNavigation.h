@@ -100,6 +100,7 @@ private:
   Target m_target = Target::None;
   QPointer<QWidget> m_window;
   s64 m_last_tick_ns = 0;
+  s64 m_refocus_ns = 0;
   s64 m_other_input_ns;  // a click, wheel or key that came from the window system
   float m_scroll_rest = 0;
   std::string m_device;

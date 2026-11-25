@@ -36,6 +36,7 @@ namespace
 constexpr int TICK_MS = 16;
 // A click or key from elsewhere keeps the steps off for this long: the layout may send both.
 constexpr s64 OTHER_INPUT_NS = 150'000'000;
+constexpr s64 REFOCUS_NS = 200'000'000;
 constexpr float SCROLL_DEADZONE = 0.2f;
 constexpr float SCROLL_PAGES_PER_SECOND = 1.5f;
 
@@ -263,10 +264,19 @@ void GamepadNavigation::Tick()
   m_pad = pad;
 
   // A dialog that closes may leave no window with the keys.
-  if (m_target == Target::Window && m_main && QApplication::activeWindow() == nullptr &&
-      (!m_window || !m_window->isVisible()))
+  if (QApplication::activeWindow())
   {
-    m_main->activateWindow();
+    m_refocus_ns = 0;
+  }
+  else if (m_target == Target::Window && (!m_window || !m_window->isVisible()))
+  {
+    m_refocus_ns = now;
+  }
+  else if (m_refocus_ns != 0 && now - m_refocus_ns >= REFOCUS_NS)
+  {
+    m_refocus_ns = 0;
+    if (QWidget* const next = GetWindow() ? GetWindow() : m_main.data())
+      next->activateWindow();
   }
 
   // The first tick on something else: what is held was meant for what was there before.
