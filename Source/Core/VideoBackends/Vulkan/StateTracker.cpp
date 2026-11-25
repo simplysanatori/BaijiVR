@@ -280,6 +280,21 @@ void StateTracker::InvalidateCachedState()
     m_dirty_flags |= DIRTY_FLAG_INDEX_BUFFER;
 }
 
+void StateTracker::InvalidateMultiviewState()
+{
+  if (!m_framebuffer->IsMultiview())
+    return;
+
+  // With multiview, the state of the command buffer is undefined at the start of a subpass:
+  // everything has to be bound again for the draws in it.
+  m_dirty_flags |= DIRTY_FLAG_VIEWPORT | DIRTY_FLAG_SCISSOR | DIRTY_FLAG_PIPELINE |
+                   DIRTY_FLAG_DESCRIPTOR_SETS;
+  if (m_vertex_buffer != VK_NULL_HANDLE)
+    m_dirty_flags |= DIRTY_FLAG_VERTEX_BUFFER;
+  if (m_index_buffer != VK_NULL_HANDLE)
+    m_dirty_flags |= DIRTY_FLAG_INDEX_BUFFER;
+}
+
 void StateTracker::BeginRenderPass()
 {
   if (InRenderPass())
@@ -299,6 +314,7 @@ void StateTracker::BeginRenderPass()
 
   vkCmdBeginRenderPass(g_command_buffer_mgr->GetCurrentCommandBuffer(), &begin_info,
                        VK_SUBPASS_CONTENTS_INLINE);
+  InvalidateMultiviewState();
 }
 
 void StateTracker::BeginDiscardRenderPass()
@@ -319,6 +335,7 @@ void StateTracker::BeginDiscardRenderPass()
 
   vkCmdBeginRenderPass(g_command_buffer_mgr->GetCurrentCommandBuffer(), &begin_info,
                        VK_SUBPASS_CONTENTS_INLINE);
+  InvalidateMultiviewState();
 }
 
 void StateTracker::EndRenderPass()
@@ -349,6 +366,7 @@ void StateTracker::BeginClearRenderPass(const VkRect2D& area, const VkClearValue
 
   vkCmdBeginRenderPass(g_command_buffer_mgr->GetCurrentCommandBuffer(), &begin_info,
                        VK_SUBPASS_CONTENTS_INLINE);
+  InvalidateMultiviewState();
 }
 
 void StateTracker::SetViewport(const VkViewport& viewport)
@@ -378,6 +396,10 @@ bool StateTracker::Bind()
   // Check the render area if we were in a clear pass.
   if (m_current_render_pass == m_framebuffer->GetClearRenderPass() && !IsViewportWithinRenderArea())
     EndRenderPass();
+
+  // With multiview the sets have to be bound in the render pass
+  if (m_framebuffer->IsMultiview() && !InRenderPass())
+    BeginRenderPass();
 
   // Get a new descriptor set if any parts have changed
   UpdateDescriptorSet();

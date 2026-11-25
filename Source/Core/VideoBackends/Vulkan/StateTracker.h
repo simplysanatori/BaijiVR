@@ -116,6 +116,9 @@ private:
   // If not, ends the render pass if it is a clear render pass.
   bool IsViewportWithinRenderArea() const;
 
+  // Marks what a render pass with multiview loses as dirty.
+  void InvalidateMultiviewState();
+
   void UpdateDescriptorSet();
   void UpdateGXDescriptorSet();
   void UpdateUtilityDescriptorSet();
