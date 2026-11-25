@@ -22,6 +22,16 @@ While a grip holds the screen, a hint under it shows these.
 
 In Flat, **Menu** held for 3 seconds asks **Switch to VR?**: **A** is Yes, **B** is No. The game gets **Menu**, too.
 
+## The Window in Game Mode
+
+| Control | In the game list | In a dialog |
+|---|---|---|
+| Left stick or D-Pad | Moves | Moves |
+| **A** | Twice starts the game | Presses |
+| **B** | Back | Back |
+| Right stick | Scrolls | Scrolls |
+| Bumpers | | Between items |
+
 ## The VR Menu
 
 Point at it with either controller. The trigger or **A** chooses, **B** goes back, **Menu** closes it. A stick scrolls a list. Point at a row for a moment and it says what it does, or why it is greyed.
