@@ -38,7 +38,7 @@ These are the **VR** settings. Everything else is Dolphin's own. The VR menu use
 ## Menu and Pointers
 
 - **Pointer Beams**: shows where the controllers point during a game. Off by default.
-- **Messages**: short messages in the headset.
+- **Messages**: short messages in the headset. In Stereoscopic 3D, the answer to a press (**Quick Saved**, **Fast Forward**) is in the screen's top right corner for 1.5 seconds. Everything else is ahead of you.
 - **Show Stats**: the frame rate, the resolution in use and the headset's numbers while you play. Off by default.
 - **Stats Position**: **In Front**, a window in the room that a grip moves, or **On Wrist**, on the left controller.
 
@@ -57,6 +57,16 @@ These are the **VR** settings. Everything else is Dolphin's own. The VR menu use
 | **GPU**, **CPU** | Their load, where the system says it. Only with **Show Stats** on |
 
 The **Stats** tab of the VR menu shows the last second the game ran, with **Show Stats** off too.
+
+## The Window in SteamVR
+
+`TheaterDock` under `[Interface]` in `Dolphin.ini`, in Game Mode only:
+
+| Value | What it does |
+|---|---|
+| 1 (default) | The window is put in SteamVR's theater at the start and after a VR game, and back into the dashboard before one |
+| 2 | It stays in the theater when a VR game starts |
+| 0 | Off |
 
 ## Autosave
 

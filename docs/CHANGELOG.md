@@ -10,7 +10,7 @@ Baiji's own changelog is in [its README](../README.upstream.md).
 - **Global** and **Per-Game** settings in the menu, the same ones as in the window.
 - **Show Stats**: frame rate, the resolution in use and Dynamic Resolution's changes, in front of you or on the wrist.
 - **Screen Curve**.
-- Pointer beams and short messages in the headset.
+- Pointer beams and short messages in the headset. In Stereoscopic 3D, the answer to a press is in the screen's corner.
 - The grips move and resize the screen.
 - Quick Save, Quick Load, save states with pictures, and Autosave.
 - Stop the game, Fast Forward, and Stereoscopic 3D or Immersive, from the controllers.
