@@ -44,7 +44,13 @@ public:
 
   // Changes when a mapping was changed by something else than the window that shows it.
   u32 GetGeneration() const { return m_generation; }
-  void OnMappingChanged() { ++m_generation; }
+  void OnMappingChanged()
+  {
+    ++m_generation;
+    ++m_changes;
+  }
+  // Changes when a mapping was changed or saved by anything.
+  u32 GetChanges() const { return m_changes; }
 
   template <typename T, typename... Args>
   void CreateController(Args&&... args)
@@ -81,5 +87,6 @@ private:
   Override m_load_override = nullptr;
   Override m_save_override = nullptr;
   std::atomic<u32> m_generation{0};
+  std::atomic<u32> m_changes{0};
   InputCommon::DynamicInputTextureManager m_dynamic_input_tex_config_manager;
 };

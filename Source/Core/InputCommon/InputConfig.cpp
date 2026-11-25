@@ -5,9 +5,10 @@
 
 #include <vector>
 
+#include <fmt/format.h>
+
 #include "Common/FileUtil.h"
 #include "Common/IniFile.h"
-#include "Common/MsgHandler.h"
 #include "Common/ScopeGuard.h"
 #include "Common/StringUtil.h"
 #include "Core/ConfigManager.h"
@@ -60,8 +61,9 @@ bool InputConfig::LoadConfig()
 
           if (profiles.empty())
           {
-            // TODO: PanicAlert shouldn't be used for this.
-            PanicAlertFmtT("No profiles found for game setting '{0}'", profile_setting);
+            // Not an alert: the game goes on with the mapping of every game.
+            Core::DisplayMessage(
+                fmt::format("Controller profile not found: {}", profile_setting), 6000);
             continue;
           }
 
@@ -148,6 +150,7 @@ void InputConfig::SaveConfig()
   }
 
   inifile.Save(ini_filename);
+  ++m_changes;
 }
 
 ControllerEmu::EmulatedController* InputConfig::GetController(int index) const

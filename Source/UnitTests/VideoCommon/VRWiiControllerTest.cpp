@@ -114,6 +114,8 @@ protected:
     if (m_folder.empty())
       return;
     EndGame();
+    // Without a game they do nothing.
+    Core::HostDispatchJobs(Core::System::GetInstance());
     Wiimote::GetConfig()->SetOverrides(nullptr, nullptr);
     Wiimote::GetConfig()->ClearControllers();
     Pad::GetConfig()->SetOverrides(nullptr, nullptr);
@@ -145,6 +147,24 @@ protected:
     VRWiiController::Choose(Core::System::GetInstance(), choice);
   }
   static Choice Current() { return GetCurrent(Core::System::GetInstance()); }
+  // As a window does it.
+  static void SetExtension(u32 extension)
+  {
+    GetAttachments()->SetSelectedAttachment(extension);
+    Wiimote::GetConfig()->SaveConfig();
+    Core::HostDispatchJobs(Core::System::GetInstance());
+  }
+  static ControllerEmu::Attachments* GetAttachments()
+  {
+    return static_cast<ControllerEmu::Attachments*>(
+        Wiimote::GetWiimoteGroup(0, WiimoteEmu::WiimoteGroup::Attachments));
+  }
+  static std::string GameIni(const std::string& id)
+  {
+    std::string text;
+    File::ReadFileToString(File::GetUserPath(D_GAMESETTINGS_IDX) + id + ".ini", text);
+    return text;
+  }
   static std::string EveryGame(const char* name = "WiimoteNew.ini")
   {
     std::string text;
@@ -200,6 +220,9 @@ TEST(VRWiiController, ThePlayersChoiceAndTheGamesSettingsAreFirst)
   EXPECT_EQ(Resolve(rules), Choice::None);
   rules.bundled = Choice::RemoteSideways;
   EXPECT_EQ(Resolve(rules), Choice::RemoteSideways);
+  rules.as_set_up = true;
+  EXPECT_EQ(Resolve(rules), Choice::None);
+  rules.as_set_up = false;
   rules.has_port = true;
   EXPECT_EQ(Resolve(rules), Choice::None);
   rules.own = Choice::GameCube;
@@ -700,14 +723,138 @@ TEST_F(VRWiiControllerMapping, AProfileIsChosenForTheGame)
   EXPECT_EQ(GetPadProfile(PadKind::WiiRemoteSideways), "Steam Frame Wii Remote (Sideways)");
   EXPECT_EQ(Describe(PadKind::WiiRemoteSideways, PadTarget::One), "Left Bumper");
 
-  // Another controller is chosen: its mapping is that controller's, not this profile.
+  // Another controller is chosen: not this profile, and the one the game had with that controller.
   Choose(Choice::Classic);
-  EXPECT_EQ(GetPadProfile(PadKind::WiiClassic), "");
-  EXPECT_EQ(Describe(PadKind::WiiClassic, PadTarget::A), "B");
-  SetPadProfile(PadKind::WiiClassic, "Mine");
+  EXPECT_EQ(GetPadProfile(PadKind::WiiClassic), "Mine");
+  EXPECT_EQ(Describe(PadKind::WiiClassic, PadTarget::A), "Left Grip");
+  Choose(Choice::RemoteSideways);
+  EXPECT_EQ(GetPadProfile(PadKind::WiiRemoteSideways), "Steam Frame Wii Remote (Sideways)");
+  EXPECT_EQ(Describe(PadKind::WiiRemoteSideways, PadTarget::One), "Left Bumper");
+  Choose(Choice::GameCube);
+  Choose(Choice::RemoteNunchuk);
+  EXPECT_EQ(GetPadProfile(PadKind::WiiNunchuk), "");
+  EndGame();
+  Start("GTST01");
+  EXPECT_EQ(Current(), Choice::RemoteNunchuk);
+  Choose(Choice::Classic);
+  EXPECT_EQ(GetPadProfile(PadKind::WiiClassic), "Mine");
   SetPadProfile(PadKind::WiiClassic, "");
   EXPECT_EQ(GetPadScope(PadKind::WiiClassic), PadScope::Global);
+  // None, and it stays none.
+  Choose(Choice::RemoteSideways);
+  Choose(Choice::Classic);
+  EXPECT_EQ(GetPadProfile(PadKind::WiiClassic), "");
   EXPECT_EQ(EveryGame(), before);
+}
+
+// What the layer of the game's settings has is written with every one of them.
+TEST_F(VRWiiControllerMapping, AProfileThatWasRemovedDoesNotComeBack)
+{
+  Write(GetGameProfile("Wiimote", "Mine"),
+        "[Profile]\nDevice = OpenXR/0/OpenXR Controller\nExtension = Nunchuk\n");
+  Write(File::GetUserPath(D_GAMESETTINGS_IDX) + "GTST01.ini",
+        "[Controls]\nWiimoteProfile1 = Mine\n");
+  Start("GTST01");
+  EXPECT_EQ(GetPadProfile(PadKind::WiiNunchuk), "Mine");
+  SetScope(PadKind::WiiNunchuk, PadScope::Global);
+  GameSettingScope::SetForGame(Config::MAIN_AUTOSAVE_ENABLED, true,
+                               GameSettingScope::Store::LocalGame);
+  EXPECT_FALSE(GameIni("GTST01").contains("Mine"));
+  SetPadProfile(PadKind::WiiNunchuk, "Mine");
+  GameSettingScope::SetForGame(Config::MAIN_AUTOSAVE_ENABLED, false,
+                               GameSettingScope::Store::LocalGame);
+  EXPECT_TRUE(GameIni("GTST01").contains("WiimoteProfile1 = Mine"));
+}
+
+// A profile of the player's is not the one Per-Game made.
+TEST_F(VRWiiControllerMapping, AProfileNamedAfterTheGameIsNotDeleted)
+{
+  const std::string mine = GetGameProfile("Wiimote", "GTST01 mine");
+  Write(mine, "[Profile]\nDevice = OpenXR/0/OpenXR Controller\nExtension = Nunchuk\n");
+  Start("GTST01");
+  SetPadProfile(PadKind::WiiNunchuk, "GTST01 mine");
+  SetScope(PadKind::WiiNunchuk, PadScope::Global);
+  EXPECT_TRUE(File::Exists(mine));
+}
+
+// The folder of the games' settings is not there at first.
+TEST_F(VRWiiControllerMapping, TheSettingsFolderIsMade)
+{
+  File::DeleteDirRecursively(File::GetUserPath(D_GAMESETTINGS_IDX));
+  Start("GTST01");
+  Choose(Choice::Classic);
+  EXPECT_TRUE(GameIni("GTST01").contains("WiiController = 4"));
+}
+
+// An extension that is none of the menu's, chosen in a window: as Dolphin keeps it.
+TEST_F(VRWiiControllerMapping, AnotherExtensionOfTheMappingOfEveryGameIsKept)
+{
+  Start("GTST01");
+  SetExtension(WiimoteEmu::ExtensionNumber::GUITAR);
+  EXPECT_TRUE(EveryGame().contains("Extension = Guitar"));
+  EXPECT_EQ(Current(), Choice::None);
+  EndGame();
+  Start("GTST01");
+  EXPECT_EQ(GetAttachments()->GetSelectedAttachment(), u32(WiimoteEmu::ExtensionNumber::GUITAR));
+
+  // Also where the player has chosen a controller, and it is the one of every game.
+  SetExtension(WiimoteEmu::ExtensionNumber::NUNCHUK);
+  Choose(Choice::RemoteNunchuk);
+  EXPECT_EQ(GetOwnMapping(), Choice::None);
+  SetExtension(WiimoteEmu::ExtensionNumber::GUITAR);
+  Wiimote::LoadConfig();
+  EXPECT_EQ(GetAttachments()->GetSelectedAttachment(), u32(WiimoteEmu::ExtensionNumber::GUITAR));
+  EndGame();
+  Start("GTST01");
+  EXPECT_EQ(GetAttachments()->GetSelectedAttachment(), u32(WiimoteEmu::ExtensionNumber::GUITAR));
+
+  // And with one of the menu's again.
+  Choose(Choice::Classic);
+  EXPECT_EQ(Current(), Choice::Classic);
+  EXPECT_TRUE(EveryGame().contains("Extension = Guitar"));
+}
+
+TEST_F(VRWiiControllerMapping, AnotherExtensionOfAProfileIsTheGames)
+{
+  const std::string before = EveryGame();
+  for (const bool bundled : {false, true})
+  {
+    const std::string id = bundled ? "SUKE01" : "GTST01";
+    Start(id);
+    if (!bundled)
+      Choose(Choice::RemoteSideways);
+    EXPECT_EQ(Current(), Choice::RemoteSideways);
+    SetExtension(WiimoteEmu::ExtensionNumber::GUITAR);
+    EXPECT_EQ(GetPadProfile(PadKind::WiiRemote), id + " Guitar");
+    EXPECT_FALSE(File::Exists(GetUserProfile(Choice::RemoteSideways)));
+    EXPECT_EQ(EveryGame(), before);
+    EndGame();
+    Start(id);
+    EXPECT_EQ(Current(), Choice::None);
+    EXPECT_EQ(GetAttachments()->GetSelectedAttachment(), u32(WiimoteEmu::ExtensionNumber::GUITAR));
+    // An edit of it is its own.
+    SetExtension(WiimoteEmu::ExtensionNumber::DRUMS);
+    EXPECT_EQ(LoadProfile(GetGameProfile("Wiimote", id + " Guitar")).at("Extension"), "Drums");
+    EXPECT_EQ(EveryGame(), before);
+    Choose(Choice::RemoteSideways);
+    EXPECT_EQ(Current(), Choice::RemoteSideways);
+    EXPECT_EQ(GetPadProfile(PadKind::WiiRemote), "");
+    EndGame();
+  }
+}
+
+TEST_F(VRWiiControllerMapping, TheBundledControllerIsTold)
+{
+  Start("RK5E01");
+  EXPECT_EQ(TakeNotice(), "Wii Remote (Sideways) for this game. The Controls tab has the others.");
+  Wiimote::LoadConfig();
+  EXPECT_EQ(TakeNotice(), "");
+  EndGame();
+  Start("SUKE01");
+  EndGame();
+  // Of another game than the one that runs.
+  Start("GTST01");
+  EXPECT_EQ(TakeNotice(), "");
 }
 
 TEST_F(VRWiiControllerMapping, AProfileThatIsNotThere)

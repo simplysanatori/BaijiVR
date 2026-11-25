@@ -309,6 +309,9 @@ void INIGameConfigLayerLoader::Save(Config::Layer* layer)
     }
   }
 
+  // The folder is not there before the first game has settings.
+  File::CreateFullPath(File::GetUserPath(D_GAMESETTINGS_IDX));
+
   // Try to save to the revision specific INI first, if it exists.
   const std::string gameini_with_rev =
       fmt::format("{}{}r{}.ini", File::GetUserPath(D_GAMESETTINGS_IDX), m_id, m_revision);

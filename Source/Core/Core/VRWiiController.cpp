@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -41,6 +42,8 @@
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 #include "InputCommon/InputConfig.h"
 #include "InputCommon/InputProfile.h"
+
+#include "VideoCommon/OnScreenDisplay.h"
 
 namespace VRWiiController
 {
@@ -102,6 +105,12 @@ bool IsRemote(Choice choice)
   return choice != Choice::None && choice != Choice::GameCube;
 }
 
+const ControllerEmu::Attachments& GetAttachments()
+{
+  return *static_cast<const ControllerEmu::Attachments*>(
+      GetRemote()->GetWiimoteGroup(WiimoteEmu::WiimoteGroup::Attachments));
+}
+
 bool IsSideways(const WiimoteEmu::Wiimote& remote)
 {
   // Not what the hot keys have made of it.
@@ -124,9 +133,7 @@ Choice DescribeMapping()
   if (!remote)
     return Choice::None;
   const auto lock = ControllerEmu::EmulatedController::GetStateLock();
-  const auto* const attachments = static_cast<const ControllerEmu::Attachments*>(
-      remote->GetWiimoteGroup(WiimoteEmu::WiimoteGroup::Attachments));
-  switch (attachments->GetSelectedAttachment())
+  switch (GetAttachments().GetSelectedAttachment())
   {
   case WiimoteEmu::ExtensionNumber::NUNCHUK:
     return Choice::RemoteNunchuk;
@@ -178,21 +185,39 @@ std::string GetGameProfile(Kind kind)
   return name;
 }
 
-// In the player's settings of the running game. Empty: none.
+// In the player's settings of the running game, through the layer that has them: what it has is
+// written with every one of them. Empty: they do not have it. Host thread.
+void SetGameString(const Config::Location& location, const std::string& value, bool save)
+{
+  const auto layer = Config::GetLayer(Config::LayerType::LocalGame);
+  if (!layer)
+    return;
+  // Only what the layer has had is removed from the file.
+  if (value.empty())
+    layer->Set(location, std::string());
+  GameSettingScope::SetLocalGame(
+      location, value.empty() ? std::nullopt : std::optional<std::string>(value), save);
+}
+
 void SetGameProfile(Kind kind, const std::string& name)
 {
   if (!GameSettingScope::IsGameRunning() || GetGameProfile(kind) == name)
     return;
-  const std::string path =
-      File::GetUserPath(D_GAMESETTINGS_IDX) + SConfig::GetInstance().GetGameID() + ".ini";
-  Common::IniFile ini;
-  ini.Load(path);
-  if (name.empty())
-    ini.DeleteKey("Controls", GetGameProfileKey(kind));
-  else
-    ini.GetOrCreateSection("Controls")->Set(GetGameProfileKey(kind), name);
-  File::CreateFullPath(path);
-  ini.Save(path);
+  SetGameString({Config::System::GameSettingsOnly, "Controls", GetGameProfileKey(kind)}, name,
+                true);
+}
+
+// The profile the running game's settings named while it had this controller.
+Config::Location GetKeptProfileLocation(Choice choice)
+{
+  return {Config::System::GFX, "VR",
+          fmt::format("WiiControllerProfile{}", std::to_underlying(choice))};
+}
+
+std::string GetKeptProfile(Choice choice)
+{
+  const auto layer = Config::GetLayer(Config::LayerType::LocalGame);
+  return layer ? layer->Get<std::string>(GetKeptProfileLocation(choice)).value_or("") : "";
 }
 
 // The player's, or else one of the Sys folder.
@@ -208,10 +233,26 @@ std::string FindProfile(Kind kind, const std::string& name)
 }
 
 // The profile "Per-Game" makes for the running game.
+std::string GetOwnProfileName(std::string_view controller)
+{
+  return fmt::format("{} {}", SConfig::GetInstance().GetGameID(), controller);
+}
+
 std::string GetOwnProfileName(Kind kind, Choice choice)
 {
-  return fmt::format("{} {}", SConfig::GetInstance().GetGameID(),
-                     GetName(kind == Kind::GameCube ? Choice::GameCube : choice));
+  return GetOwnProfileName(GetName(kind == Kind::GameCube ? Choice::GameCube : choice));
+}
+
+// Of any controller: a profile the player has named after the game is not one of those.
+bool IsOwnProfileName(const std::string& name)
+{
+  if (std::ranges::any_of(NAMES, [&](const char* n) { return name == GetOwnProfileName(n); }))
+    return true;
+  if (!GetRemote())
+    return false;
+  const auto& attachments = GetAttachments().GetAttachmentList();
+  return std::ranges::any_of(
+      attachments, [&](const auto& a) { return name == GetOwnProfileName(a->GetName()); });
 }
 
 std::string GetUserProfilePath(Kind kind, const std::string& name)
@@ -259,7 +300,7 @@ void SetStore(Kind kind, std::string path, std::string game_profile, Choice choi
 }
 
 // The profile the game's settings name is the mapping, whatever it is of. False without one.
-bool LoadGameProfile(Kind kind)
+bool LoadGameProfile(Kind kind, const Common::IniFile::Section& every_game)
 {
   const std::string name = GetGameProfile(kind);
   if (name.empty())
@@ -269,7 +310,7 @@ bool LoadGameProfile(Kind kind)
     // One of the Sys folder is saved as the player's of that name.
     const bool own = path.starts_with(GetConfig(kind)->GetUserProfileDirectoryPath());
     SetStore(kind, own ? path : GetUserProfilePath(kind, name), name,
-             kind == Kind::Remote ? DescribeMapping() : Choice::None, {});
+             kind == Kind::Remote ? DescribeMapping() : Choice::None, every_game);
   }
   return true;
 }
@@ -306,6 +347,9 @@ Rules GetRules()
       GameSettingScope::HasGameValue(Config::GetInfoForSIDevice(0).GetLocation(),
                                      Store::LocalGame) ||
       GameSettingScope::HasGameValue(Config::WIIMOTE_1_SOURCE.GetLocation(), Store::LocalGame);
+  rules.as_set_up =
+      rules.own == Choice::None &&
+      GameSettingScope::HasGameValue(VR_WII_CONTROLLER.GetLocation(), Store::LocalGame);
   rules.bundled = GetBundled(system);
   return rules;
 }
@@ -344,22 +388,35 @@ void RestoreWhenGameEnds()
   });
 }
 
-// The table chose: the player is told once, where the game's own profile is told.
+// With the game it is of. Under the state lock.
+std::pair<std::string, std::string> s_notice;
+
+// The table chose: the player is told once. A game that starts has no session yet, which takes the
+// notice when it has (TakeNotice).
 void TellBundled(Choice choice)
 {
   static std::string s_told;
   const std::string id = SConfig::GetInstance().GetGameID();
   if (std::exchange(s_told, id) == id)
     return;
-  Core::DisplayMessage(
-      fmt::format("{} for this game. The VR menu's Controls tab has the others.", GetName(choice)),
-      6000);
+  s_notice = {id,
+              fmt::format("{} for this game. The Controls tab has the others.", GetName(choice))};
+  Core::DisplayMessage(s_notice.second, 6000);
 }
 
-// The player's choice, without anything else: the mapping is that controller's already.
+// The player's choice, without anything else: the mapping is that controller's already. None: the
+// mapping of every game, with whatever it has.
 void SetChoiceOnly(Choice choice)
 {
   GameSettingScope::SetForGame(VR_WII_CONTROLLER, choice, GameSettingScope::Store::LocalGame);
+}
+
+void KeepProfile(Choice choice, const std::string& name)
+{
+  if (choice != Choice::None)
+    SetGameString(GetKeptProfileLocation(choice), name, false);
+  else if (!name.empty())
+    OSD::AddMessage(fmt::format("Profile \"{}\" is kept. Edit Controls has it.", name), 6000);
 }
 
 // Under the state lock: into the profile if the mapping is one, and the section stays what it is.
@@ -415,7 +472,7 @@ Choice Resolve(const Rules& rules)
     return Choice::None;
   if (rules.own != Choice::None)
     return rules.own;
-  return rules.has_port ? Choice::None : rules.bundled;
+  return rules.has_port || rules.as_set_up ? Choice::None : rules.bundled;
 }
 
 Choice GetCurrent(Core::System& system)
@@ -443,6 +500,7 @@ void Choose(Core::System& system, Choice choice)
   const auto& port = Config::GetInfoForSIDevice(0);
   const auto& source = Config::WIIMOTE_1_SOURCE;
   const bool pad = choice == Choice::GameCube;
+  const Choice before = DescribeMapping();
   {
     // All at once: the Wii Remote's callback reads them.
     const Config::ConfigChangeCallbackGuard guard;
@@ -454,14 +512,17 @@ void Choose(Core::System& system, Choice choice)
       GameSettingScope::SetForGame(source, WiimoteSource::OpenXR, Store::LocalGame, false);
     else
       GameSettingScope::UseGlobal(source, Store::LocalGame);
+    const bool has_profile = HasGameMapping(Kind::Remote);
+    if (!pad && (before != choice || !has_profile))
+    {
+      // A profile is of one controller: it is kept for that one.
+      if (before != choice)
+        KeepProfile(before, has_profile ? GetGameProfile(Kind::Remote) : std::string{});
+      const std::string kept = GetKeptProfile(choice);
+      SetGameProfile(Kind::Remote, FindProfile(Kind::Remote, kept).empty() ? std::string{} : kept);
+    }
     if (const auto layer = Config::GetLayer(Config::LayerType::LocalGame))
       layer->Save();
-  }
-  if (!pad)
-  {
-    // The game's own mapping of that controller, if "Per-Game" made one: a profile is of one.
-    const std::string own = GetOwnProfileName(Kind::Remote, choice);
-    SetGameProfile(Kind::Remote, FindProfile(Kind::Remote, own).empty() ? std::string{} : own);
   }
   Reload(system, Kind::Remote);
 }
@@ -480,6 +541,13 @@ void OnSessionStarted(Core::System& system)
   }
   Config::SetCurrent(port, SI_NONE);
   system.GetSerialInterface().ChangeDevice(SI_NONE, 0);
+}
+
+std::string TakeNotice()
+{
+  const auto lock = ControllerEmu::EmulatedController::GetStateLock();
+  const auto [id, text] = std::exchange(s_notice, {});
+  return id == SConfig::GetInstance().GetGameID() ? text : std::string{};
 }
 
 void LoadMapping()
@@ -510,7 +578,7 @@ bool LoadPad(int index, Common::IniFile::Section* section)
   const auto lock = ControllerEmu::EmulatedController::GetStateLock();
   GetStore(KIND) = {};
   GetController(KIND)->LoadConfig(section);
-  LoadGameProfile(KIND);
+  LoadGameProfile(KIND, *section);
   if (!GetStore(KIND).path.empty())
     RestoreWhenGameEnds();
   return true;
@@ -535,7 +603,7 @@ bool LoadRemote(int index, Common::IniFile::Section* section)
   GetStore(KIND) = {};
   GetRemote()->LoadConfig(section);
 
-  if (!LoadGameProfile(KIND))
+  if (!LoadGameProfile(KIND, *section))
   {
     const Rules rules = GetRules();
     const Choice wanted = Resolve(rules);
@@ -544,9 +612,9 @@ bool LoadRemote(int index, Common::IniFile::Section* section)
          LoadProfile(KIND, GetSysProfile(KIND, wanted), wanted)))
     {
       SetStore(KIND, GetUserProfile(wanted), {}, wanted, *section);
+      if (rules.own == Choice::None)
+        TellBundled(wanted);
     }
-    if (IsRemote(wanted) && rules.own == Choice::None)
-      TellBundled(wanted);
   }
   if (!GetStore(KIND).path.empty())
     RestoreWhenGameEnds();
@@ -559,7 +627,7 @@ bool SaveRemote(int index, Common::IniFile::Section* section)
   if (index != 0 || !GetRemote())
     return false;
   const auto lock = ControllerEmu::EmulatedController::GetStateLock();
-  const Store& store = GetStore(KIND);
+  Store& store = GetStore(KIND);
   const Choice mapping = DescribeMapping();
   const Rules rules = GetRules();
   // A profile of the game is the mapping, whatever it is of.
@@ -582,9 +650,28 @@ bool SaveRemote(int index, Common::IniFile::Section* section)
   // window shows; a profile of one controller stays that.
   if (store.path.empty())
     GetRemote()->SaveConfig(section);
-  // The game has that one now, with the mapping that is for it.
   if (mapping != Choice::None)
-    Core::QueueHostJob([mapping](Core::System& system) { Choose(system, mapping); });
+  {
+    // The game has that one now, with the mapping that is for it.
+    Core::QueueHostJob([mapping](Core::System& system) { Choose(system, mapping); }, true);
+  }
+  else if (store.path.empty())
+  {
+    // One that is not a choice, for every game.
+    Core::QueueHostJob([](Core::System&) { SetChoiceOnly(Choice::None); }, true);
+  }
+  else
+  {
+    // One that is not a choice, where the mapping is not that of every game: for this game.
+    const auto& attachments = GetAttachments();
+    const std::string name = GetOwnProfileName(
+        attachments.GetAttachmentList()[attachments.GetSelectedAttachment()]->GetName());
+    store.path = GetUserProfilePath(KIND, name);
+    store.game_profile = name;
+    store.choice = Choice::None;
+    Save(KIND, section);
+    Core::QueueHostJob([name](Core::System&) { SetGameProfile(KIND, name); }, true);
+  }
   return true;
 }
 
@@ -626,8 +713,10 @@ void RemoveGameMapping(Core::System& system, Kind kind)
   const std::string name = GetGameProfile(kind);
   if (name.empty())
     return;
+  if (kind == Kind::Remote)
+    SetGameString(GetKeptProfileLocation(DescribeMapping()), {}, false);
   // The one "Per-Game" made goes with it; another profile is only not this game's any more.
-  if (name.starts_with(SConfig::GetInstance().GetGameID() + " "))
+  if (IsOwnProfileName(name))
     File::Delete(GetUserProfilePath(kind, name), File::IfAbsentBehavior::NoConsoleWarning);
   SetGameProfile(kind, {});
   Reload(system, kind);
@@ -636,15 +725,19 @@ void RemoveGameMapping(Core::System& system, Kind kind)
 std::vector<std::string> GetProfiles(Kind kind)
 {
   std::vector<std::string> names;
-  for (const std::string& folder : {GetConfig(kind)->GetUserProfileDirectoryPath(),
-                                    GetConfig(kind)->GetSysProfileDirectoryPath()})
+  const std::string user = GetConfig(kind)->GetUserProfileDirectoryPath();
+  for (const std::string& folder : {user, GetConfig(kind)->GetSysProfileDirectoryPath()})
   {
     for (const std::string& path : Common::DoFileSearch(folder, ".ini"))
     {
       std::string name;
       SplitPath(path, nullptr, &name, nullptr);
-      if (!name.empty() && !std::ranges::contains(names, name))
+      // Of those that come with the program, the Frame controllers', as in the mapping window.
+      if (!name.empty() && (folder == user || name.starts_with("Steam Frame")) &&
+          !std::ranges::contains(names, name))
+      {
         names.push_back(std::move(name));
+      }
     }
   }
   return names;
@@ -659,11 +752,17 @@ void SetProfile(Core::System& system, Kind kind, const std::string& name)
 {
   if (!GetController(kind) || !GameSettingScope::IsGameRunning())
     return;
+  const Choice before = DescribeMapping();
+  const std::string kept = HasGameMapping(kind) ? GetGameProfile(kind) : "";
   SetGameProfile(kind, name);
   Reload(system, kind);
+  if (kind != Kind::Remote)
+    return;
+  const Choice mapping = DescribeMapping();
+  if (before != Choice::None && (before != mapping || name.empty()))
+    SetGameString(GetKeptProfileLocation(before), name.empty() ? std::string{} : kept, true);
   // The controller the game has is the profile's.
-  if (const Choice mapping = DescribeMapping();
-      kind == Kind::Remote && !name.empty() && IsRemote(mapping) &&
+  if (!name.empty() && IsRemote(mapping) &&
       IsRemote(ToChoice(static_cast<int>(Config::Get(VR_WII_CONTROLLER)))))
   {
     SetChoiceOnly(mapping);

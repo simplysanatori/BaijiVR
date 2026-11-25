@@ -56,6 +56,7 @@ struct Rules
   Choice own = Choice::None;  // the player's, for this game
   bool has_profile = false;   // its settings name a profile of the Wii Remote
   bool has_port = false;      // its settings name the first port's device or the Wii Remote's source
+  bool as_set_up = false;     // the player's is an extension that is not a choice
   Choice bundled = Choice::None;
 };
 // None: as it is set up for every game.
@@ -67,12 +68,18 @@ Choice GetCurrent(Core::System& system);
 // Not with NetPlay or a movie.
 bool CanChoose(Core::System& system);
 
-// Changes the emulated hardware of the running game, now and when it is started again. Host thread.
+// Changes the emulated hardware of the running game, now and when it is started again. A profile its
+// settings name is of one controller: it is kept for that one, and is the game's again with it. Host
+// thread.
 void Choose(Core::System& system, Choice choice);
 
 // Without a choice, a Wii game played with a Wii Remote has no GameCube Controller on the same
 // buttons, until the game ends. Host thread.
 void OnSessionStarted(Core::System& system);
+
+// What the player is to be told of the running game's controller, once: Data/Sys/WiiControllers.ini
+// chose it. Or empty. Any thread.
+std::string TakeNotice();
 
 // Loads the mapping of every game, or the one the running game has. Any thread.
 void LoadMapping();
@@ -84,7 +91,8 @@ void LoadMapping();
 //   changed,
 // - the running game's own: the profile its settings name, as Dolphin has it ([Controls]
 //   PadProfile1 or WiimoteProfile1 in the game's INI; a profile of the User or the Sys folder).
-//   "Per-Game" makes one, "<game ID> <controller>.ini", from the mapping the game has.
+//   "Per-Game" makes one, "<game ID> <controller>.ini", from the mapping the game has, and so does
+//   an extension that is not a choice, if it is chosen in a window while the game has a profile.
 // Whoever saves the mapping (the VR menu, a mapping window) saves it where it is from: the file of
 // every game is only written with the mapping of every game.
 enum class Kind
