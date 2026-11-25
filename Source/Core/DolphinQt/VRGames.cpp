@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <ctime>
+#include <map>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -103,6 +104,11 @@ void VRGames::Publish()
   const int count = m_model.rowCount(QModelIndex());
   for (int i = 0; i < count; ++i)
     games.push_back(m_model.GetGameFile(i));
+  std::map<std::string, std::vector<std::string>> covers;
+  for (const auto& game : games)
+    covers.emplace(game->GetFilePath(), UICommon::GetCoverFiles(*game, m_store));
+  m_model.SetCovers(covers);
+
   const TimePlayed time_played;
   auto list = std::make_shared<const FrameXr::Menu::GamesSnapshot>(
       m_list.Make(games, {m_model.GetTitleDatabase(), m_store, time_played, m_missing}));

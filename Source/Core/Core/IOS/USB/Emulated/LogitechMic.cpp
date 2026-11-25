@@ -81,7 +81,7 @@ private:
   }
   std::string GetCubebStreamName() const override
   {
-    return "BaijiSteamVR Emulated Logitech USB Microphone " + std::to_string(m_index);
+    return "Baiji VR Emulated Logitech USB Microphone " + std::to_string(m_index);
   }
   s16 GetVolumeModifier() const override
   {

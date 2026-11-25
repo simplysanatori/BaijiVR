@@ -7,6 +7,8 @@
 #include <QSortFilterProxyModel>
 
 inline constexpr QSize GRID_BANNER_SIZE(144, 48);
+// When a game in the list has a cover: the shape of a game's case.
+inline constexpr QSize GRID_COVER_SIZE(144, 202);
 
 // This subclass of QSortFilterProxyModel transforms the raw data into a
 // single-column large icon + name to be displayed in a QListView.

@@ -938,7 +938,7 @@ static XrResult SafeCreateSession(XrInstance instance, const XrSessionCreateInfo
   {
     ERROR_LOG_FMT(VIDEO,
                   "OpenXR: xrCreateSession CRASHED (exception {:#010x}). "
-                   "The OpenXR runtime may require Vulkan extensions that BaijiSteamVR did not enable. "
+                   "The OpenXR runtime may require Vulkan extensions that Baiji VR did not enable. "
                   "Check the 'Required Vulkan instance/device extensions' log lines above.",
                   static_cast<unsigned>(GetExceptionCode()));
     return XR_ERROR_RUNTIME_FAILURE;
@@ -1211,7 +1211,7 @@ bool VulkanOpenXR::PreQueryVulkanExtensions(VulkanExtensionRequirements& out)
       {
         WARN_LOG_FMT(VIDEO,
                      "OpenXR: Runtime reported max Vulkan 1.0.0 (v1 extension quirk); "
-                      "ignoring and using BaijiSteamVR's instance version.");
+                      "ignoring and using Baiji VR's instance version.");
         out.max_api_version = 0;
       }
       else
@@ -1420,7 +1420,7 @@ bool VulkanOpenXR::CreateSessionVulkan()
 
   // Log BaijiSteamVR's Vulkan API version for comparison.
   const u32 dolphin_api = g_vulkan_context->GetDeviceInfo().apiVersion;
-  INFO_LOG_FMT(VIDEO, "OpenXR: BaijiSteamVR VkPhysicalDevice API version {}.{}.{}",
+  INFO_LOG_FMT(VIDEO, "OpenXR: Baiji VR VkPhysicalDevice API version {}.{}.{}",
                VK_VERSION_MAJOR(dolphin_api), VK_VERSION_MINOR(dolphin_api),
                VK_VERSION_PATCH(dolphin_api));
 

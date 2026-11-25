@@ -313,7 +313,7 @@ void GameList::UpdateColumnVisibility()
 void GameList::MakeEmptyView()
 {
   const QString refreshing_msg = tr("Refreshing...");
-  const QString empty_msg = tr("BaijiSteamVR could not find any GameCube/Wii ISOs or WADs.\n"
+  const QString empty_msg = tr("Baiji VR could not find any GameCube/Wii ISOs or WADs.\n"
                                "Double-click here to set a games directory...");
 
   m_empty = new QLabel(this);

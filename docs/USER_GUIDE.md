@@ -81,9 +81,9 @@ Remove the `baiji-vr` shortcut from your Steam library by hand.
 
 The covers in the VR menu's Games tab come from libretro-thumbnails on GitHub. Nothing is downloaded until you say so: when you add a directory under **Paths**, or a refresh finds a new game, and the games lack covers, a question offers **Download Thumbnails?** (**Download** or **Not Now**). It is not asked during a game. **Download Thumbnails** in a game's menu on the Games tab does the same at any time. To fetch covers for every game in the list by itself, turn on **Download Game Covers** under **Interface** in the settings. A cover you put beside a game (`Game.cover.png` or `cover.png`) and covers already downloaded are used either way.
 
-### Banners
+### Covers and Banners
 
-The list and **View** > **Grid View** show the games' own banners. A Wii game has one once it has a save.
+**View** > **Grid View** shows the same covers as the VR menu's **Games** tab, and the banner of a game without one. The list shows banners, and the cover of a game without one. A Wii game has a banner once it has a save.
 
 ### Mods and texture packs
 

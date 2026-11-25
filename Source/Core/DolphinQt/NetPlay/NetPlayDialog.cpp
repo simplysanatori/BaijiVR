@@ -995,7 +995,7 @@ void NetPlayDialog::OnTraversalError(Common::TraversalClient::FailureReason erro
       break;
     case Common::TraversalClient::FailureReason::VersionTooOld:
       ModalMessageBox::critical(this, tr("Traversal Error"),
-                                 tr("BaijiSteamVR is too old for the traversal server"));
+                                 tr("Baiji VR is too old for the traversal server"));
       QDialog::reject();
       break;
     case Common::TraversalClient::FailureReason::ServerForgotAboutUs:

@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "VideoCommon/VR/FrameUI/PadArt.h"
-#include "VideoCommon/VR/FrameUI/PadFilter.h"
+#include "Common/VR/PadFilter.h"
 
 // Edit Controls: what is on each control of the emulated controller, the one that waits for a press
 // and what a press does. After Azahar for Frame's remap.*. No OpenXR and no config here (unit

@@ -129,6 +129,7 @@ All are off by default. In the window they are under **Advanced**.
 
 | Setting | What it does |
 |---|---|
+| **Immersive Mode** | Immersive or Stereoscopic 3D. The same as **Display** on **Position** |
 | **World Scale** | Game units per meter. Higher makes the world smaller |
 | **3D Strength** | How deep the world looks. 100% is natural |
 | **Lean Back**, **Camera Forward**, **Camera Height** | Where the camera is |

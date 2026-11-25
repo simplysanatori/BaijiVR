@@ -8,6 +8,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <vector>
 
 #include "Common/CommonTypes.h"
 #include "Common/IniFile.h"
@@ -58,6 +59,10 @@ private:
 std::string GetVRGameKey(const GameFile& game);
 // Where the player's own image for it is kept.
 std::string GetOwnCoverPath(const std::string& key);
+
+// The game's cover's files, the first that can be read is it: the player's choice, then the one
+// beside the game, then the downloaded one. Empty: No Cover.
+std::vector<std::string> GetCoverFiles(const GameFile& game, const VRGameStore& store);
 
 class VRGameList
 {

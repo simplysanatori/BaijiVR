@@ -154,6 +154,32 @@ std::string GetVRGameKey(const GameFile& game)
   return name;
 }
 
+std::vector<std::string> GetCoverFiles(const GameFile& game, const VRGameStore& store)
+{
+  using Cover = VRGameStore::Cover;
+  const std::string key = GetVRGameKey(game);
+  const Cover cover = store.GetCover(key);
+  const std::string& id = game.GetGameTDBID();
+  std::vector<std::string> files;
+  if (cover == Cover::None)
+    return files;
+  if (cover == Cover::Own)
+    files.push_back(GetOwnCoverPath(key));
+  else if (!id.empty() && cover == Cover::Title)
+    files.push_back(GetCoverPath(id, CoverKind::Title));
+  else if (!id.empty() && cover == Cover::Snap)
+    files.push_back(GetCoverPath(id, CoverKind::Snap));
+  else if (!id.empty() && cover == Cover::Box)
+    files.push_back(GetCoverPath(id));
+  std::string directory, name;
+  SplitPath(game.GetFilePath(), &directory, &name, nullptr);
+  files.push_back(directory + name + ".cover.png");
+  files.push_back(directory + "cover.png");
+  if (!id.empty() && cover != Cover::Box)
+    files.push_back(GetCoverPath(id));
+  return files;
+}
+
 GamesSnapshot VRGameList::Make(std::span<const std::shared_ptr<const GameFile>> games,
                                const Sources& sources)
 {
@@ -176,8 +202,8 @@ GamesSnapshot VRGameList::Make(std::span<const std::shared_ptr<const GameFile>> 
     }
 
     const std::string key = GetVRGameKey(*file);
-    std::string directory, name;
-    SplitPath(path, &directory, &name, nullptr);
+    std::string name;
+    SplitPath(path, nullptr, &name, nullptr);
 
     GameEntry& entry = rows.emplace_back();
     entry.path = path;
@@ -191,24 +217,7 @@ GamesSnapshot VRGameList::Make(std::span<const std::shared_ptr<const GameFile>> 
     entry.system = GetSystem(file->GetPlatform());
     entry.favorite = sources.store.IsFavourite(key);
     entry.missing = sources.missing.contains(path);
-    using Cover = VRGameStore::Cover;
-    const Cover cover = sources.store.GetCover(key);
-    const std::string& id = file->GetGameTDBID();
-    if (cover == Cover::Own)
-      entry.covers.push_back(GetOwnCoverPath(key));
-    else if (!id.empty() && cover == Cover::Title)
-      entry.covers.push_back(GetCoverPath(id, CoverKind::Title));
-    else if (!id.empty() && cover == Cover::Snap)
-      entry.covers.push_back(GetCoverPath(id, CoverKind::Snap));
-    else if (!id.empty() && cover == Cover::Box)
-      entry.covers.push_back(GetCoverPath(id));
-    if (cover != Cover::None)
-    {
-      entry.covers.push_back(directory + name + ".cover.png");
-      entry.covers.push_back(directory + "cover.png");
-      if (!id.empty() && cover != Cover::Box)
-        entry.covers.push_back(GetCoverPath(id));
-    }
+    entry.covers = GetCoverFiles(*file, sources.store);
     entry.cover_version = k.cover_version;
     entry.played_s = static_cast<u64>(std::chrono::duration_cast<std::chrono::seconds>(
                                           sources.time_played.GetTimePlayed(file->GetGameID()))

@@ -685,8 +685,8 @@ void AddControls(Builder* builder, const MenuState& state)
   builder->Text("Quick Save", "View, then Right Bumper");
   builder->Text("Quick Load", "View, then Hold Left Bumper");
   builder->Text("Fast Forward", "View, then Right Trigger");
-  builder->Text("Reset Screen or View", "Hold Right Stick Click");
-  builder->Text("Stereoscopic 3D or Immersive", "Both Bumpers, then View and Menu");
+  builder->Text("Reset Screen or View", "Hold R3 for 1 Second");
+  builder->Text("Stereoscopic 3D or Immersive", "Hold L3 for 1 Second");
   builder->Gap(12.0f);
   builder->Text("Move Screen", "Grip");
   builder->Text("Screen Distance and Size", "Grip and Stick");

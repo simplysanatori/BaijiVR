@@ -208,7 +208,7 @@ void FrameDumper::FrameDumpThreadFunc()
 #if !defined(HAVE_FFMPEG)
   if (dump_to_ffmpeg)
   {
-     WARN_LOG_FMT(VIDEO, "FrameDump: BaijiSteamVR was not compiled with FFmpeg, using fallback option. "
+     WARN_LOG_FMT(VIDEO, "FrameDump: Baiji VR was not compiled with FFmpeg, using fallback option. "
                         "Frames will be saved as PNG images instead.");
     dump_to_ffmpeg = false;
   }

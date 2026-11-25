@@ -34,7 +34,7 @@ static std::unique_ptr<Platform> s_platform;
 static void signal_handler(int)
 {
   constexpr char message[] =
-      "A signal was received. A second signal will force BaijiSteamVR to stop.\n";
+      "A signal was received. A second signal will force Baiji VR to stop.\n";
 #ifdef _WIN32
   puts(message);
 #else

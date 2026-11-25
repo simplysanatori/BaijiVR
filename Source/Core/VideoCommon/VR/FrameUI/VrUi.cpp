@@ -103,8 +103,6 @@ constexpr float NUDGE_DEG = 0.5f;
 constexpr s64 NUDGE_FIRST_NS = 400'000'000;
 constexpr s64 NUDGE_REPEAT_NS = 100'000'000;
 
-// Of what Azahar calls turbo speed.
-constexpr float FAST_FORWARD_SPEED = 2.0f;
 
 std::atomic<bool> s_paused_by_menu{false};
 std::mutex s_toast_mutex;
@@ -217,14 +215,6 @@ std::vector<u8> MakeArt()
   return pixels;
 }
 
-constexpr std::string_view QUICK_SAVE_SUFFIX = ".quick.sav";
-
-std::string GetQuickSavePath()
-{
-  return fmt::format("{}{}{}", File::GetUserPath(D_STATESAVES_IDX),
-                     SConfig::GetInstance().GetGameID(), QUICK_SAVE_SUFFIX);
-}
-
 // `save`: with what it changed of every game's settings on the disk, too.
 void QueueConfig(std::function<void()> change, bool save = true)
 {
@@ -282,7 +272,7 @@ int GetSlotOf(std::string_view message)
 MenuSaves ReadSaves()
 {
   MenuSaves saves;
-  saves.has_quick_save = File::Exists(GetQuickSavePath());
+  saves.has_quick_save = File::Exists(State::GetQuickSavePath());
   for (int i = 0; i < NUM_SLOTS; ++i)
   {
     if (!File::Exists(GetSlotPath(i + 1)))
@@ -448,7 +438,7 @@ void QueueFastForward(bool on)
 {
   Core::QueueHostJob([on](Core::System&) {
     const float normal = Config::GetBase(Config::MAIN_EMULATION_SPEED);
-    Config::SetCurrent(Config::MAIN_EMULATION_SPEED, on ? FAST_FORWARD_SPEED : normal);
+    Config::SetCurrent(Config::MAIN_EMULATION_SPEED, on ? Config::FAST_FORWARD_SPEED : normal);
   });
 }
 
@@ -574,7 +564,7 @@ void VrUi::PostEmulatorMessage(std::string_view message, u32 ms)
     ++s_saves_changed;
   if (!saved && !loaded)
     PostToast(std::string(message.substr(0, message.find('\n'))), ms);
-  else if (message.contains(QUICK_SAVE_SUFFIX))
+  else if (message.contains(State::QUICK_SAVE_SUFFIX))
     PostBriefToast(saved ? "Quick Saved" : "Quick Loaded");
   else if (message == "Autosaved")
     PostToast("Autosaved", 2000);
@@ -655,9 +645,9 @@ void VrUi::HandleEvents(const PadEvents& events)
     OpenMenu(m_frame);
 
   if (events.quick_save)
-    QueueSave(GetQuickSavePath());
+    QueueSave(State::GetQuickSavePath());
   if (events.quick_load)
-    LoadState(GetQuickSavePath(), "Quick Save", 0);
+    LoadState(State::GetQuickSavePath(), "Quick Save", 0);
   if (events.fast_forward)
     SetFastForward(!m_fast_forward);
   if (events.switch_mode)
@@ -713,7 +703,7 @@ void VrUi::LoadState(std::string path, std::string undo_label, s64 time)
     if (!File::Exists(path))
     {
       s_load_failed = true;
-      VrUi::PostBriefToast(path.ends_with(QUICK_SAVE_SUFFIX) ? "No Quick Save" :
+      VrUi::PostBriefToast(path.ends_with(State::QUICK_SAVE_SUFFIX) ? "No Quick Save" :
                                                                 "Save State Not Found");
       return;
     }
@@ -1164,6 +1154,7 @@ void VrUi::SetLiveSettings()
   values.game[static_cast<std::size_t>(SettingId::Display)] =
       static_cast<float>(m_frame.has_screen ? OpenXRPresentationMode::StereoScreen :
                                               OpenXRPresentationMode::Immersive);
+  values.game[static_cast<std::size_t>(SettingId::ImmersiveMode)] = m_frame.has_screen ? 0.0f : 1.0f;
 }
 
 void VrUi::ChangeSetting(SettingId id, float value, bool save)
@@ -1585,6 +1576,12 @@ void VrUi::ActivateSetting(const MenuWidget& widget, int option)
   switch (row.kind)
   {
   case RowKind::Switch:
+    if (id == SettingId::ImmersiveMode)
+    {
+      QueueSwitchMode(!widget.active, m_menu.settings.scope);
+      QueueReadSettings(++m_settings_serial);
+      break;
+    }
     ChangeSetting(id, widget.active ? 0.0f : 1.0f);
     break;
   case RowKind::Segmented:

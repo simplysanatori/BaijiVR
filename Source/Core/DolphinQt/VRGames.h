@@ -17,7 +17,7 @@ class GameListModel;
 class QTimer;
 
 // The window's side of the VR menu's Games tab (VideoCommon/VR/FrameUI/GamesHost.h): publishes the
-// game list, and keeps the favourites and when a game was played last.
+// game list, gives the window's list the same covers, and keeps the favourites and when a game was played last.
 class VRGames final : public QObject
 {
 public:

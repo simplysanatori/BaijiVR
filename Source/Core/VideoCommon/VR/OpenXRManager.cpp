@@ -579,13 +579,13 @@ bool OpenXRManager::CreateInstance(const std::vector<const char*>& extra_extensi
 
   XrApplicationInfo app_info{};
 #ifdef BAIJI_STEAMVR
-  std::strncpy(app_info.applicationName, "BaijiSteamVR", XR_MAX_APPLICATION_NAME_SIZE - 1);
+  std::strncpy(app_info.applicationName, "Baiji VR", XR_MAX_APPLICATION_NAME_SIZE - 1);
 #else
   std::strncpy(app_info.applicationName, "Dolphin Emulator", XR_MAX_APPLICATION_NAME_SIZE - 1);
 #endif
   app_info.applicationVersion = 1;
 #ifdef BAIJI_STEAMVR
-  std::strncpy(app_info.engineName, "BaijiSteamVR", XR_MAX_ENGINE_NAME_SIZE - 1);
+  std::strncpy(app_info.engineName, "Baiji VR", XR_MAX_ENGINE_NAME_SIZE - 1);
 #else
   std::strncpy(app_info.engineName, "Dolphin", XR_MAX_ENGINE_NAME_SIZE - 1);
 #endif
@@ -1781,7 +1781,7 @@ bool OpenXRManager::InitializeInputActions()
 #endif
   CopyOpenXRName(action_set_info.localizedActionSetName, XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE,
 #ifdef BAIJI_STEAMVR
-                 "BaijiSteamVR Input");
+                 "Baiji VR Input");
 #else
                  "Dolphin Input");
 #endif

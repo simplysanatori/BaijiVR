@@ -11,8 +11,8 @@
 | **View**, then right bumper | Quick Save | When you let go of the bumper |
 | **View**, then left bumper held for half a second | Quick Load | |
 | **View**, then right trigger | Fast Forward on or off | When you let go of the trigger |
-| Both bumpers, then **View** and **Menu** | Stereoscopic 3D or Immersive | |
-| Right stick click, held for 1 second | Reset the screen or view | |
+| Hold **L3** for 1 second | Stereoscopic 3D or Immersive | Both bumpers, then **View** and **Menu**, too |
+| Hold **R3** for 1 second | Reset the screen or view | |
 | Grip | Move the screen | **Lock Screen** turns it off |
 | Grip and stick | Screen distance and size | |
 | Grip and D-Pad left or right | Nudge the screen | |
@@ -20,7 +20,7 @@
 
 While a grip holds the screen, a hint under it shows these.
 
-In Flat, **Menu** held for 3 seconds asks **Switch to VR?**: **A** is Yes, **B** is No. The game gets **Menu**, too.
+In Flat, these work the same way: stopping the game, Quick Save, Quick Load and Fast Forward. **Menu** held for 3 seconds asks **Switch to VR?**: **A** is Yes, **B** is No. The game gets **Menu**, too.
 
 ## The Window in Game Mode
 

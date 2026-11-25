@@ -3,6 +3,9 @@
 
 #include "DolphinQt/GameList/GameListModel.h"
 
+#include <utility>
+
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -82,6 +85,15 @@ QVariant GameListModel::data(const QModelIndex& index, int role) const
     {
       // GameCube banners are 96x32, but Wii banners are 192x64.
       QPixmap banner = ToQPixmap(game.GetBannerImage());
+      if (banner.isNull())
+      {
+        banner = GetCover(game.GetFilePath());
+        if (!banner.isNull())
+        {
+          banner = banner.scaled(GAMECUBE_BANNER_SIZE * qGuiApp->devicePixelRatio(),
+                                 Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        }
+      }
       if (banner.isNull())
         banner = Resources::GetMisc(Resources::MiscID::BannerMissing).pixmap(GAMECUBE_BANNER_SIZE);
 
@@ -446,6 +458,60 @@ GameListModel::FindSecondDisc(const UICommon::GameFile& game) const
 void GameListModel::SetSearchTerm(const QString& term)
 {
   m_term = term;
+}
+
+QPixmap GameListModel::GetCover(const std::string& path) const
+{
+  const auto it = m_covers.find(path);
+  if (it == m_covers.end())
+    return QPixmap();
+  Cover& cover = it->second;
+  if (!std::exchange(cover.read, true))
+  {
+    for (const auto& [file, time] : cover.files)
+    {
+      if (cover.picture.load(file))
+        break;
+    }
+  }
+  return cover.picture;
+}
+
+void GameListModel::SetCovers(const std::map<std::string, std::vector<std::string>>& files)
+{
+  std::vector<std::string> changed;
+  std::map<std::string, Cover> covers;
+  bool has_covers = false;
+  for (const auto& [path, candidates] : files)
+  {
+    Cover cover;
+    for (const std::string& candidate : candidates)
+    {
+      const QFileInfo info(QString::fromStdString(candidate));
+      if (info.isFile())
+        cover.files.emplace_back(info.filePath(), info.lastModified().toMSecsSinceEpoch());
+    }
+    has_covers |= !cover.files.empty();
+    const auto it = m_covers.find(path);
+    if (it != m_covers.end() && it->second.files == cover.files)
+      cover = std::move(it->second);
+    else if (it != m_covers.end() || !cover.files.empty())
+      changed.push_back(path);
+    covers.emplace(path, std::move(cover));
+  }
+  m_covers = std::move(covers);
+
+  if (std::exchange(m_has_covers, has_covers) != has_covers)
+  {
+    // The tiles have another shape.
+    emit layoutAboutToBeChanged();
+    emit layoutChanged();
+  }
+  for (const std::string& path : changed)
+  {
+    if (const int index = FindGameIndex(path); index >= 0)
+      emit dataChanged(createIndex(index, 0), createIndex(index, columnCount(QModelIndex()) - 1));
+  }
 }
 
 void GameListModel::SetScale(float scale)

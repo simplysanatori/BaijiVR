@@ -313,6 +313,12 @@ static std::string SystemTimeAsDoubleToString(double time)
   return fmt::format(std::locale{""}, "{:%x %X}", *local_time);
 }
 
+std::string GetQuickSavePath()
+{
+  return fmt::format("{}{}{}", File::GetUserPath(D_STATESAVES_IDX),
+                     SConfig::GetInstance().GetGameID(), QUICK_SAVE_SUFFIX);
+}
+
 static std::string MakeStateFilename(int number)
 {
   return fmt::format("{}{}.s{:02d}", File::GetUserPath(D_STATESAVES_IDX),
@@ -758,7 +764,7 @@ static bool ValidateHeaders(const StateHeader& header)
     std::string oldest_version = version_range.first;
     std::string newest_version = version_range.second;
 
-    loaded_str = "BaijiSteamVR " + oldest_version + " - " + newest_version;
+    loaded_str = "Baiji VR " + oldest_version + " - " + newest_version;
   }
   else if (loaded_version != STATE_VERSION)
   {
@@ -769,7 +775,7 @@ static bool ValidateHeaders(const StateHeader& header)
   {
     const std::string message =
         loaded_str.empty() ?
-            "This savestate was created using an incompatible version of BaijiSteamVR" :
+            "This savestate was created using an incompatible version of Baiji VR" :
             "This savestate was created using the incompatible version " + loaded_str;
     Core::DisplayMessage(message, OSD::Duration::NORMAL);
   }

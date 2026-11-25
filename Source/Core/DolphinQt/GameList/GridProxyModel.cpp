@@ -5,6 +5,7 @@
 
 #include <QGuiApplication>
 #include <QPixmap>
+#include <QPixmapCache>
 #include <QSize>
 
 #include "DolphinQt/GameList/GameListModel.h"
@@ -33,9 +34,23 @@ QVariant GridProxyModel::data(const QModelIndex& i, int role) const
 
     // In the screen's own pixels: GridDelegate draws it at the size of the tile. (Not the list's, which
     // is scaled down to a row.)
-    const QSize size =
-        (QSizeF(GRID_BANNER_SIZE) * model->GetScale() * qGuiApp->devicePixelRatio()).toSize();
-    QPixmap banner = ToQPixmap(model->GetGameFile(source_index.row())->GetBannerImage());
+    const qreal scale = model->GetScale() * qGuiApp->devicePixelRatio();
+    const auto& game = model->GetGameFile(source_index.row());
+    if (const QPixmap cover = model->GetCover(game->GetFilePath()); !cover.isNull())
+    {
+      const QString key = QStringLiteral("cover/%1/%2").arg(cover.cacheKey()).arg(scale);
+      QPixmap scaled;
+      if (!QPixmapCache::find(key, &scaled))
+      {
+        scaled = cover.scaled((QSizeF(GRID_COVER_SIZE) * scale).toSize(), Qt::KeepAspectRatio,
+                              Qt::SmoothTransformation);
+        QPixmapCache::insert(key, scaled);
+      }
+      return scaled;
+    }
+
+    const QSize size = (QSizeF(GRID_BANNER_SIZE) * scale).toSize();
+    QPixmap banner = ToQPixmap(game->GetBannerImage());
     if (banner.isNull())
       banner = Resources::GetMisc(Resources::MiscID::BannerMissing).pixmap(size, 1.0);
 

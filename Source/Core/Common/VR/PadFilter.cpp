@@ -3,7 +3,7 @@
 
 #ifdef ENABLE_VR
 
-#include "VideoCommon/VR/FrameUI/PadFilter.h"
+#include "Common/VR/PadFilter.h"
 
 #include <algorithm>
 #include <cmath>
@@ -300,20 +300,25 @@ PadEvents PadFilter::Update(Controllers* controllers, s64 now_ns, bool blocked, 
   right.view_button = false;
   left.view_button = now_ns < m_view_pulse_until;
 
-  // ---- Right stick click: the game sees it as it is, until it becomes the reset ----
-  if (right.thumbstick_button && !m_reset_down)
+  // ---- L3 and R3: the game sees a click as it is, until it becomes the hold ----
+  for (const std::size_t hand : {LEFT, RIGHT})
   {
-    m_reset_since = now_ns;
-    m_reset_done = false;
-    // Pushed in while turning a camera: not this.
-    m_reset_ignored = Deflection(right) > 0.5f;
-  }
-  m_reset_down = right.thumbstick_button;
-  if (m_reset_down && !m_reset_ignored && !m_reset_done && now_ns - m_reset_since >= RESET_NS)
-  {
-    m_reset_done = true;
-    events.reset_screen = true;
-    m_swallowed[RIGHT][STICK] = true;
+    const State& state = (*controllers)[hand];
+    StickHold& hold = m_stick_holds[hand];
+    if (state.thumbstick_button && !hold.down)
+    {
+      hold.since = now_ns;
+      hold.done = false;
+      // Pushed in while moving, or turning a camera: not this.
+      hold.ignored = Deflection(state) > 0.5f;
+    }
+    hold.down = state.thumbstick_button;
+    if (hold.down && !hold.ignored && !hold.done && now_ns - hold.since >= STICK_HOLD_NS)
+    {
+      hold.done = true;
+      (hand == LEFT ? events.switch_mode : events.reset_screen) = true;
+      m_swallowed[hand][STICK] = true;
+    }
   }
 
   // ---- A hand holding the screen ----

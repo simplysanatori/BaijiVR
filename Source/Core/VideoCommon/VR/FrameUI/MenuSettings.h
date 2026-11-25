@@ -70,6 +70,7 @@ enum class SettingId : int
   PerformanceLog,
 
   // Immersive
+  ImmersiveMode,  // Display, as a switch
   WorldScale,
   Strength3D,
   LeanBackOn,

@@ -21,8 +21,8 @@
 namespace
 {
 constexpr int MARGIN = 14;       // around the tile
-constexpr int HIGHLIGHT_PAD = 8;  // the selection, outside the banner
-constexpr int TITLE_GAP = 10;    // from the banner to the name
+constexpr int HIGHLIGHT_PAD = 8;  // the selection, outside the picture
+constexpr int TITLE_GAP = 10;    // from the picture to the name
 constexpr int TITLE_LINES = 2;
 }  // namespace
 
@@ -31,15 +31,15 @@ GridDelegate::GridDelegate(const GameListModel& model, QObject* parent)
 {
 }
 
-QSize GridDelegate::BannerSize() const
+QSize GridDelegate::PictureSize() const
 {
-  return GRID_BANNER_SIZE * m_model.GetScale();
+  return (m_model.HasCovers() ? GRID_COVER_SIZE : GRID_BANNER_SIZE) * m_model.GetScale();
 }
 
 QSize GridDelegate::sizeHint(const QStyleOptionViewItem& option, const QModelIndex&) const
 {
-  const QSize banner = BannerSize();
-  int width = banner.width() + 2 * MARGIN;
+  const QSize picture = PictureSize();
+  int width = picture.width() + 2 * MARGIN;
   if (const auto* view = qobject_cast<const QAbstractItemView*>(option.widget))
   {
     // Qt keeps room for the scroll bar, also while there is none, and wraps a row that fills the rest to
@@ -49,7 +49,7 @@ QSize GridDelegate::sizeHint(const QStyleOptionViewItem& option, const QModelInd
     const int room = view->maximumViewportSize().width() - scroll_bar - 2;
     width = std::max(width, room / std::max(1, room / width));
   }
-  const int height = banner.height() + TITLE_GAP +
+  const int height = picture.height() + TITLE_GAP +
                      QFontMetrics(option.font).lineSpacing() * TITLE_LINES + 2 * MARGIN;
   return QSize(width, height);
 }
@@ -61,9 +61,9 @@ void GridDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
   painter->setRenderHint(QPainter::Antialiasing);
   painter->setRenderHint(QPainter::SmoothPixmapTransform);
 
-  const QSize banner = BannerSize();
-  const QRect tile((option.rect.center().x() - banner.width() / 2), option.rect.top() + MARGIN,
-                   banner.width(), option.rect.height() - 2 * MARGIN);
+  const QSize picture = PictureSize();
+  const QRect tile((option.rect.center().x() - picture.width() / 2), option.rect.top() + MARGIN,
+                   picture.width(), option.rect.height() - 2 * MARGIN);
 
   const bool selected = option.state & QStyle::State_Selected;
   if (selected || option.state & QStyle::State_MouseOver)
@@ -79,8 +79,17 @@ void GridDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
   const QPixmap pixmap = index.data(Qt::DecorationRole).value<QPixmap>();
   if (!pixmap.isNull())
   {
-    QRect target(QPoint(), pixmap.size().scaled(banner, Qt::KeepAspectRatio));
-    target.moveCenter(QRect(tile.topLeft(), banner).center());
+    const QRect area(tile.topLeft(), picture);
+    QRect target(QPoint(), pixmap.size().scaled(picture, Qt::KeepAspectRatio));
+    target.moveCenter(area.center());
+    if (m_model.HasCovers() && target.height() < area.height() / 2)
+    {
+      // A banner among covers.
+      painter->setPen(Qt::NoPen);
+      painter->setBrush(option.palette.color(QPalette::AlternateBase));
+      painter->drawRoundedRect(area, 6, 6);
+      target.adjust(8, 8 * target.height() / target.width(), -8, -8 * target.height() / target.width());
+    }
     painter->drawPixmap(target, pixmap);
   }
 
@@ -91,7 +100,7 @@ void GridDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
   text_option.setWrapMode(QTextOption::WordWrap);
   layout.setTextOption(text_option);
   painter->setPen(option.palette.color(QPalette::Text));
-  int y = tile.top() + banner.height() + TITLE_GAP;
+  int y = tile.top() + picture.height() + TITLE_GAP;
   layout.beginLayout();
   for (int line_number = 0; line_number < TITLE_LINES; ++line_number)
   {

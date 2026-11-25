@@ -76,7 +76,7 @@ QPointer<MenuBar> MenuBar::s_menu_bar;
 QString MenuBar::GetSignatureSelector() const
 {
   return QStringLiteral("%1 (*.dsy);; %2 (*.csv);; %3 (*.mega)")
-      .arg(tr("BaijiSteamVR Signature File"), tr("BaijiSteamVR Signature CSV File"),
+      .arg(tr("Baiji VR Signature File"), tr("Baiji VR Signature CSV File"),
            tr("WiiTools Signature MEGA File"));
 }
 

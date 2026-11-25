@@ -2154,7 +2154,7 @@ void MainWindow::OnPlayRecording()
   }
 
   QString dtm_file = DolphinFileDialog::getOpenFileName(
-      this, tr("Select the Recording File to Play"), QString(), tr("BaijiSteamVR TAS Movies (*.dtm)"));
+      this, tr("Select the Recording File to Play"), QString(), tr("Baiji VR TAS Movies (*.dtm)"));
 
   if (dtm_file.isEmpty())
     return;
@@ -2232,7 +2232,7 @@ void MainWindow::OnExportRecording()
   const Core::CPUThreadGuard guard(m_system);
 
   QString dtm_file = DolphinFileDialog::getSaveFileName(
-      this, tr("Save Recording File As"), QString(), tr("BaijiSteamVR TAS Movies (*.dtm)"));
+      this, tr("Save Recording File As"), QString(), tr("Baiji VR TAS Movies (*.dtm)"));
   if (!dtm_file.isEmpty())
     m_system.GetMovie().SaveRecording(dtm_file.toStdString());
 }

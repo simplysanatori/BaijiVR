@@ -7,6 +7,7 @@
 #include <QDialogButtonBox>
 #include <QGridLayout>
 #include <QHeaderView>
+#include <QLabel>
 #include <QPushButton>
 #include <QTableWidget>
 #include <QUrl>
@@ -45,7 +46,12 @@ void ResourcePackManager::CreateWidgets()
 
   connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
 
+  auto* const note = new QLabel(tr("For Dolphin's resource pack files. Texture packs from Mods are in a "
+                                   "game's properties, under Mods, and in the VR menu."));
+  note->setWordWrap(true);
+
   layout->addWidget(m_table_widget, 0, 0, 7, 1);
+  layout->addWidget(note, 7, 0);
   layout->addWidget(m_open_directory_button, 0, 1);
   layout->addWidget(m_change_button, 1, 1);
   layout->addWidget(m_remove_button, 2, 1);

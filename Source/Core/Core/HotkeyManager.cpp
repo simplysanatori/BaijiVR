@@ -459,9 +459,7 @@ void HotkeyManager::LoadDefaults(const ControllerInterface& ciface)
 
 #ifdef ENABLE_VR
   SetDefaultDevice("OpenXR/0/OpenXR Controller");
-  // In the headset holding View is one of the VR controls (PadFilter.h) and never reaches this;
-  // this is for Flat, which has no VR session.
-  set_key_expression(HK_STOP, "hold(`View`, 1.5)");
+  // Holding View stops the game without one (Common/VR/PadFilter.h).
   // Steam Frame provides headset recentering at the OS/runtime level; leave the app hotkey unset.
   return;
 #endif

@@ -17,6 +17,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/MathUtil.h"
 #include "Common/Matrix.h"
+#include "Common/VR/FlatShortcuts.h"
 #include "Common/VR/OpenXRInputState.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 
@@ -116,6 +117,9 @@ public:
                        GetInput(*gamepad, "Gyro Roll Left") - GetInput(*gamepad, "Gyro Roll Right"),
                        GetInput(*gamepad, "Gyro Yaw Left") - GetInput(*gamepad, "Gyro Yaw Right"));
         }
+        m_flat_shortcuts.Filter(
+            &m_snapshot.controllers,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
         std::lock_guard lock(m_gamepad_mutex);
         m_steam_input_gamepad = gamepad;
         if (!m_gamepad_logged)
@@ -127,12 +131,14 @@ public:
       }
       else
       {
+        m_flat_shortcuts.Reset();
         std::lock_guard lock(m_gamepad_mutex);
         m_steam_input_gamepad.reset();
       }
     }
     else
     {
+      m_flat_shortcuts.Reset();
       std::lock_guard lock(m_gamepad_mutex);
       m_steam_input_gamepad.reset();
       if (!m_openxr_logged)
@@ -804,6 +810,7 @@ private:
   }
 
   Common::VR::OpenXRInputSnapshot m_snapshot{};
+  Common::VR::FlatShortcuts m_flat_shortcuts;
   ControllerInterface& m_controller_interface;
   std::mutex m_gamepad_mutex;
   std::shared_ptr<ciface::Core::Device> m_steam_input_gamepad;

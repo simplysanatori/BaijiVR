@@ -19,10 +19,12 @@
 //   View + Right Bumper, let go: Quick Save. View + Left Bumper held half a second: Quick Load.
 //   View + Right Trigger, let go: Fast Forward on or off.
 //   Both bumpers, then View and Menu: Stereoscopic 3D or Immersive.
-//   Right Stick clicked and held 1 s: reset the screen.
+//   L3 held 1 s: Stereoscopic 3D or Immersive, too.
+//   R3 held 1 s: reset the screen.
 //
 // A control that did one of these, or was down when the menu closed, stays away from the game
-// until it is let go. No OpenXR here (unit tested).
+// until it is let go. No OpenXR here (unit tested). In Flat the ones of View are read the same way,
+// from the gamepad that Steam Input makes of the controllers (FlatShortcuts.h).
 namespace VR::UI
 {
 using Controllers = std::array<Common::VR::OpenXRControllerState, 2>;
@@ -48,7 +50,7 @@ public:
   static constexpr s64 VIEW_TAP_NS = 500'000'000;
   static constexpr s64 STOP_NS = 1'500'000'000;
   static constexpr s64 QUICK_LOAD_NS = 500'000'000;
-  static constexpr s64 RESET_NS = 1'000'000'000;
+  static constexpr s64 STICK_HOLD_NS = 1'000'000'000;
   // A tap reaches the game as a press this long: three frames of a 30 fps game.
   static constexpr s64 PULSE_NS = 100'000'000;
   static constexpr float TRIGGER_ON = 0.55f;
@@ -96,10 +98,15 @@ private:
   bool m_right_trigger_down = false;
   bool m_switch_down = false;
 
-  bool m_reset_down = false;
-  bool m_reset_done = false;
-  bool m_reset_ignored = false;
-  s64 m_reset_since = 0;
+  // L3, R3.
+  struct StickHold
+  {
+    bool down = false;
+    bool done = false;
+    bool ignored = false;
+    s64 since = 0;
+  };
+  std::array<StickHold, 2> m_stick_holds{};
 
   bool m_blocked = false;
 

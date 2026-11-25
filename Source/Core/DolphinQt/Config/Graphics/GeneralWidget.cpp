@@ -235,14 +235,14 @@ void GeneralWidget::AddDescriptions()
                  "<dolphin_emphasis>If unsure, leave this unchecked.</dolphin_emphasis>");
 #ifdef BAIJI_STEAMVR
   static const char TR_RENDER_TO_MAINWINDOW_DESCRIPTION[] =
-      QT_TR_NOOP("Uses the main BaijiSteamVR window for rendering rather than "
+      QT_TR_NOOP("Uses the main Baiji VR window for rendering rather than "
                  "a separate render window.<br><br>In Steam's Game Mode the game always "
                  "renders to the main window. On the desktop, leave this unchecked to keep "
                  "the game list and a game's Properties available while it runs."
                  "<br><br><dolphin_emphasis>If unsure, leave this unchecked.</dolphin_emphasis>");
 #else
   static const char TR_RENDER_TO_MAINWINDOW_DESCRIPTION[] =
-      QT_TR_NOOP("Uses the main BaijiSteamVR window for rendering rather than "
+      QT_TR_NOOP("Uses the main Baiji VR window for rendering rather than "
                  "a separate render window.<br><br><dolphin_emphasis>If unsure, leave "
                  "this unchecked.</dolphin_emphasis>");
 #endif
@@ -250,7 +250,7 @@ void GeneralWidget::AddDescriptions()
       "Selects which aspect ratio to use for displaying the game."
       "<br><br>The aspect ratio of the image sent out by the original consoles varied depending on "
       "the game and rarely exactly matched 4:3 or 16:9. Some of the image would be cut off by the "
-       "edges of the TV, or the image wouldn't fill the TV entirely. By default, BaijiSteamVR shows the "
+       "edges of the TV, or the image wouldn't fill the TV entirely. By default, Baiji VR shows the "
       "whole image without distorting its proportions, which means it's normal for the image to "
       "not entirely fill your display."
       "<br><br><b>Auto</b>: Mimics a TV with either a 4:3 or 16:9 aspect ratio, depending on which "

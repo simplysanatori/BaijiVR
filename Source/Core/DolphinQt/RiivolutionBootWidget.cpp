@@ -340,7 +340,7 @@ void RiivolutionBootWidget::SaveAsPreset()
   QDir dir = QFileInfo(QString::fromStdString(m_base_game_path)).dir();
   QString target_path = QFileDialog::getSaveFileName(this, tr("Save Preset"), dir.absolutePath(),
                                                      QStringLiteral("%1 (*.json);;%2 (*)")
-                                                          .arg(tr("BaijiSteamVR Game Mod Preset"))
+                                                          .arg(tr("Baiji VR Game Mod Preset"))
                                                          .arg(tr("All Files")));
   if (target_path.isEmpty())
     return;

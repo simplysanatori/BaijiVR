@@ -32,8 +32,9 @@ Baiji's own changelog is in [its README](../README.upstream.md). Thanks to theje
 
 ### 3D modes
 
-- The modes are called **Stereoscopic 3D** and **Immersive**. Both bumpers, then **View** and **Menu**, switch.
+- The modes are called **Stereoscopic 3D** and **Immersive**. Hold **L3** for 1 second to switch, or use **Display** on **Position** or **Immersive Mode** in **Settings**.
 - **Switch to Flat**: a running game moves to a flat window and back to VR, where it left off.
+- Quick Save, Quick Load, Fast Forward and stopping the game from the controllers, in Flat as well.
 - Natural 3D: **3D Depth** is set from your IPD and the screen's size, so far scenery looks as far away as in real life.
 - **Screen Curve**. The grips move and resize the screen.
 - The screen keeps one shape when a game changes video modes.
@@ -58,7 +59,7 @@ Baiji's own changelog is in [its README](../README.upstream.md). Thanks to theje
 - One page for the VR settings, in plain words, and a dark style.
 - In Game Mode: **Window Scale**, windows that fit the screen, and the controller works in them.
 - In SteamVR's theater at the start and after a VR game.
-- A roomier Grid View.
+- A roomier Grid View, with the covers of the VR menu.
 - **3D Depth** on a game's own VR page, which saves only what is changed on it.
 - `baiji-uninstall`, which can also copy your saves to Dolphin.
 
@@ -79,6 +80,7 @@ Baiji's own changelog is in [its README](../README.upstream.md). Thanks to theje
 - Settings changed in the VR menu are saved at once.
 - A Wii Remote's Shake works in VR.
 - Warnings and internal errors show in the headset.
+- The window no longer says that cheats are off for a game that has them on.
 - Mods and texture packs download on the Frame (the system's CA certificates).
 
 ### Experimental, off by default

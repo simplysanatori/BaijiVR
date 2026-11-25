@@ -7,8 +7,8 @@
 
 class GameListModel;
 
-// A tile of the Grid View: the banner, then the game's name below it with room around both. Tiles share
-// the width of the view evenly.
+// A tile of the Grid View: the cover or the banner, then the game's name below it with room around both.
+// Tiles share the width of the view evenly.
 class GridDelegate final : public QStyledItemDelegate
 {
   Q_OBJECT
@@ -21,7 +21,7 @@ public:
              const QModelIndex& index) const override;
 
 private:
-  QSize BannerSize() const;
+  QSize PictureSize() const;
 
   const GameListModel& m_model;
 };

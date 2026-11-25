@@ -15,7 +15,11 @@
 #include "AudioCommon/AudioCommon.h"
 
 #include "Common/Config/Config.h"
+#include "Common/FileUtil.h"
 #include "Common/Thread.h"
+#ifdef ENABLE_VR
+#include "Common/VR/FlatShortcuts.h"
+#endif
 
 #include "Core/AchievementManager.h"
 #include "Core/Config/FreeLookSettings.h"
@@ -150,6 +154,46 @@ static void HandleFrameStepHotkeys()
   }
 }
 
+#ifdef ENABLE_VR
+// As in the headset, where VrUi does it.
+static void HandleFlatShortcuts(const Common::VR::FlatShortcuts::Pressed& pressed)
+{
+  if (pressed.quick_save)
+  {
+    Core::QueueHostJob([](Core::System& system) {
+      if (!Config::Get(Config::MAIN_SAVE_STATE_NOTICE_SHOWN))
+      {
+        Config::SetBaseOrCurrent(Config::MAIN_SAVE_STATE_NOTICE_SHOWN, true);
+        OSD::AddMessage("Save states are NOT a replacement for saving in the game",
+                        OSD::Duration::NORMAL);
+      }
+      const std::string path = State::GetQuickSavePath();
+      File::CreateFullPath(path);
+      State::SaveAs(system, path);
+    });
+  }
+  if (pressed.quick_load)
+  {
+    Core::QueueHostJob([](Core::System& system) {
+      const std::string path = State::GetQuickSavePath();
+      if (File::Exists(path))
+        State::LoadAs(system, path);
+      else
+        OSD::AddMessage("No Quick Save");
+    });
+  }
+  if (pressed.fast_forward)
+  {
+    Core::QueueHostJob([](Core::System&) {
+      const float normal = Config::GetBase(Config::MAIN_EMULATION_SPEED);
+      const bool on = Config::Get(Config::MAIN_EMULATION_SPEED) == normal;
+      Config::SetCurrent(Config::MAIN_EMULATION_SPEED, on ? Config::FAST_FORWARD_SPEED : normal);
+      OSD::AddMessage(on ? "Fast Forward" : "Normal Speed");
+    });
+  }
+}
+#endif
+
 void HotkeyScheduler::Run()
 {
   Common::SetCurrentThreadName("HotkeyScheduler");
@@ -165,16 +209,34 @@ void HotkeyScheduler::Run()
     g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::Host);
     g_controller_interface.UpdateInput();
 
+    Core::System& system = Core::System::GetInstance();
+#ifdef ENABLE_VR
+    const Core::State flat_state = Core::GetState(system);
+    Common::VR::FlatShortcuts::SetGameRunning(
+        HotkeyManagerEmu::IsEnabled() &&
+        (flat_state == Core::State::Running || flat_state == Core::State::Paused));
+    const Common::VR::FlatShortcuts::Pressed flat_shortcuts = Common::VR::FlatShortcuts::Take();
+#endif
+
     if (!HotkeyManagerEmu::IsEnabled())
       continue;
 
-    Core::System& system = Core::System::GetInstance();
     if (Core::GetState(system) != Core::State::Stopping)
     {
       // Obey window focus (config permitting) before checking hotkeys.
       Core::UpdateInputGate(Config::Get(Config::MAIN_FOCUSED_HOTKEYS));
 
       HotkeyManagerEmu::GetStatus(false);
+
+#ifdef ENABLE_VR
+      // With the window's focus, as the hotkeys.
+      if (ControlReference::GetInputGate() && Core::IsRunning(system))
+      {
+        HandleFlatShortcuts(flat_shortcuts);
+        if (flat_shortcuts.stop)
+          emit StopHotkey();
+      }
+#endif
 
       // Everything else on the host thread (controller config dialog) should always get input.
       ControlReference::SetInputGate(true);

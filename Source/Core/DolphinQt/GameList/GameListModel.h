@@ -3,11 +3,15 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <QAbstractTableModel>
 #include <QMap>
+#include <QPixmap>
 #include <QString>
 #include <QStringList>
 #include <QVariant>
@@ -74,6 +78,12 @@ public:
 
   const Core::TitleDatabase& GetTitleDatabase() const { return m_title_database; }
 
+  // Its cover, as in the VR menu; null when it has none. SetCovers has every game's files by path,
+  // each game's best first.
+  QPixmap GetCover(const std::string& path) const;
+  bool HasCovers() const { return m_has_covers; }
+  void SetCovers(const std::map<std::string, std::vector<std::string>>& files);
+
   void SetScale(float scale);
   float GetScale() const;
 
@@ -104,6 +114,17 @@ private:
   QList<std::shared_ptr<const UICommon::GameFile>> m_games;
   Core::TitleDatabase m_title_database;
   TimePlayed m_timer;
+  struct Cover
+  {
+    // Those that are there, and when they were written.
+    std::vector<std::pair<QString, qint64>> files;
+    // Read when it is first shown.
+    bool read = false;
+    QPixmap picture;
+  };
+
+  mutable std::map<std::string, Cover> m_covers;
+  bool m_has_covers = false;
   QString m_term;
   float m_scale = 1.0;
 };

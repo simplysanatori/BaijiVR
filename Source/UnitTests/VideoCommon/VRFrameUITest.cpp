@@ -26,9 +26,11 @@
 #include "VideoCommon/VR/FrameUI/GrabHint.h"
 #include "VideoCommon/VR/FrameUI/MenuSettings.h"
 #include "VideoCommon/VR/FrameUI/PadBindings.h"
-#include "VideoCommon/VR/FrameUI/PadFilter.h"
+#include "Common/VR/FlatShortcuts.h"
+#include "Common/VR/PadFilter.h"
 #include "VideoCommon/VR/FrameUI/ScreenPlacement.h"
 #include "VideoCommon/VR/FrameUI/VrMenu.h"
+#include "VideoCommon/VideoConfig.h"
 #include "UICommon/UICommon.h"
 
 using namespace VR::UI;
@@ -389,6 +391,30 @@ TEST(VRFrameUI, ResetIsAHold)
   pad.raw[1].thumbstick_button = true;
   pad.Run(1500);
   EXPECT_EQ(pad.resets, 1);
+}
+
+TEST(VRFrameUI, SwitchIsAHoldOfL3)
+{
+  Pad pad;
+  pad.raw[0].thumbstick_button = true;
+  pad.Run(900);
+  EXPECT_TRUE(pad.seen[0].thumbstick_button);
+  EXPECT_EQ(pad.switches, 0);
+  pad.Run(200);
+  EXPECT_EQ(pad.switches, 1);
+  EXPECT_FALSE(pad.seen[0].thumbstick_button);
+  // Once a hold.
+  pad.Run(3000);
+  EXPECT_EQ(pad.switches, 1);
+  EXPECT_EQ(pad.resets, 0);
+  pad.raw = {};
+  pad.Run(50);
+  // Pushed in while moving: the game's.
+  pad.raw[0].thumbstick_y = 1.0f;
+  pad.raw[0].thumbstick_button = true;
+  pad.Run(1500);
+  EXPECT_EQ(pad.switches, 1);
+  EXPECT_TRUE(pad.seen[0].thumbstick_button);
 }
 
 TEST(VRFrameUI, GrabCarriesTheScreenUnderTheBeam)
@@ -962,7 +988,8 @@ TEST_F(VRFrameUISettings, EverySettingCanBeReadAndWritten)
 {
   for (const SettingRow& row : GetSettingRows())
   {
-    if (row.id == SettingId::None)
+    // (Immersive Mode is Display.)
+    if (row.id == SettingId::None || row.id == SettingId::ImmersiveMode)
       continue;
     const auto i = static_cast<std::size_t>(row.id);
     for (const SettingScope scope : {GLOBAL, PER_GAME})
@@ -1001,6 +1028,36 @@ TEST_F(VRFrameUISettings, EverySettingCanBeReadAndWritten)
     EXPECT_EQ(CountOwnValues(section, state), 0);
   }
   EXPECT_FALSE(File::Exists(VRFile()));
+}
+
+TEST_F(VRFrameUISettings, ImmersiveModeIsDisplay)
+{
+  constexpr auto SWITCH = static_cast<std::size_t>(SettingId::ImmersiveMode);
+  constexpr auto DISPLAY = static_cast<std::size_t>(SettingId::Display);
+  const auto stereo = static_cast<float>(OpenXRPresentationMode::StereoScreen);
+  const auto immersive = static_cast<float>(OpenXRPresentationMode::Immersive);
+  for (const SettingScope scope : {GLOBAL, PER_GAME})
+  {
+    for (const bool on : {true, false, true})
+    {
+      WriteSetting(SettingId::ImmersiveMode, on ? 1.0f : 0.0f, scope, true);
+      SettingValues values = ReadSettings();
+      EXPECT_EQ(values.game[DISPLAY], on ? immersive : stereo);
+      EXPECT_EQ(values.game[SWITCH], on ? 1.0f : 0.0f);
+      WriteSetting(SettingId::Display, on ? stereo : immersive, scope, true);
+      values = ReadSettings();
+      EXPECT_EQ(values.game[SWITCH], on ? 0.0f : 1.0f);
+      EXPECT_EQ(Has(values.own_value, SettingId::ImmersiveMode), scope == PER_GAME);
+      EXPECT_EQ(Has(values.own_value, SettingId::Display), scope == PER_GAME);
+    }
+  }
+  // It can be turned on where the rest of the page is locked.
+  SettingState state;
+  state.immersive = false;
+  EXPECT_EQ(GetLock(GetSettingRow(SettingId::ImmersiveMode), state), Lock::None);
+  EXPECT_EQ(GetLock(GetSettingRow(SettingId::WorldScale), state), Lock::ImmersiveOnly);
+  state.can_switch_mode = false;
+  EXPECT_EQ(GetLock(GetSettingRow(SettingId::ImmersiveMode), state), Lock::DisplayFixed);
 }
 
 TEST_F(VRFrameUISettings, PerGameInTheVRFile)
@@ -1466,7 +1523,8 @@ TEST_F(VRFrameUISettings, EveryRowIsOneConfigKey)
     EXPECT_FALSE(location.key.empty()) << row.label;
     EXPECT_TRUE(seen.insert(fmt::format("{}/{}/{}", static_cast<int>(location.system),
                                         location.section, location.key))
-                    .second)
+                        .second ||
+                row.id == SettingId::ImmersiveMode)
         << row.label;
     const float value = values.global[static_cast<std::size_t>(row.id)];
     if (!row.options.empty())
@@ -1550,4 +1608,89 @@ TEST(VRFrameUI, OneWorldScaleForEachDisplay)
     EXPECT_EQ(GetLock(screen, s) == Lock::None, !in);
     EXPECT_EQ(GetLock(immersive, s) == Lock::None, in);
   }
+}
+
+TEST(VRFrameUI, FlatShortcuts)
+{
+  using Common::VR::FlatShortcuts;
+  FlatShortcuts shortcuts;
+  Controllers raw{}, seen{};
+  s64 now = 1'000 * MS;
+  const auto run = [&](int ms) {
+    for (const s64 end = now + ms * MS; now < end; now += 5 * MS)
+    {
+      seen = raw;
+      shortcuts.Filter(&seen, now);
+    }
+  };
+  const auto took = [] {
+    const FlatShortcuts::Pressed p = FlatShortcuts::Take();
+    return (p.quick_save ? 1 : 0) | (p.quick_load ? 2 : 0) | (p.fast_forward ? 4 : 0) |
+           (p.stop ? 8 : 0);
+  };
+  FlatShortcuts::Take();
+
+  // Without a game nothing is read and nothing is taken away.
+  FlatShortcuts::SetGameRunning(false);
+  raw[0].view_button = true;
+  run(50);
+  raw[1].bumper_button = true;
+  run(50);
+  EXPECT_TRUE(seen[0].view_button);
+  EXPECT_TRUE(seen[1].bumper_button);
+  raw = {};
+  run(50);
+  EXPECT_EQ(took(), 0);
+
+  FlatShortcuts::SetGameRunning(true);
+  run(50);
+  raw[0].view_button = true;
+  run(50);
+  raw[1].bumper_button = true;
+  run(100);
+  EXPECT_FALSE(seen[0].view_button);
+  EXPECT_FALSE(seen[1].bumper_button);
+  EXPECT_EQ(took(), 0);
+  raw[1].bumper_button = false;
+  run(50);
+  EXPECT_EQ(took(), 1);
+  // Held for long with a shortcut, View does not stop the game.
+  raw[0].bumper_button = true;
+  run(600);
+  EXPECT_EQ(took(), 2);
+  raw[0].bumper_button = false;
+  raw[1].trigger_value = 1.0f;
+  run(100);
+  EXPECT_EQ(seen[1].trigger_value, 0.0f);
+  raw[1].trigger_value = 0.0f;
+  run(2000);
+  EXPECT_EQ(took(), 4);
+  raw = {};
+  run(50);
+  EXPECT_FALSE(seen[0].view_button);
+
+  // A tap is the game's; a hold stops it.
+  raw[0].view_button = true;
+  run(100);
+  raw[0].view_button = false;
+  run(20);
+  EXPECT_TRUE(seen[0].view_button);
+  run(200);
+  EXPECT_EQ(took(), 0);
+  raw[0].view_button = true;
+  run(1600);
+  EXPECT_EQ(took(), 8);
+  raw = {};
+  run(50);
+
+  // Menu and the right stick's click are the game's as they are.
+  raw[1].menu_button = raw[1].thumbstick_button = true;
+  for (int i = 0; i < 40; ++i)
+  {
+    run(100);
+    EXPECT_TRUE(seen[1].menu_button);
+    EXPECT_TRUE(seen[1].thumbstick_button);
+  }
+  EXPECT_EQ(took(), 0);
+  FlatShortcuts::SetGameRunning(false);
 }

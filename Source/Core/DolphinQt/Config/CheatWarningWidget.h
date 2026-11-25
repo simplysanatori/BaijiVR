@@ -19,11 +19,15 @@ public:
 signals:
   void OpenCheatEnableSettings();
 
+protected:
+  bool eventFilter(QObject* object, QEvent* event) override;
+
 private:
   void CreateWidgets();
   void ConnectWidgets();
 
   void Update(bool running);
+  bool AreCheatsEnabled() const;
 
   QLabel* m_text;
   QPushButton* m_config_button;

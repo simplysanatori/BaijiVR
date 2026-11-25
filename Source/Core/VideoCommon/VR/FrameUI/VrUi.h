@@ -21,7 +21,7 @@
 
 #include "Common/CommonTypes.h"
 #include "VideoCommon/VR/FrameUI/Overlay.h"
-#include "VideoCommon/VR/FrameUI/PadFilter.h"
+#include "Common/VR/PadFilter.h"
 #include "VideoCommon/VR/FrameUI/ScreenPlacement.h"
 #include "VideoCommon/VR/FrameUI/Stats.h"
 #include "VideoCommon/VR/FrameUI/VrMenu.h"

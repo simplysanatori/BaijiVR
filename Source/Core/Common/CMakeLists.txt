@@ -169,6 +169,14 @@ add_library(common
   WorkQueueThread.h
 )
 
+if(ENABLE_VR)
+  target_sources(common PRIVATE
+    VR/FlatShortcuts.h
+    VR/PadFilter.cpp
+    VR/PadFilter.h
+  )
+endif()
+
 add_dependencies(common dolphin_scmrev)
 
 if(NOT MSVC AND _M_ARM_64)

@@ -132,7 +132,7 @@ std::string GenerateChangelog(const picojson::array& versions)
     {
       if (!changelog.empty())
         changelog += "<hr>";
-      changelog += "<b>BaijiSteamVR " + ver_obj["shortrev"].get<std::string>() + "</b>";
+      changelog += "<b>Baiji VR " + ver_obj["shortrev"].get<std::string>() + "</b>";
       changelog += "<p>" + ver_obj["changelog_html"].get<std::string>() + "</p>";
     }
   }

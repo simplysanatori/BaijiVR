@@ -161,7 +161,7 @@ void ShaderHunterWidget::CreateWidgets()
                               static_cast<int>(ShaderHunter::MatchMode::ExactHash));
   m_match_mode_combo->setToolTip(
       tr("Controls both the live Skip/Pink preview and the saved override.\n"
-          "Shader Family matches semantic shader variants and is more resilient to BaijiSteamVR "
+          "Shader Family matches semantic shader variants and is more resilient to Baiji VR "
          "shader-generator updates."));
   match_mode_layout->addWidget(m_match_mode_combo);
   layout->addLayout(match_mode_layout);

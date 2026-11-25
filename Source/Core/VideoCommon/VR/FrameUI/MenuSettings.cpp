@@ -372,6 +372,10 @@ std::vector<SettingRow> MakeImmersiveRows()
   constexpr MenuSection SECTION = MenuSection::Immersive;
   constexpr RowDisplay DISPLAY = RowDisplay::Immersive;
   std::vector<SettingRow> rows;
+  rows.push_back(With(MakeRow(ImmersiveMode, SECTION, RowKind::Switch, "Immersive Mode",
+                              "Draws a wider view of the game around you. Off is Stereoscopic 3D. "
+                              "The same as Display on Position."),
+                      SettingStore::VRFile));
   SettingRow world = With(
       MakeSlider(WorldScale, SECTION, "World Scale",
                  "Game units per meter. Higher makes the world smaller, lower makes it bigger.",
@@ -491,15 +495,32 @@ Binding BindInverted(SettingId id, const Config::Info<bool>& info)
 }
 
 // The display that is shown stays until it is switched (QueueSwitchMode).
-Binding BindDisplay()
+Binding BindDisplay(SettingId id = SettingId::Display)
 {
-  Binding binding = Bind(SettingId::Display, Config::GFX_VR_PRESENTATION_MODE);
+  Binding binding = Bind(id, Config::GFX_VR_PRESENTATION_MODE);
   binding.use_global = [location = binding.location] {
     if (GameSettingScope::IsGameRunning() &&
         GameSettingScope::HasOwnValue(*location, SettingStore::VRFile))
     {
       GameSettingScope::RemoveFromVRFile(*location);
     }
+  };
+  return binding;
+}
+
+Binding BindImmersiveMode()
+{
+  const Binding display = BindDisplay(SettingId::ImmersiveMode);
+  const auto is_immersive = [](float mode) {
+    return mode == ToNumber(OpenXRPresentationMode::Immersive) ? 1.0f : 0.0f;
+  };
+  Binding binding = display;
+  binding.read = [display, is_immersive] { return is_immersive(display.read()); };
+  binding.read_base = [display, is_immersive] { return is_immersive(display.read_base()); };
+  binding.write = [display](float on, SettingScope scope, bool save) {
+    display.write(ToNumber(on != 0.0f ? OpenXRPresentationMode::Immersive :
+                                        OpenXRPresentationMode::StereoScreen),
+                  scope, save);
   };
   return binding;
 }
@@ -543,6 +564,7 @@ const std::vector<Binding>& GetBindings()
       Bind(SettingId::PinEmulationThreads, Config::GFX_VR_PIN_EMULATION_CORES),
       Bind(SettingId::PerformanceHint, Config::GFX_VR_PERFORMANCE_HINT),
       Bind(SettingId::PerformanceLog, Config::GFX_VR_PERF_LOG),
+      BindImmersiveMode(),
       Bind(SettingId::WorldScale, Config::GFX_VR_UNITS_PER_METER),
       Bind(SettingId::Strength3D, Config::GFX_VR_STEREO_SEPARATION),
       Bind(SettingId::LeanBackOn, Config::GFX_VR_ENABLE_LEAN_BACK_ANGLE),
@@ -637,7 +659,8 @@ Lock GetLock(const SettingRow& row, const SettingState& state)
     return Lock::ScreenOnly;
   if (row.display == RowDisplay::Immersive && !state.immersive)
     return Lock::ImmersiveOnly;
-  if (row.id == SettingId::Display && !state.can_switch_mode)
+  if ((row.id == SettingId::Display || row.id == SettingId::ImmersiveMode) &&
+      !state.can_switch_mode)
     return Lock::DisplayFixed;
   if (row.id == SettingId::ScreenCurve && !state.can_curve)
     return Lock::CannotCurve;

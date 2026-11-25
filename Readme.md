@@ -122,11 +122,12 @@ Building it yourself: [user guide](docs/USER_GUIDE.md#build-and-install-from-a-p
 | Hold **View** for 1.5 seconds | Stop the game |
 | **View**, then right or left bumper | Quick Save or Quick Load (hold the left bumper) |
 | **View**, then right trigger | Fast Forward on or off |
-| Both bumpers, then **View** and **Menu** | Stereoscopic 3D or Immersive |
+| Hold **L3** for 1 second | Stereoscopic 3D or Immersive |
+| Hold **R3** for 1 second | Reset the screen or view |
 | Grip | Move the screen |
 | Grip and D-Pad up or down | **Screen Curve** |
 
-Full list: [docs/CONTROLS.md](docs/CONTROLS.md).
+The ones with **View** work in Flat, too. Full list: [docs/CONTROLS.md](docs/CONTROLS.md).
 
 ## Update
 

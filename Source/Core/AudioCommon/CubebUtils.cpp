@@ -69,7 +69,7 @@ std::shared_ptr<cubeb> GetContext()
 
   cubeb* ctx;
 #ifdef BAIJI_STEAMVR
-  if (cubeb_init(&ctx, "BaijiSteamVR", nullptr) != CUBEB_OK)
+  if (cubeb_init(&ctx, "Baiji VR", nullptr) != CUBEB_OK)
 #else
   if (cubeb_init(&ctx, "Dolphin Emulator", nullptr) != CUBEB_OK)
 #endif

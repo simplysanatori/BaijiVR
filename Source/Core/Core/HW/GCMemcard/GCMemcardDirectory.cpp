@@ -597,7 +597,7 @@ bool GCMemcardDirectory::SetUsedBlocks(int save_index)
     block = current_bat->GetNextBlock(block);
     if (block == 0)
     {
-      PanicAlertFmtT("BAT incorrect. BaijiSteamVR will now exit");
+      PanicAlertFmtT("BAT incorrect. Baiji VR will now exit");
       exit(0);
     }
   }

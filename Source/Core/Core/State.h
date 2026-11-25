@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 
 #include "Common/CommonTypes.h"
@@ -100,6 +101,10 @@ u64 GetUnixTimeOfSlot(int slot);
 //    If we're in the main CPU thread then they run immediately instead.
 void Save(Core::System& system, int slot, SaveOptions options = {});
 void Load(Core::System& system, int slot);
+
+// The running game's Quick Save (View and Right Bumper).
+inline constexpr std::string_view QUICK_SAVE_SUFFIX = ".quick.sav";
+std::string GetQuickSavePath();
 
 void SaveAs(Core::System& system, std::string filename, SaveOptions options = {});
 void LoadAs(Core::System& system, std::string filename);

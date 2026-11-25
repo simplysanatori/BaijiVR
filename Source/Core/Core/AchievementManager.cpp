@@ -989,10 +989,10 @@ void AchievementManager::LoadGameCallback(int result, const char* error_message,
   instance.m_loading_volume.reset(nullptr);
   if (result == RC_API_FAILURE)
   {
-    WARN_LOG_FMT(ACHIEVEMENTS, "Load data request rejected for an old BaijiSteamVR version.");
-    OSD::AddMessage("RetroAchievements no longer supports this version of BaijiSteamVR.",
+    WARN_LOG_FMT(ACHIEVEMENTS, "Load data request rejected for an old Baiji VR version.");
+    OSD::AddMessage("RetroAchievements no longer supports this version of Baiji VR.",
                     OSD::Duration::VERY_LONG, OSD::Color::RED);
-    OSD::AddMessage("Please update BaijiSteamVR to a newer version.", OSD::Duration::VERY_LONG,
+    OSD::AddMessage("Please update Baiji VR to a newer version.", OSD::Duration::VERY_LONG,
                     OSD::Color::RED);
     return;
   }
