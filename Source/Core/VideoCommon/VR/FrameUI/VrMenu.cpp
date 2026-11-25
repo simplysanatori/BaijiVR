@@ -10,7 +10,6 @@
 
 #include <fmt/format.h>
 
-#include "VideoCommon/VR/FrameUI/ScreenPlacement.h"
 #include "VideoCommon/VR/FrameUI/md3_fonts.h"
 
 namespace VR::UI
@@ -23,18 +22,19 @@ using Kind = MenuWidget::Kind;
 constexpr float RAIL_W = 104.0f;
 constexpr float RAIL_ITEM_H = 72.0f;
 constexpr float MARGIN = 16.0f;
+constexpr float CONTROL_H = 48.0f;
 constexpr float ROW_H = 64.0f;
 constexpr float LABEL_W = 220.0f;
+constexpr float DROPDOWN_W = 300.0f;
+constexpr float SWITCH_W = 60.0f;
+constexpr float MENU_PADDING = 8.0f;
 constexpr float SLIDER_VALUE_W = 72.0f;
 constexpr float SLIDER_VALUE_GAP = 16.0f;
 constexpr Rect PANE{RAIL_W, MARGIN, VrMenu::WIDTH - MARGIN, VrMenu::HEIGHT - MARGIN};
 constexpr float LEFT = RAIL_W + 24.0f;
 constexpr float RIGHT = VrMenu::WIDTH - MARGIN - 24.0f;
-
-float Fraction(float value, float lowest, float highest)
-{
-  return std::clamp((value - lowest) / (highest - lowest), 0.0f, 1.0f);
-}
+constexpr float TOP = PANE.y0 + 16.0f;
+constexpr float SECTIONS_W = 384.0f;
 
 class Builder
 {
@@ -60,33 +60,6 @@ public:
 
   void Gap(float height) { m_y += height; }
 
-  MenuWidget& Segmented(MenuItem item, std::string label, std::vector<std::string> options,
-                        int selected)
-  {
-    MenuWidget& w = Row(Kind::Segmented, item, std::move(label));
-    w.control = {LEFT + LABEL_W, w.rect.Cy() - 24.0f, RIGHT, w.rect.Cy() + 24.0f};
-    w.options = std::move(options);
-    w.selected = selected;
-    return w;
-  }
-
-  MenuWidget& Slider(MenuItem item, std::string label, float t, std::string value)
-  {
-    MenuWidget& w = Row(Kind::Slider, item, std::move(label));
-    w.control = {LEFT + LABEL_W, w.rect.Cy() - 24.0f, RIGHT, w.rect.Cy() + 24.0f};
-    w.t = t;
-    w.value = std::move(value);
-    return w;
-  }
-
-  MenuWidget& Switch(MenuItem item, std::string label, bool on)
-  {
-    MenuWidget& w = Row(Kind::Switch, item, std::move(label));
-    w.control = {RIGHT - 60.0f, w.rect.Cy() - 24.0f, RIGHT, w.rect.Cy() + 24.0f};
-    w.active = on;
-    return w;
-  }
-
   MenuWidget& Add(Kind kind, MenuItem item)
   {
     MenuWidget& w = m_widgets.emplace_back();
@@ -96,6 +69,25 @@ public:
   }
 
   float GetY() const { return m_y; }
+  std::size_t GetCount() const { return m_widgets.size(); }
+
+  // All that were added from `first` on.
+  void Clip(std::size_t first, const Rect& clip)
+  {
+    for (std::size_t i = first; i < m_widgets.size(); ++i)
+    {
+      m_widgets[i].clipped = true;
+      m_widgets[i].clip = clip;
+    }
+  }
+
+  const MenuWidget* FindSetting(SettingId id) const
+  {
+    const auto it = std::ranges::find_if(m_widgets, [id](const MenuWidget& w) {
+      return w.item == MenuItem::Setting && w.index == static_cast<int>(id);
+    });
+    return it != m_widgets.end() ? &*it : nullptr;
+  }
 
   MenuWidget* Find(Kind kind, int index)
   {
@@ -108,17 +100,8 @@ public:
 private:
   static constexpr float TEXT_H = 34.0f;
 
-  MenuWidget& Row(Kind kind, MenuItem item, std::string label)
-  {
-    MenuWidget& w = Add(kind, item);
-    w.rect = {LEFT - 12.0f, m_y, RIGHT + 12.0f, m_y + ROW_H - 4.0f};
-    w.label = std::move(label);
-    m_y += ROW_H;
-    return w;
-  }
-
   std::vector<MenuWidget> m_widgets;
-  float m_y = PANE.y0 + 16.0f;
+  float m_y = TOP;
 };
 
 void AddRail(Builder* builder, const MenuState& state)
@@ -173,7 +156,7 @@ void AddMain(Builder* builder, const MenuState& state)
       {MenuItem::SaveState, Icon::kSaveAs, "Save State"},
       {MenuItem::LoadState, Icon::kFolderOpen, "Load State"},
       {MenuItem::Screenshot, Icon::kPhotoCamera, "Screenshot"},
-      {MenuItem::ResetScreen, Icon::kRecenter, state.immersive ? "Reset View" : "Reset Screen"},
+      {MenuItem::ResetScreen, Icon::kRecenter, state.settings.immersive ? "Reset View" : "Reset Screen"},
       {MenuItem::FastForward, Icon::kSpeed, "Fast Forward", state.fast_forward},
       state.wii ? TileItem{MenuItem::Home, Icon::kHome, "Wii Home"} :
                   TileItem{MenuItem::Restart, Icon::kRestartAlt, "Restart"},
@@ -210,8 +193,6 @@ void AddSlots(Builder* builder, const MenuState& state)
 {
   const bool saving = state.page == MenuPage::Save;
   constexpr float GAP = 12.0f;
-  constexpr float TOP = PANE.y0 + 16.0f;
-
   MenuWidget& back = builder->Add(Kind::Back, MenuItem::Back);
   back.rect = {LEFT - 4.0f, TOP, LEFT + 44.0f, TOP + 48.0f};
   MenuWidget& headline = builder->Add(Kind::Headline, MenuItem::None);
@@ -226,10 +207,10 @@ void AddSlots(Builder* builder, const MenuState& state)
   {
     MenuWidget& card = builder->Add(Kind::AutosaveCard, MenuItem::AutosaveCard);
     card.rect = card_rect;
-    card.active = state.autosave;
+    card.active = state.settings.values.game[static_cast<std::size_t>(SettingId::Autosave)] != 0.0f;
     card.disabled = state.saves.autosaves.empty();
     top = card_rect.y1 + GAP;
-    if (card.disabled && !state.autosave)
+    if (card.disabled && !card.active)
     {
       MenuWidget& settings = builder->Add(Kind::Button, MenuItem::AutosaveSettings);
       settings.rect = {RIGHT - 124.0f, card_rect.Cy() - 24.0f, RIGHT - 12.0f,
@@ -290,37 +271,180 @@ void AddSlots(Builder* builder, const MenuState& state)
   }
 }
 
-void AddScreen(Builder* builder, const MenuState& state)
-{
-  MenuWidget& mode = builder->Segmented(MenuItem::Mode, "Display", {"Stereoscopic 3D", "Immersive"},
-                                        state.immersive ? 1 : 0);
-  mode.disabled = !state.can_switch_mode;
+// ---- Rows of settings ----
 
-  builder->Slider(MenuItem::Distance, "Distance",
-                  Fraction(state.distance, ScreenPlacement::MIN_DISTANCE,
-                           ScreenPlacement::MAX_DISTANCE),
-                  fmt::format("{:.1f} m", state.distance));
-  builder->Slider(MenuItem::Size, "Size",
-                  Fraction(state.size, ScreenPlacement::MIN_HEIGHT, ScreenPlacement::MAX_HEIGHT),
-                  fmt::format("{:.1f} m", state.size));
-  if (state.immersive)
+// Where a section's list is, under the line of controls.
+constexpr Rect LIST{PANE.x0, TOP + CONTROL_H + 12.0f, PANE.x1, PANE.y1 - 8.0f};
+
+std::optional<MenuSection> GetSection(const MenuState& state)
+{
+  if (state.tab == MenuTab::Screen)
+    return MenuSection::Screen;
+  if (state.tab == MenuTab::Settings)
+    return state.section;
+  return std::nullopt;
+}
+
+// The switches at the end of other settings' rows have none of their own.
+std::vector<const SettingRow*> GetRows(MenuSection section)
+{
+  std::vector<const SettingRow*> rows;
+  for (const SettingRow& row : GetSettingRows())
   {
-    builder->Text("Distance and Size are for the game's 2D parts.", "");
+    if (row.section == section && !row.in_next_row)
+      rows.push_back(&row);
+  }
+  return rows;
+}
+
+std::string GetNote(Applies applies)
+{
+  switch (applies)
+  {
+  case Applies::NextGame:
+    return "From the Next Game";
+  case Applies::NextStart:
+    return "From the Next Start";
+  case Applies::Now:
+    break;
+  }
+  return {};
+}
+
+void SetLock(MenuWidget* widget, const SettingRow& row, const SettingState& state)
+{
+  const Lock lock = GetLock(row, state);
+  widget->disabled = lock != Lock::None;
+  widget->tooltip = widget->disabled ? ExplainLock(lock, row) : row.tooltip;
+}
+
+void AddRow(Builder* builder, const MenuState& state, const SettingRow& row, float y)
+{
+  const SettingState& settings = state.settings;
+  if (row.kind == RowKind::Header)
+  {
+    MenuWidget& w = builder->Add(Kind::Header, MenuItem::None);
+    w.rect = {LEFT, y, RIGHT, y + ROW_H};
+    w.label = row.label;
     return;
   }
-  builder->Slider(MenuItem::Depth, "3D Depth", Fraction(state.depth, 0.0f, 100.0f),
-                  state.depth < 0.5f  ? "Off" :
-                  state.depth > 99.5f ? "Natural" :
-                                        fmt::format("{:.0f}%", state.depth));
-  builder->Slider(MenuItem::Convergence, "Convergence", Fraction(state.convergence, 0.0f, 200.0f),
-                  fmt::format("{:.0f}", state.convergence));
-  builder->Segmented(MenuItem::Aspect, "Aspect Ratio", {"Auto", "16:9", "4:3"}, state.aspect);
-  builder->Switch(MenuItem::LockScreen, "Lock Screen", state.lock_screen);
 
+  static constexpr std::array KINDS{Kind::Header, Kind::Switch, Kind::Segmented, Kind::Dropdown,
+                                    Kind::Slider};
+  MenuWidget& w = builder->Add(KINDS[static_cast<std::size_t>(row.kind)], MenuItem::Setting);
+  w.index = static_cast<int>(row.id);
+  w.rect = {LEFT - 12.0f, y, RIGHT, y + ROW_H - 4.0f};
+  w.label = row.label;
+  w.note = GetNote(row.applies);
+  SetLock(&w, row, settings);
+  const float value = settings.Get(row.id);
+  const float y0 = w.rect.Cy() - CONTROL_H * 0.5f;
+  switch (row.kind)
+  {
+  case RowKind::Switch:
+    w.control = {RIGHT - SWITCH_W, y0, RIGHT, y0 + CONTROL_H};
+    w.active = value != 0.0f;
+    break;
+  case RowKind::Segmented:
+  {
+    w.control = {LEFT + LABEL_W, y0, RIGHT, y0 + CONTROL_H};
+    const std::vector<SettingOption> options = GetOptions(row, settings);
+    for (const SettingOption& option : options)
+      w.options.push_back(option.label);
+    w.selected = FindOption(options, value);
+    break;
+  }
+  case RowKind::Dropdown:
+    w.control = {RIGHT - DROPDOWN_W, y0, RIGHT, y0 + CONTROL_H};
+    w.value = FormatValue(row, value);
+    w.active = state.open_setting == row.id;
+    break;
+  case RowKind::Slider:
+    w.control = {LEFT + LABEL_W, y0, RIGHT, y0 + CONTROL_H};
+    w.t = SliderFraction(row, value);
+    w.value = FormatValue(row, value);
+    if (row.turned_on_by != SettingId::None)
+    {
+      w.control.x1 = RIGHT - SWITCH_W - 16.0f;
+      w.rect.x1 = RIGHT - SWITCH_W - 8.0f;
+      const SettingRow& enable = GetSettingRow(row.turned_on_by);
+      MenuWidget& on = builder->Add(Kind::Switch, MenuItem::Setting);
+      on.index = static_cast<int>(enable.id);
+      on.rect = {RIGHT - SWITCH_W, y0, RIGHT, y0 + CONTROL_H};
+      on.control = on.rect;
+      on.active = settings.IsOn(enable.id);
+      SetLock(&on, enable, settings);
+    }
+    break;
+  case RowKind::Header:
+    break;
+  }
+}
+
+// The menu of a drop-down control, under it or over it.
+void AddMenu(Builder* builder, const Rect& anchor, float width, std::vector<std::string> options,
+             int selected)
+{
+  const float item_h = Kit::MenuItemHeight();
+  const float height = item_h * static_cast<float>(options.size()) + MENU_PADDING * 2.0f;
+  float y0 = anchor.y1 + 4.0f;
+  if (y0 + height > PANE.y1)
+    y0 = std::max(PANE.y0, std::min(anchor.y0, PANE.y1) - 4.0f - height);
+  const Rect box{anchor.x1 - width, y0, anchor.x1, y0 + height};
+  const auto count = static_cast<int>(options.size());
+  MenuWidget& menu = builder->Add(Kind::Menu, MenuItem::Popup);
+  menu.rect = box;
+  menu.options = std::move(options);
+  menu.selected = selected;
+  for (int i = 0; i < count; ++i)
+  {
+    const float y = box.y0 + MENU_PADDING + item_h * static_cast<float>(i);
+    MenuWidget& w = builder->Add(Kind::Option, MenuItem::PopupOption);
+    w.index = i;
+    w.rect = {box.x0, y, box.x1, y + item_h};
+  }
+}
+
+void AddList(Builder* builder, const MenuState& state, MenuSection section)
+{
+  const std::size_t first = builder->GetCount();
+  float y = LIST.y0 - state.scroll[static_cast<std::size_t>(section)];
+  for (const SettingRow* const row : GetRows(section))
+  {
+    if (y + ROW_H > LIST.y0 && y < LIST.y1)
+      AddRow(builder, state, *row, y);
+    y += ROW_H;
+  }
+  builder->Clip(first, LIST);
+
+  const std::optional<MenuList> list = VrMenu::GetList(state);
+  if (list && list->bar.Valid())
+  {
+    MenuWidget& bar = builder->Add(Kind::Scrollbar, MenuItem::Scrollbar);
+    bar.rect = Scrolling::HitRect(list->bar);
+    bar.rect.x0 = RIGHT;
+  }
+
+  const MenuWidget* const open = builder->FindSetting(state.open_setting);
+  if (!open)
+    return;
+  const Rect anchor = open->control;
+  const SettingRow& row = GetSettingRow(state.open_setting);
+  const std::vector<SettingOption> options = GetOptions(row, state.settings);
+  std::vector<std::string> labels;
+  for (const SettingOption& option : options)
+    labels.push_back(option.label);
+  AddMenu(builder, anchor, DROPDOWN_W, std::move(labels),
+          FindOption(options, state.settings.Get(row.id)));
+}
+
+void AddScreen(Builder* builder, const MenuState& state)
+{
   MenuWidget& reset = builder->Add(Kind::Button, MenuItem::ResetScreen);
-  reset.rect = {LEFT, builder->GetY() + 2.0f, LEFT + 200.0f, builder->GetY() + 50.0f};
+  reset.rect = {LEFT, TOP, LEFT + 200.0f, TOP + CONTROL_H};
   reset.icon = Icon::kRecenter;
-  reset.label = "Reset Screen";
+  reset.label = state.settings.immersive ? "Reset View" : "Reset Screen";
+  AddList(builder, state, MenuSection::Screen);
 }
 
 void AddControls(Builder* builder, const MenuState& state)
@@ -471,24 +595,12 @@ void AddMods(Builder* builder, const MenuState& state)
 
 void AddSettings(Builder* builder, const MenuState& state)
 {
-  const int resolution = state.resolution >= 1 && state.resolution <= 4 ? state.resolution - 1 : -1;
-  builder->Segmented(MenuItem::Resolution, "Internal Resolution", {"1x", "2x", "3x", "4x"},
-                     resolution);
-  builder->Segmented(MenuItem::Pacing, "Frame Pacing", {"Every Refresh", "Match Game"},
-                     state.eager ? 0 : 1);
-  builder->Switch(MenuItem::Beams, "Pointer Beams", state.beams);
-  builder->Switch(MenuItem::Toasts, "Messages", state.toasts);
-  builder->Switch(MenuItem::Autosave, "Autosave", state.autosave);
-  std::vector<std::string> minutes;
-  for (const int m : AUTOSAVE_MINUTES)
-    minutes.push_back(fmt::format("{} min", m));
-  MenuWidget& every = builder->Segmented(MenuItem::AutosaveEvery, "Autosave Every",
-                                         std::move(minutes), state.autosave_every);
-  every.disabled = !state.autosave;
-  MenuWidget& keep = builder->Slider(MenuItem::AutosaveKeep, "Autosaves to Keep",
-                                     Fraction(static_cast<float>(state.autosave_keep), 1.0f, 10.0f),
-                                     fmt::format("{}", state.autosave_keep));
-  keep.disabled = !state.autosave;
+  MenuWidget& section = builder->Add(Kind::Segmented, MenuItem::Section);
+  section.rect = {LEFT, TOP, LEFT + SECTIONS_W, TOP + CONTROL_H};
+  section.control = section.rect;
+  section.options = {"General", "Graphics", "Immersive"};
+  section.selected = static_cast<int>(state.section) - static_cast<int>(MenuSection::General);
+  AddList(builder, state, state.section);
 }
 }  // namespace
 
@@ -520,12 +632,26 @@ std::vector<MenuWidget> VrMenu::Layout(const MenuState& state)
   return builder.Take();
 }
 
-const MenuWidget* VrMenu::At(const std::vector<MenuWidget>& widgets, float x, float y)
+std::optional<MenuList> VrMenu::GetList(const MenuState& state)
+{
+  const std::optional<MenuSection> section = GetSection(state);
+  if (!section)
+    return std::nullopt;
+  const float height = ROW_H * static_cast<float>(GetRows(*section).size());
+  return MenuList{{LIST, PANE.x1, height, std::max(0.0f, height - LIST.H())}, *section, ROW_H};
+}
+
+const MenuWidget* VrMenu::At(const std::vector<MenuWidget>& widgets, float x, float y, bool greyed)
 {
   // What is drawn last is on top.
   for (const MenuWidget& widget : std::views::reverse(widgets))
   {
-    if (widget.item != MenuItem::None && !widget.disabled && widget.rect.Contains(x, y))
+    if (widget.item == MenuItem::None || !widget.rect.Contains(x, y) ||
+        (widget.clipped && !widget.clip.Contains(x, y)))
+    {
+      continue;
+    }
+    if (!widget.disabled || (greyed && !widget.tooltip.empty()))
       return &widget;
   }
   return nullptr;
@@ -566,8 +692,17 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
   kit->Fill({0.0f, 0.0f, WIDTH, HEIGHT}, 28.0f, Tok::kSurfaceContainer);
   kit->Fill(PANE, 24.0f, Tok::kSurface);
 
-  for (const MenuWidget& w : Layout(state))
+  const std::vector<MenuWidget> widgets = Layout(state);
+  const MenuWidget* pointed = nullptr;
+  for (const MenuWidget& w : widgets)
   {
+    if (w.clipped)
+      kit->Clip(w.clip);
+    else
+      kit->ClearClip();
+    if (w.item != MenuItem::None && w.item == state.hover && w.index == state.hover_index)
+      pointed = &w;
+
     State look = State::Rest;
     if (w.disabled)
       look = State::Disabled;
@@ -577,10 +712,18 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
       look = State::Hover;
 
     const float opacity = w.disabled ? kDisabledContent : 1.0f;
-    const bool row =
-        w.kind == Kind::Segmented || w.kind == Kind::Switch || w.kind == Kind::Slider;
+    const bool row = w.kind == Kind::Segmented || w.kind == Kind::Switch ||
+                     w.kind == Kind::Slider || w.kind == Kind::Dropdown;
     if (row && !w.label.empty())
-      kit->TextMid(LEFT, w.rect.Cy(), Type::Body, Tok::kOnSurface, w.label, 0, opacity);
+    {
+      const float y = w.rect.Cy() - (w.note.empty() ? 0.0f : 10.0f);
+      kit->TextMid(LEFT, y, Type::Body, Tok::kOnSurface, w.label, 0, opacity);
+      if (!w.note.empty())
+      {
+        kit->TextMid(LEFT, w.rect.Cy() + 14.0f, Type::Tooltip, Tok::kOnSurfaceVariant, w.note, 0,
+                     opacity);
+      }
+    }
 
     switch (w.kind)
     {
@@ -611,7 +754,8 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
       break;
     case Kind::Segmented:
     {
-      const bool hovered = w.item == state.hover && !w.disabled;
+      const bool hovered =
+          w.item == state.hover && w.index == state.hover_index && !w.disabled;
       kit->Segmented(w.control, w.options, w.selected, hovered ? state.hover_option : -1,
                      look == State::Pressed ? state.hover_option : -1, w.disabled);
       break;
@@ -736,7 +880,60 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
     case Kind::Pad:
       DrawPad(kit, canvas, w.rect, state.pad, state.pad_labels);
       break;
+    case Kind::Header:
+      kit->Line(w.rect.x0, w.rect.y0 + 18.0f, w.rect.x1, w.rect.y0 + 18.0f, 1.0f,
+                Tok::kOutlineVariant);
+      kit->TextMid(w.rect.x0, w.rect.y0 + 44.0f, Type::RailLabel, Tok::kPrimary, w.label);
+      break;
+    case Kind::Dropdown:
+      kit->MenuButton(w.control, w.value, w.active, look);
+      break;
+    case Kind::Menu:
+      kit->Menu(w.rect, w.options, w.selected,
+                state.hover == MenuItem::PopupOption ? state.hover_index : -1);
+      kit->Stroke(w.rect, 16.0f, 1.0f, Tok::kOutlineVariant);
+      break;
+    case Kind::Option:
+      break;
+    case Kind::Scrollbar:
+      if (const std::optional<MenuList> list = GetList(state))
+      {
+        const bool held = look == State::Pressed;
+        const bool wide = held || look == State::Hover;
+        const float scroll = state.scroll[static_cast<std::size_t>(list->section)];
+        if (wide)
+        {
+          kit->Fill(Scrolling::TrackRect(list->bar, true), Scrolling::kBarHoverW * 0.5f,
+                    Tok::kOnSurface, 0.08f);
+        }
+        const Rect thumb = Scrolling::ThumbRect(list->bar, scroll, wide);
+        kit->Fill(thumb, thumb.W() * 0.5f, held ? Tok::kPrimary : Tok::kOnSurfaceVariant,
+                  held ? 1.0f : wide ? 0.72f : 0.38f);
+      }
+      break;
     }
   }
+  kit->ClearClip();
+
+  if (!state.show_tooltip || !pointed || pointed->tooltip.empty())
+    return;
+  // Over the row's label; under the row when it is the first one shown (Azahar for Frame's).
+  const std::string& text = pointed->tooltip;
+  const float wrap_w = PANE.W() * 0.8f;
+  const bool wrap = kit->TextWidth(Type::Tooltip, text) + 20.0f > wrap_w;
+  const float half = wrap ? wrap_w * 0.5f : kit->TextWidth(Type::Tooltip, text) * 0.5f + 10.0f;
+  const bool row = pointed->item == MenuItem::Setting && !pointed->label.empty();
+  const float at =
+      row ? LEFT + kit->TextWidth(Type::Body, pointed->label) * 0.5f : pointed->rect.Cx();
+  const float cx = std::clamp(at, PANE.x0 + half + 4.0f, PANE.x1 - half - 4.0f);
+  float top = pointed->rect.y0;
+  if (pointed->clipped)
+    top = std::max(top, pointed->clip.y0);
+  const bool above = top - 40.0f > PANE.y0;
+  const float y = above ? top + (row ? 6.0f : 0.0f) : pointed->rect.y1;
+  if (wrap)
+    kit->TooltipWrapped(cx, y, text, above, wrap_w);
+  else
+    kit->Tooltip(cx, y, text, above);
 }
 }  // namespace VR::UI

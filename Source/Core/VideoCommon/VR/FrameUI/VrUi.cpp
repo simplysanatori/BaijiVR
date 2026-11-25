@@ -74,6 +74,8 @@ constexpr float TRIGGER_ON = 0.55f;
 constexpr float TRIGGER_OFF = 0.40f;
 
 constexpr s64 REFRESH_NS = 250'000'000;
+// How long the pointer rests before it says what it is on.
+constexpr s64 TOOLTIP_NS = 600'000'000;
 // The autosave's picture is of the running game.
 constexpr s64 AUTOSAVE_PICTURE_NS = 250'000'000;
 
@@ -93,6 +95,9 @@ bool s_next_toast_ready = false;
 // The save states on disk changed.
 std::atomic<u32> s_saves_changed{0};
 std::atomic<u32> s_mods_changed{0};
+// What the config has, and for which of the menu's changes (m_settings_serial).
+std::mutex s_settings_mutex;
+std::optional<std::pair<u32, SettingValues>> s_settings;
 std::atomic<bool> s_bindings_ready{false};
 std::mutex s_bindings_mutex;
 std::pair<PadKind, PadLabels> s_bindings;
@@ -286,10 +291,14 @@ void QueueFastForward(bool on)
   });
 }
 
-template <typename T>
-void QueueSet(const Config::Info<T>& info, T value)
+// Reads the settings after all that was queued before.
+void QueueReadSettings(u32 serial)
 {
-  QueueConfig([&info, value] { Config::SetBaseOrCurrent(info, value); });
+  Core::QueueHostJob([serial](Core::System&) {
+    SettingValues values = ReadSettings();
+    std::lock_guard lock(s_settings_mutex);
+    s_settings.emplace(serial, std::move(values));
+  });
 }
 
 void ResumeFromMenu(Core::System& system)
@@ -389,7 +398,7 @@ void VrUi::Update(const Frame& frame, Controllers* controllers)
 
   const Controllers raw = *controllers;
   WatchInstall();
-  UpdateMenu(frame, raw);
+  UpdateMenu(frame, raw, dt);
   UpdateGrab(frame, raw, dt);
 
   // With the menu on its Screen tab the game runs, but it does not get the controllers.
@@ -414,6 +423,7 @@ void VrUi::OnFocusLost()
   m_press_down = false;
   m_press_item = MenuItem::None;
   m_menu_armed = false;
+  StopScrolling();
   if (m_hint != Hint::None)
     m_hint = Hint::None;
   for (Beam& beam : m_beams)
@@ -471,7 +481,7 @@ void VrUi::SetFastForward(bool on)
 
 void VrUi::SwitchMode()
 {
-  if (m_menu.can_switch_mode)
+  if (m_menu.settings.can_switch_mode)
     QueueSwitchMode(m_frame.has_screen);
 }
 
@@ -646,8 +656,13 @@ void VrUi::OpenMenu(const Frame& frame)
   m_menu.tab = MenuTab::Main;
   m_menu.page = MenuPage::Main;
   m_menu.autosave_list = false;
+  m_menu.open_setting = SettingId::None;
+  m_menu.section = MenuSection::General;
+  m_menu.scroll.fill(0.0f);
   m_menu.hover = MenuItem::None;
+  m_menu.show_tooltip = false;
   m_last_refresh_ns = 0;
+  StopScrolling();
 
   // The autosave is of the moment it opened.
   m_pause_after_ns = 0;
@@ -666,6 +681,13 @@ void VrUi::OpenMenu(const Frame& frame)
   RequestSaves();
   RefreshMenuState();
   UpdatePause();
+}
+
+void VrUi::StopScrolling()
+{
+  m_stick_scroll.Reset();
+  m_bar_press.End();
+  m_list_drag.Cancel();
 }
 
 void VrUi::CloseMenu()
@@ -703,59 +725,45 @@ void VrUi::UpdatePause()
 
 void VrUi::RefreshMenuState()
 {
-  const ScreenPlacement placement = m_manager->GetScreenPlacement();
   m_menu.title = SConfig::GetInstance().GetTitleName();
+  const std::string game_id = SConfig::GetInstance().GetGameID();
   if (m_menu.title.empty())
-    m_menu.title = SConfig::GetInstance().GetGameID();
+    m_menu.title = game_id;
   m_menu.wii = Core::System::GetInstance().IsWii();
-  const OpenXRPresentationMode mode = Config::Get(Config::GFX_VR_PRESENTATION_MODE);
-  m_menu.immersive = !m_frame.has_screen;
-  m_menu.can_switch_mode =
-      mode == OpenXRPresentationMode::Immersive || mode == OpenXRPresentationMode::StereoScreen;
   m_menu.fast_forward = m_fast_forward;
-  m_menu.distance = placement.distance;
-  m_menu.size = placement.height;
-  if (!m_drag || m_drag->item != MenuItem::Depth)
-    m_menu.depth = Config::Get(Config::GFX_VR_SCREEN_DEPTH);
-  if (!m_drag || m_drag->item != MenuItem::Convergence)
-    m_menu.convergence = Config::Get(Config::GFX_STEREO_CONVERGENCE);
-  switch (Config::Get(Config::GFX_ASPECT_RATIO))
-  {
-  case AspectMode::Auto:
-  case AspectMode::Stretch:
-    m_menu.aspect = 0;
-    break;
-  case AspectMode::ForceWide:
-    m_menu.aspect = 1;
-    break;
-  case AspectMode::ForceStandard:
-    m_menu.aspect = 2;
-    break;
-  default:
-    m_menu.aspect = -1;
-    break;
-  }
-  m_menu.lock_screen = Config::Get(Config::GFX_VR_LOCK_SCREEN);
-  m_menu.resolution = Config::Get(Config::GFX_EFB_SCALE);
-  m_menu.beams = Config::Get(Config::GFX_VR_POINTER_BEAMS);
-  m_menu.toasts = Config::Get(Config::GFX_VR_TOASTS);
-  m_menu.eager = Config::Get(Config::GFX_VR_EAGER_HEARTBEAT);
-  m_menu.autosave = Config::Get(Config::MAIN_AUTOSAVE_ENABLED);
-  const auto minutes = static_cast<int>(Config::Get(Config::MAIN_AUTOSAVE_MINUTES));
-  m_menu.autosave_every = 0;
-  while (m_menu.autosave_every + 1 < static_cast<int>(AUTOSAVE_MINUTES.size()) &&
-         AUTOSAVE_MINUTES[static_cast<std::size_t>(m_menu.autosave_every) + 1] <= minutes)
-  {
-    ++m_menu.autosave_every;
-  }
-  if (!m_drag || m_drag->item != MenuItem::AutosaveKeep)
-  {
-    m_menu.autosave_keep =
-        std::clamp(static_cast<int>(Config::Get(Config::MAIN_AUTOSAVE_KEEP)), 1, 10);
-  }
+
+  const OpenXRPresentationMode mode = Config::Get(Config::GFX_VR_PRESENTATION_MODE);
+  SettingState& settings = m_menu.settings;
+  settings.has_game = !game_id.empty() && game_id != DEFAULT_GAME_ID;
+  settings.immersive = !m_frame.has_screen;
+  settings.can_switch_mode =
+      mode == OpenXRPresentationMode::Immersive || mode == OpenXRPresentationMode::StereoScreen;
+  SetLiveSettings();
+  QueueReadSettings(m_settings_serial);
 }
 
-void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
+void VrUi::SetLiveSettings()
+{
+  const ScreenPlacement placement = m_manager->GetScreenPlacement();
+  SettingNumbers& game = m_menu.settings.values.game;
+  const auto set = [&game](SettingId id, float value) {
+    game[static_cast<std::size_t>(id)] = value;
+  };
+  set(SettingId::Distance, placement.distance);
+  set(SettingId::Size, placement.height);
+  set(SettingId::Display,
+      static_cast<float>(m_frame.has_screen ? OpenXRPresentationMode::StereoScreen :
+                                              OpenXRPresentationMode::Immersive));
+}
+
+void VrUi::ChangeSetting(SettingId id, float value)
+{
+  m_menu.settings.Set(id, value);
+  QueueConfig([id, value] { WriteSetting(id, value); });
+  QueueReadSettings(++m_settings_serial);
+}
+
+void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float dt)
 {
   if (!m_menu_open)
     return;
@@ -774,6 +782,16 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
   {
     std::lock_guard lock(s_bindings_mutex);
     std::tie(m_menu.pad, m_menu.pad_labels) = s_bindings;
+  }
+  {
+    std::lock_guard lock(s_settings_mutex);
+    if (s_settings && s_settings->first == m_settings_serial)
+    {
+      // What was changed since is on its way to the config.
+      m_menu.settings.values = std::move(s_settings->second);
+      SetLiveSettings();
+    }
+    s_settings.reset();
   }
   if (m_draw_mutex.try_lock())
   {
@@ -802,7 +820,11 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
   else if (back_pressed)
   {
     // Menu closes it; B goes back first.
-    if (controllers[1].secondary_button && m_menu.autosave_list)
+    if (controllers[1].secondary_button && m_menu.open_setting != SettingId::None)
+    {
+      m_menu.open_setting = SettingId::None;
+    }
+    else if (controllers[1].secondary_button && m_menu.autosave_list)
     {
       m_menu.autosave_list = false;
     }
@@ -844,13 +866,34 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
   const float y = hit.v * VrMenu::HEIGHT;
 
   m_widgets = VrMenu::Layout(m_menu);
+  const std::optional<MenuList> list = VrMenu::GetList(m_menu);
+  const bool can_scroll =
+      list && list->bar.Valid() && m_menu.open_setting == SettingId::None;
+  const bool scrolling = m_bar_press.Active() || m_list_drag.Dragging();
   const MenuWidget* const hovered =
-      hit.in_bounds && !m_drag ? VrMenu::At(m_widgets, x, y) : nullptr;
-  const MenuItem hover = m_drag ? m_drag->item : hovered ? hovered->item : MenuItem::None;
-  const int index = m_drag ? m_drag->index : hovered ? hovered->index : 0;
-  const int option = hovered ? VrMenu::OptionAt(*hovered, x) : -1;
-  if (hover != MenuItem::None && (hover != m_menu.hover || index != m_menu.hover_index))
-    m_manager->PulseHaptics(hand);
+      hit.in_bounds && !m_drag && !scrolling ? VrMenu::At(m_widgets, x, y, true) : nullptr;
+  MenuItem hover = hovered ? hovered->item : MenuItem::None;
+  int index = hovered ? hovered->index : 0;
+  if (m_drag)
+  {
+    hover = m_drag->item;
+    index = m_drag->index;
+  }
+  else if (m_bar_press.Active())
+  {
+    hover = MenuItem::Scrollbar;
+  }
+  // With a menu open, what is beside it only closes it.
+  const bool beside = m_menu.open_setting != SettingId::None && hover != MenuItem::Popup &&
+                      hover != MenuItem::PopupOption;
+  const bool usable = hovered && !hovered->disabled && !beside;
+  const int option = usable ? VrMenu::OptionAt(*hovered, x) : -1;
+  if (hover != m_menu.hover || index != m_menu.hover_index)
+  {
+    if (usable && !scrolling)
+      m_manager->PulseHaptics(hand);
+    m_rest_since_ns = frame.time_ns;
+  }
   m_menu.hover = hover;
   m_menu.hover_index = index;
   m_menu.hover_option = option;
@@ -862,32 +905,75 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
   const bool pressed = down && !m_press_down;
   const bool released = !down && m_press_down;
   m_press_down = down;
+  m_menu.show_tooltip =
+      hovered && !down && frame.time_ns - m_rest_since_ns >= TOOLTIP_NS;
 
+  float* const scroll =
+      can_scroll ? &m_menu.scroll[static_cast<std::size_t>(list->section)] : nullptr;
+  const float seconds = static_cast<float>(frame.time_ns % 1'000'000'000'000) * 1e-9f;
   if (pressed)
   {
-    m_press_item = hover;
+    m_list_drag.Stop();
+    m_press_item = usable ? hover : MenuItem::None;
     m_press_index = index;
-    if (hovered && hovered->kind == MenuWidget::Kind::Slider)
+    if (scroll && hover == MenuItem::Scrollbar)
+    {
+      *scroll = m_bar_press.Begin(list->bar, *scroll, y);
+    }
+    else if (usable && hovered->kind == MenuWidget::Kind::Slider &&
+             x >= hovered->control.x0 - 12.0f && x < hovered->control.x1)
+    {
       m_drag = *hovered;
+    }
+    else if (scroll && hit.in_bounds && list->bar.list.Contains(x, y))
+    {
+      // A press that moves scrolls the list.
+      m_list_drag.Press(y, *scroll, seconds);
+    }
   }
   if (m_drag && down && hit.on_plane)
     SetSlider(*m_drag, VrMenu::SliderAt(*m_drag, x));
+  if (scroll && down && !pressed && hit.on_plane)
+  {
+    if (m_bar_press.Active())
+      *scroll = m_bar_press.Update(list->bar, *scroll, y, dt);
+    else if (!m_drag && m_list_drag.Move(y, seconds, *scroll, list->bar.max_scroll))
+      m_press_item = MenuItem::None;
+  }
   if (released)
   {
     const MenuItem item = std::exchange(m_press_item, MenuItem::None);
-    if (m_drag)
+    const bool dragged = m_list_drag.Dragging();
+    m_list_drag.Release(seconds);
+    if (m_bar_press.Active())
     {
-      if (m_drag->item == MenuItem::Distance || m_drag->item == MenuItem::Size)
+      m_bar_press.End();
+    }
+    else if (m_drag)
+    {
+      const MenuWidget slider = *std::exchange(m_drag, std::nullopt);
+      if (slider.index == static_cast<int>(SettingId::Distance) ||
+          slider.index == static_cast<int>(SettingId::Size))
+      {
         SaveScreenPlacement();
-      m_drag.reset();
+      }
+    }
+    else if (dragged)
+    {
+      // It coasts on.
+    }
+    else if (m_menu.open_setting != SettingId::None && item != MenuItem::PopupOption &&
+             item != MenuItem::Popup)
+    {
+      // Beside the menu: it closes.
+      m_menu.open_setting = SettingId::None;
     }
     else if (m_menu.autosave_list && item != MenuItem::AutosaveEntry &&
              item != MenuItem::AutosaveList)
     {
-      // Beside the list: it closes.
       m_menu.autosave_list = false;
     }
-    else if (hovered && item == hovered->item && m_press_index == index)
+    else if (usable && item == hovered->item && m_press_index == index)
     {
       // A copy: the menu changes under it.
       const MenuWidget widget = *hovered;
@@ -895,55 +981,76 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers)
     }
   }
   m_menu.pressed = down ? m_press_item : MenuItem::None;
+
+  if (!scroll)
+  {
+    m_stick_scroll.Reset();
+    m_list_drag.Stop();
+    return;
+  }
+  if (!m_bar_press.Active() && !m_list_drag.Dragging() && !m_drag)
+  {
+    const float left = controllers[0].thumbstick_y;
+    const float right = controllers[1].thumbstick_y;
+    const float stick = std::abs(left) > std::abs(right) ? left : right;
+    *scroll = m_stick_scroll.Update(stick, dt, *scroll, list->bar.max_scroll, list->bar.list.H(),
+                                    list->row_h);
+    if (m_stick_scroll.Active())
+      m_list_drag.Stop();
+    *scroll = m_list_drag.Coast(*scroll, list->bar.max_scroll, dt);
+  }
+  *scroll = std::clamp(*scroll, 0.0f, list->bar.max_scroll);
 }
 
 void VrUi::SetSlider(const MenuWidget& widget, float t)
 {
-  ScreenPlacement placement = m_manager->GetScreenPlacement();
-  switch (widget.item)
+  const auto id = static_cast<SettingId>(widget.index);
+  const float value = SliderValue(GetSettingRow(id), t);
+  if (value == m_menu.settings.Get(id))
+    return;
+  if (id == SettingId::Distance || id == SettingId::Size)
   {
-  case MenuItem::Distance:
-    placement.distance =
-        ScreenPlacement::MIN_DISTANCE +
-        t * (ScreenPlacement::MAX_DISTANCE - ScreenPlacement::MIN_DISTANCE);
-    placement.distance = std::round(placement.distance * 10.0f) / 10.0f;
+    ScreenPlacement placement = m_manager->GetScreenPlacement();
+    (id == SettingId::Distance ? placement.distance : placement.height) = value;
     m_manager->SetScreenPlacement(placement);
-    m_menu.distance = placement.distance;
-    break;
-  case MenuItem::Size:
-    placement.height = ScreenPlacement::MIN_HEIGHT +
-                       t * (ScreenPlacement::MAX_HEIGHT - ScreenPlacement::MIN_HEIGHT);
-    placement.height = std::round(placement.height * 10.0f) / 10.0f;
-    m_manager->SetScreenPlacement(placement);
-    m_menu.size = placement.height;
-    break;
-  case MenuItem::Depth:
+    SetLiveSettings();
+    return;
+  }
+  ChangeSetting(id, value);
+}
+
+void VrUi::ActivateSetting(const MenuWidget& widget, int option)
+{
+  const auto id = static_cast<SettingId>(widget.index);
+  const SettingRow& row = GetSettingRow(id);
+  switch (row.kind)
   {
-    const float value = std::round(t * 20.0f) * 5.0f;
-    if (value != m_menu.depth)
-      QueueSet(Config::GFX_VR_SCREEN_DEPTH, value);
-    m_menu.depth = value;
+  case RowKind::Switch:
+    ChangeSetting(id, widget.active ? 0.0f : 1.0f);
+    break;
+  case RowKind::Segmented:
+    if (option >= 0 && option != widget.selected)
+      ChooseOption(row, option);
+    break;
+  case RowKind::Dropdown:
+    m_menu.open_setting = id;
+    break;
+  case RowKind::Slider:
+  case RowKind::Header:
     break;
   }
-  case MenuItem::AutosaveKeep:
-  {
-    const int value = 1 + static_cast<int>(std::lround(t * 9.0f));
-    if (value != m_menu.autosave_keep)
-      QueueSet(Config::MAIN_AUTOSAVE_KEEP, static_cast<u32>(value));
-    m_menu.autosave_keep = value;
-    break;
-  }
-  case MenuItem::Convergence:
-  {
-    const float value = std::round(t * Config::GFX_STEREO_CONVERGENCE_MAXIMUM);
-    if (value != m_menu.convergence)
-      QueueSet(Config::GFX_STEREO_CONVERGENCE, value);
-    m_menu.convergence = value;
-    break;
-  }
-  default:
-    break;
-  }
+}
+
+void VrUi::ChooseOption(const SettingRow& row, int option)
+{
+  const std::vector<SettingOption> options = GetOptions(row, m_menu.settings);
+  if (option < 0 || option >= static_cast<int>(options.size()))
+    return;
+  const float value = options[static_cast<std::size_t>(option)].value;
+  if (row.id == SettingId::Display)
+    QueueSwitchMode(value == static_cast<float>(OpenXRPresentationMode::Immersive));
+  else
+    ChangeSetting(row.id, value);
 }
 
 void VrUi::ChangeMod(const MenuWidget& widget)
@@ -1087,6 +1194,7 @@ void VrUi::Activate(const MenuWidget& widget, int option)
   case MenuItem::AutosaveSettings:
     m_menu.tab = MenuTab::Settings;
     m_menu.page = MenuPage::Main;
+    m_menu.section = MenuSection::General;
     break;
   case MenuItem::UndoLoad:
     m_menu.undo_load.clear();
@@ -1109,73 +1217,31 @@ void VrUi::Activate(const MenuWidget& widget, int option)
     if (option >= 0)
       m_menu.controls_page = option;
     break;
-  case MenuItem::Autosave:
-    m_menu.autosave = !m_menu.autosave;
-    QueueSet(Config::MAIN_AUTOSAVE_ENABLED, m_menu.autosave);
-    break;
-  case MenuItem::AutosaveEvery:
-    if (option >= 0)
-    {
-      m_menu.autosave_every = option;
-      QueueSet(Config::MAIN_AUTOSAVE_MINUTES,
-               static_cast<u32>(AUTOSAVE_MINUTES[static_cast<std::size_t>(option)]));
-    }
-    break;
   case MenuItem::Stop:
     events.stop = true;
     HandleEvents(events);
     CloseMenu();
     break;
-  case MenuItem::Mode:
-    if (option >= 0 && option != widget.selected)
-      QueueSwitchMode(option == 1);
-    break;
-  case MenuItem::Aspect:
+  case MenuItem::Section:
     if (option >= 0)
+      m_menu.section = static_cast<MenuSection>(static_cast<int>(MenuSection::General) + option);
+    break;
+  case MenuItem::Setting:
+    ActivateSetting(widget, option);
+    break;
+  case MenuItem::PopupOption:
+    if (const SettingId id = std::exchange(m_menu.open_setting, SettingId::None);
+        id != SettingId::None)
     {
-      static constexpr std::array MODES{AspectMode::Auto, AspectMode::ForceWide,
-                                        AspectMode::ForceStandard};
-      QueueSet(Config::GFX_ASPECT_RATIO, MODES[static_cast<std::size_t>(option)]);
-      m_menu.aspect = option;
-    }
-    break;
-  case MenuItem::LockScreen:
-    m_menu.lock_screen = !m_menu.lock_screen;
-    QueueSet(Config::GFX_VR_LOCK_SCREEN, m_menu.lock_screen);
-    break;
-  case MenuItem::Resolution:
-    if (option >= 0)
-    {
-      QueueSet(Config::GFX_EFB_SCALE, option + 1);
-      m_menu.resolution = option + 1;
-    }
-    break;
-  case MenuItem::Beams:
-    m_menu.beams = !m_menu.beams;
-    QueueSet(Config::GFX_VR_POINTER_BEAMS, m_menu.beams);
-    break;
-  case MenuItem::Toasts:
-    m_menu.toasts = !m_menu.toasts;
-    QueueSet(Config::GFX_VR_TOASTS, m_menu.toasts);
-    break;
-  case MenuItem::Pacing:
-    if (option >= 0)
-    {
-      m_menu.eager = option == 0;
-      QueueSet(Config::GFX_VR_EAGER_HEARTBEAT, m_menu.eager);
+      ChooseOption(GetSettingRow(id), widget.index);
     }
     break;
   case MenuItem::None:
-  case MenuItem::Distance:
-  case MenuItem::Size:
-  case MenuItem::Depth:
-  case MenuItem::Convergence:
-  case MenuItem::AutosaveKeep:
+  case MenuItem::Scrollbar:
+  case MenuItem::Popup:
   case MenuItem::AutosaveList:
     break;
   }
-  // What was just set is on its way to the config: do not read the old value back over it.
-  m_last_refresh_ns = m_frame.time_ns;
   UpdatePause();
 }
 

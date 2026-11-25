@@ -5,12 +5,15 @@
 
 #include <array>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "Common/CommonTypes.h"
 #include "Core/GameMods/GameMods.h"
+#include "VideoCommon/VR/FrameUI/MenuSettings.h"
 #include "VideoCommon/VR/FrameUI/PadArt.h"
+#include "VideoCommon/VR/FrameUI/list_scroll.h"
 #include "VideoCommon/VR/FrameUI/md3.h"
 
 // The VR menu: what is on it for a state, and its drawing, in Azahar for Frame's menu style (its
@@ -56,25 +59,17 @@ enum class MenuItem
   ModRemove,
   ModsPrevious,
   ModsNext,
-  Autosave,
-  AutosaveEvery,
-  AutosaveKeep,
   ResetScreen,
   QuickSave,
   QuickLoad,
   FastForward,
   Stop,
-  Mode,
-  Distance,
-  Size,
-  Depth,
-  Convergence,
-  Aspect,
-  LockScreen,
-  Resolution,
-  Beams,
-  Toasts,
-  Pacing,
+  // A row's setting: the index is its SettingId.
+  Setting,
+  Section,
+  Scrollbar,
+  Popup,
+  PopupOption,
 };
 
 // Main's pages.
@@ -129,29 +124,19 @@ struct MenuState
 
   std::string title;
   bool wii = false;
-  bool immersive = false;
-  bool can_switch_mode = true;
   bool fast_forward = false;
 
-  float distance = 2.0f;
-  float size = 1.5f;
-  float depth = 100.0f;  // percent of natural 3D
-  float convergence = 20.0f;
-  int aspect = 0;  // Auto, 16:9, 4:3, -1 something else
-  bool lock_screen = false;
-
-  int resolution = 2;  // 1x.. ; 0 is automatic
-  bool beams = true;
-  bool toasts = true;
-  bool eager = true;
-  bool autosave = false;
-  int autosave_every = 2;  // in AUTOSAVE_MINUTES
-  int autosave_keep = 3;
+  SettingState settings;
+  MenuSection section = MenuSection::General;  // of the Settings tab
+  std::array<float, NUM_SECTIONS> scroll{};
+  // The row with its drop-down menu open.
+  SettingId open_setting = SettingId::None;
 
   MenuItem hover = MenuItem::None;
   MenuItem pressed = MenuItem::None;
   int hover_index = 0;
   int hover_option = -1;
+  bool show_tooltip = false;  // of what is under the pointer
 
   bool operator==(const MenuState&) const = default;
 };
@@ -177,6 +162,11 @@ struct MenuWidget
     Pad,
     Mod,
     IconButton,
+    Header,
+    Dropdown,
+    Menu,    // an open drop-down menu
+    Option,  // of it; drawn with it
+    Scrollbar,
   };
 
   Kind kind = Kind::Text;
@@ -193,9 +183,20 @@ struct MenuWidget
   float t = 0.0f;
   int selected = -1;
   std::vector<std::string> options;
+  std::string note;     // under the label
+  std::string tooltip;  // what it does, or why it cannot be changed
+  // In a list: nothing of it is past this.
+  bool clipped = false;
+  FrameXr::Menu::Rect clip;
 };
 
-constexpr std::array AUTOSAVE_MINUTES{1, 2, 5, 10, 15};
+// The list of a page that scrolls.
+struct MenuList
+{
+  FrameXr::Menu::Scrolling::Bar bar;
+  MenuSection section = MenuSection::General;
+  float row_h = 0.0f;
+};
 
 // A menu picture: RGBA.
 struct MenuPicture
@@ -217,9 +218,13 @@ public:
   static constexpr float METRES_PER_DP = 0.00125f;
 
   static std::vector<MenuWidget> Layout(const MenuState& state);
+  // The page's list, if it has one (its bar is not valid when everything fits).
+  static std::optional<MenuList> GetList(const MenuState& state);
 
-  // The widget at a point that does something, or null.
-  static const MenuWidget* At(const std::vector<MenuWidget>& widgets, float x, float y);
+  // The widget at a point that does something, or null. `greyed`: also one that cannot be used now
+  // but says why.
+  static const MenuWidget* At(const std::vector<MenuWidget>& widgets, float x, float y,
+                              bool greyed = false);
   // The option of a segmented button at `x`.
   static int OptionAt(const MenuWidget& widget, float x);
   // 0..1 along a slider at `x`.

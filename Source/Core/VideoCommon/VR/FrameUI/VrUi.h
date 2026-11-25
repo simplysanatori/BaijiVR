@@ -25,6 +25,7 @@
 #include "VideoCommon/VR/FrameUI/VrMenu.h"
 #include "VideoCommon/VR/FrameUI/beam.h"
 #include "VideoCommon/VR/FrameUI/layer_slots.h"
+#include "VideoCommon/VR/FrameUI/list_scroll.h"
 #include "VideoCommon/VR/FrameUI/toast_fit.h"
 #include "VideoCommon/VR/FrameUI/ui_canvas.h"
 
@@ -103,7 +104,7 @@ private:
 
   // ---- Update ----
   void UpdateGrab(const Frame& frame, const Controllers& controllers, float dt);
-  void UpdateMenu(const Frame& frame, const Controllers& controllers);
+  void UpdateMenu(const Frame& frame, const Controllers& controllers, float dt);
   void UpdateBeams(const Frame& frame, const Controllers& controllers);
   void UpdateToasts(const Frame& frame);
   void HandleEvents(const PadEvents& events);
@@ -111,6 +112,12 @@ private:
   void OpenMenu(const Frame& frame);
   void CloseMenu();
   void RefreshMenuState();
+  // What the game shows now, whatever the config has.
+  void SetLiveSettings();
+  void ChangeSetting(SettingId id, float value);
+  void ActivateSetting(const MenuWidget& widget, int option);
+  void ChooseOption(const SettingRow& row, int option);
+  void StopScrolling();
   void ChangeMod(const MenuWidget& widget);
   void Activate(const MenuWidget& widget, int option);
   void SetSlider(const MenuWidget& widget, float t);
@@ -173,6 +180,12 @@ private:
   MenuItem m_press_item = MenuItem::None;
   int m_press_index = 0;
   std::optional<MenuWidget> m_drag;
+  s64 m_rest_since_ns = 0;
+  // Counts the menu's changes of settings.
+  u32 m_settings_serial = 0;
+  FrameXr::Menu::Scrolling::StickScroll m_stick_scroll;
+  FrameXr::Menu::Scrolling::BarPress m_bar_press;
+  FrameXr::Menu::Scrolling::DragScroll m_list_drag;
   bool m_back_down = false;
   s64 m_last_refresh_ns = 0;
   s64 m_pause_after_ns = 0;

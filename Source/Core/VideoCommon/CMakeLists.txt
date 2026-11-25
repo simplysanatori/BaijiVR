@@ -312,6 +312,8 @@ endif()
 
 if(ENABLE_VR)
   target_sources(videocommon PRIVATE
+    VR/FrameUI/MenuSettings.cpp
+    VR/FrameUI/MenuSettings.h
     VR/FrameUI/Overlay.h
     VR/FrameUI/PadArt.cpp
     VR/FrameUI/PadArt.h
@@ -327,6 +329,8 @@ if(ENABLE_VR)
     VR/FrameUI/VrUi.h
     VR/FrameUI/beam.cpp
     VR/FrameUI/geometry.cpp
+    VR/FrameUI/list_scroll.cpp
+    VR/FrameUI/list_scroll.h
     VR/FrameUI/md3.cpp
     VR/FrameUI/stb_truetype.cpp
     VR/FrameUI/ui_canvas.cpp

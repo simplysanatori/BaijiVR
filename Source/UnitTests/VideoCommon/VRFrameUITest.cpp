@@ -3,12 +3,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "Core/Autosave.h"
 #include "InputCommon/ControllerInterface/OpenXR/FrameControllerNames.h"
+#include "VideoCommon/VR/FrameUI/MenuSettings.h"
 #include "VideoCommon/VR/FrameUI/PadBindings.h"
 #include "VideoCommon/VR/FrameUI/PadFilter.h"
 #include "VideoCommon/VR/FrameUI/ScreenPlacement.h"
@@ -55,6 +58,67 @@ struct Pad
   }
   void ClearSeen() { game_menu = game_view = game_bumper = game_trigger = stopping = false; }
 };
+
+// Every page of the menu, the lists at their top, middle and end.
+std::vector<MenuState> GetPages(bool immersive)
+{
+  std::vector<MenuState> pages;
+  MenuState base;
+  base.settings.immersive = immersive;
+  base.settings.has_game = true;
+  for (const MenuTab tab : {MenuTab::Main, MenuTab::Controls, MenuTab::Mods})
+  {
+    for (const int page : {0, 1})
+    {
+      MenuState s = base;
+      s.tab = tab;
+      s.controls_page = page;
+      s.wii = page == 1;
+      s.mods.resize(13);
+      s.mods_page = page * 2;
+      s.mods_changed = true;
+      pages.push_back(s);
+    }
+  }
+  for (std::size_t i = 0; i < NUM_SECTIONS; ++i)
+  {
+    MenuState s = base;
+    s.section = static_cast<MenuSection>(i);
+    s.tab = s.section == MenuSection::Screen ? MenuTab::Screen : MenuTab::Settings;
+    const float most = VrMenu::GetList(s)->bar.max_scroll;
+    for (const float scroll : {0.0f, most * 0.5f, most})
+    {
+      s.scroll[i] = scroll;
+      pages.push_back(s);
+    }
+  }
+  return pages;
+}
+
+FrameXr::Menu::Rect GetVisible(const MenuWidget& w)
+{
+  FrameXr::Menu::Rect r = w.rect;
+  if (w.clipped)
+  {
+    r = {std::max(r.x0, w.clip.x0), std::max(r.y0, w.clip.y0), std::min(r.x1, w.clip.x1),
+         std::min(r.y1, w.clip.y1)};
+  }
+  return r;
+}
+
+bool Overlaps(const FrameXr::Menu::Rect& a, const FrameXr::Menu::Rect& b)
+{
+  return std::min(a.x1, b.x1) - std::max(a.x0, b.x0) > 0.01f &&
+         std::min(a.y1, b.y1) - std::max(a.y0, b.y0) > 0.01f;
+}
+
+const MenuWidget* FindSetting(const std::vector<MenuWidget>& widgets, SettingId id)
+{
+  const auto it = std::ranges::find_if(widgets, [id](const MenuWidget& w) {
+    return w.item == MenuItem::Setting && w.index == static_cast<int>(id);
+  });
+  return it != widgets.end() ? &*it : nullptr;
+}
 }  // namespace
 
 TEST(VRFrameUI, MenuTapAndHold)
@@ -295,7 +359,7 @@ TEST(VRFrameUI, MenuFindsWhatIsOnTop)
 {
   MenuState state;
   state.page = MenuPage::Load;
-  state.autosave = true;
+  state.settings.Set(SettingId::Autosave, 1.0f);
   state.autosave_list = true;
   state.saves.autosaves.resize(3);
   state.saves.slots.fill("2026-11-24 10:00");
@@ -308,29 +372,213 @@ TEST(VRFrameUI, MenuFindsWhatIsOnTop)
   ASSERT_NE(slot, nullptr);
   EXPECT_EQ(slot->item, MenuItem::Slot);
   EXPECT_EQ(slot->index, 1);
+}
 
-  // Everything is on the panel.
-  for (const MenuTab tab :
-       {MenuTab::Main, MenuTab::Screen, MenuTab::Controls, MenuTab::Mods, MenuTab::Settings})
+TEST(VRFrameUI, MenuIsOnThePanelWithoutOverlaps)
+{
+  for (const bool immersive : {false, true})
   {
-    for (const int page : {0, 1})
+    for (const MenuState& state : GetPages(immersive))
     {
-      MenuState s;
-      s.tab = tab;
-      s.controls_page = page;
-      s.wii = page == 1;
-      s.mods.resize(13);
-      s.mods_page = page * 2;
-      s.mods_changed = true;
-      for (const MenuWidget& w : VrMenu::Layout(s))
+      const auto widgets = VrMenu::Layout(state);
+      for (const MenuWidget& w : widgets)
       {
-        EXPECT_GE(w.rect.x0, 0.0f);
-        EXPECT_GE(w.rect.y0, 0.0f);
-        EXPECT_LE(w.rect.x1, VrMenu::WIDTH);
-        EXPECT_LE(w.rect.y1, VrMenu::HEIGHT - 16.0f);
+        const auto r = GetVisible(w);
+        EXPECT_GE(r.x0, 0.0f);
+        EXPECT_GE(r.y0, 0.0f);
+        EXPECT_LE(r.x1, VrMenu::WIDTH);
+        EXPECT_LE(r.y1, VrMenu::HEIGHT - 16.0f);
+      }
+      for (std::size_t i = 0; i < widgets.size(); ++i)
+      {
+        for (std::size_t k = i + 1; k < widgets.size(); ++k)
+        {
+          const MenuWidget& a = widgets[i];
+          const MenuWidget& b = widgets[k];
+          // A mod's controls are on its card.
+          if (a.kind == MenuWidget::Kind::Mod || b.kind == MenuWidget::Kind::Mod)
+            continue;
+          EXPECT_FALSE(Overlaps(GetVisible(a), GetVisible(b)))
+              << static_cast<int>(state.tab) << ": " << a.label << " and " << b.label;
+        }
       }
     }
   }
+}
+
+TEST(VRFrameUI, MenuTextFits)
+{
+  // What is hit is laid out without the fonts: it has to agree with what is drawn.
+  FrameXr::Menu::Kit kit(1.5f);
+  for (const MenuState& state : GetPages(false))
+  {
+    for (const MenuWidget& w : VrMenu::Layout(state))
+    {
+      using Kind = MenuWidget::Kind;
+      if (w.kind == Kind::Segmented)
+      {
+        EXPECT_LE(kit.SegmentedWidth(w.options), w.control.W() + 0.5f) << w.options.front();
+        const auto edges = kit.SegmentEdges(w.control, w.options);
+        for (std::size_t i = 0; i < w.options.size(); ++i)
+        {
+          EXPECT_EQ(VrMenu::OptionAt(w, (edges[i] + edges[i + 1]) * 0.5f), static_cast<int>(i));
+        }
+      }
+      if (w.item == MenuItem::Setting)
+      {
+        EXPECT_LE(128.0f + kit.TextWidth(FrameXr::Menu::Type::Body, w.label),
+                  w.control.x0 - 8.0f)
+            << w.label;
+      }
+      if (w.kind == Kind::Dropdown)
+      {
+        EXPECT_LE(kit.TextWidth(FrameXr::Menu::Type::Label, w.value), w.control.W() - 64.0f)
+            << w.value;
+      }
+      if (w.kind == Kind::Button || w.kind == Kind::Tile)
+      {
+        EXPECT_LE(kit.TextWidth(FrameXr::Menu::Type::Label, w.label), w.rect.W() - 16.0f)
+            << w.label;
+      }
+    }
+  }
+}
+
+TEST(VRFrameUI, EveryRowCanBeScrolledTo)
+{
+  for (std::size_t i = 0; i < NUM_SECTIONS; ++i)
+  {
+    MenuState s;
+    s.section = static_cast<MenuSection>(i);
+    s.tab = s.section == MenuSection::Screen ? MenuTab::Screen : MenuTab::Settings;
+    std::set<int> found;
+    for (float scroll = 0.0f;; scroll += 8.0f)
+    {
+      const MenuList list = *VrMenu::GetList(s);
+      s.scroll[i] = std::min(scroll, list.bar.max_scroll);
+      for (const MenuWidget& w : VrMenu::Layout(s))
+      {
+        if (w.item == MenuItem::Setting && w.rect.y0 >= list.bar.list.y0 &&
+            w.rect.y1 <= list.bar.list.y1)
+        {
+          found.insert(w.index);
+        }
+      }
+      if (scroll >= list.bar.max_scroll)
+        break;
+    }
+    for (const SettingRow& row : GetSettingRows())
+    {
+      if (row.section == s.section && row.id != SettingId::None)
+      {
+        EXPECT_TRUE(found.contains(static_cast<int>(row.id))) << row.label;
+      }
+    }
+  }
+}
+
+TEST(VRFrameUI, ARowPastTheListIsNotHit)
+{
+  MenuState s;
+  s.tab = MenuTab::Settings;
+  const MenuList list = *VrMenu::GetList(s);
+  ASSERT_TRUE(list.bar.Valid());
+  s.scroll[static_cast<std::size_t>(MenuSection::General)] = 40.0f;
+  const auto widgets = VrMenu::Layout(s);
+  const MenuWidget& row = *std::ranges::find(widgets, MenuItem::Setting, &MenuWidget::item);
+  EXPECT_LT(row.rect.y0, list.bar.list.y0);
+  const MenuWidget* const over = VrMenu::At(widgets, 400.0f, list.bar.list.y0 - 4.0f);
+  EXPECT_TRUE(!over || over->item != MenuItem::Setting);
+  const MenuWidget* const in = VrMenu::At(widgets, 400.0f, list.bar.list.y0 + 4.0f);
+  ASSERT_NE(in, nullptr);
+  EXPECT_EQ(in->index, row.index);
+}
+
+TEST(VRFrameUI, EveryRowHasItsPlaceAndWords)
+{
+  std::set<SettingId> seen;
+  for (const SettingRow& row : GetSettingRows())
+  {
+    EXPECT_FALSE(row.label.empty());
+    if (row.kind == RowKind::Header)
+      continue;
+    EXPECT_FALSE(row.tooltip.empty()) << row.label;
+    EXPECT_TRUE(seen.insert(row.id).second) << row.label;
+    if (row.kind == RowKind::Segmented || row.kind == RowKind::Dropdown)
+    {
+      EXPECT_GE(row.options.size(), 2u) << row.label;
+    }
+    if (row.kind == RowKind::Slider && row.options.empty())
+    {
+      EXPECT_NE(row.format, nullptr) << row.label;
+      EXPECT_LT(row.minimum, row.maximum) << row.label;
+      for (const float t : {0.0f, 0.3f, 0.5f, 1.0f})
+      {
+        const float value = SliderValue(row, t);
+        EXPECT_NEAR(SliderFraction(row, value), t, row.exponential ? 0.02f : 0.06f) << row.label;
+        EXPECT_NEAR(SliderValue(row, SliderFraction(row, value)), value,
+                    std::abs(value) * 1e-3f + 1e-4f)
+            << row.label;
+      }
+    }
+  }
+  EXPECT_EQ(seen.size(), NUM_SETTINGS);
+}
+
+TEST(VRFrameUI, SliderWithStops)
+{
+  const SettingRow& every = GetSettingRow(SettingId::AutosaveEvery);
+  EXPECT_EQ(SliderValue(every, 0.0f), 1.0f);
+  EXPECT_EQ(SliderValue(every, 0.5f), 5.0f);
+  EXPECT_EQ(SliderValue(every, 1.0f), 15.0f);
+  EXPECT_EQ(SliderFraction(every, 10.0f), 0.75f);
+  EXPECT_EQ(SliderFraction(every, 7.0f), 0.5f);
+}
+
+TEST(VRFrameUI, GreyedRowsSayWhy)
+{
+  MenuState s;
+  s.tab = MenuTab::Screen;
+  s.settings.immersive = true;
+  const auto widgets = VrMenu::Layout(s);
+  const MenuWidget* const lock = FindSetting(widgets, SettingId::LockScreen);
+  ASSERT_NE(lock, nullptr);
+  EXPECT_TRUE(lock->disabled);
+  EXPECT_EQ(lock->tooltip, "Only in Stereoscopic 3D.");
+  EXPECT_EQ(VrMenu::At(widgets, 400.0f, lock->rect.Cy()), nullptr);
+  EXPECT_EQ(VrMenu::At(widgets, 400.0f, lock->rect.Cy(), true), lock);
+
+  s.settings.Set(SettingId::Autosave, 0.0f);
+  EXPECT_EQ(GetLock(GetSettingRow(SettingId::AutosaveKeep), s.settings), Lock::AutosaveOff);
+  s.settings.Set(SettingId::Autosave, 1.0f);
+  EXPECT_EQ(GetLock(GetSettingRow(SettingId::AutosaveKeep), s.settings), Lock::None);
+}
+
+TEST(VRFrameUI, DropDownMenu)
+{
+  MenuState s;
+  s.tab = MenuTab::Settings;
+  s.section = MenuSection::Graphics;
+  s.open_setting = SettingId::InternalResolution;
+  s.settings.Set(SettingId::InternalResolution, 2.0f);
+  const auto widgets = VrMenu::Layout(s);
+  const auto menu = std::ranges::find(widgets, MenuWidget::Kind::Menu, &MenuWidget::kind);
+  ASSERT_NE(menu, widgets.end());
+  EXPECT_EQ(menu->selected, 2);
+  EXPECT_GE(menu->rect.y0, 16.0f);
+  EXPECT_LE(menu->rect.y1, VrMenu::HEIGHT - 16.0f);
+  const MenuWidget* const option =
+      VrMenu::At(widgets, menu->rect.Cx(), menu->rect.y0 + 8.0f + 48.0f * 3.5f);
+  ASSERT_NE(option, nullptr);
+  EXPECT_EQ(option->item, MenuItem::PopupOption);
+  EXPECT_EQ(option->index, 3);
+  // Its edge does nothing, and keeps the rows under it from being pressed.
+  const MenuWidget* const edge = VrMenu::At(widgets, menu->rect.Cx(), menu->rect.y0 + 2.0f);
+  ASSERT_NE(edge, nullptr);
+  EXPECT_EQ(edge->item, MenuItem::Popup);
+
+  // Out of the list (6x from the settings page), it still says what it is.
+  EXPECT_EQ(FormatValue(GetSettingRow(SettingId::InternalResolution), 6.0f), "6x");
 }
 
 TEST(VRFrameUI, ModRows)
