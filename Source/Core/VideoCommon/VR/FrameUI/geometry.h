@@ -74,6 +74,25 @@ struct QuadHit {
 /// misses that half gets the flat plane's answer, so a drag or a touch carries on off the edge.
 QuadHit IntersectQuad(const Ray& ray, const PanelQuad& quad);
 
+// ---- AzaharFrame curve: Screen Curve ------------------------------------------------------
+
+/// Never bent further than this (a value typed into the config).
+inline constexpr int kMaxCurveDeg = 180;
+
+/// The radius that bends a screen `width` wide by `deg` degrees (arc length = width); 0 = flat.
+float CurveRadius(float width, int deg);
+
+/// What a cylinder layer needs to show a screen of this size bent with this radius. A cylinder
+/// layer's middle is at its pose's -Z, `radius` away: the pose is the screen's own, moved `radius`
+/// towards the viewer, so the screen's middle stays where the flat screen's was.
+struct Cylinder {
+    Posef pose;
+    float radius = 0.0f;
+    float central_angle = 0.0f; ///< radians: width / radius
+    float aspect_ratio = 1.0f;  ///< width / height of the arc, as the flat screen
+};
+Cylinder CylinderFor(const Posef& screen, float width, float height, float radius);
+
 /// Pixel position in a screen of the given size for a hit. clamp keeps the result on the screen.
 Vec2f HitToPixels(const QuadHit& hit, float screen_w_px, float screen_h_px, bool clamp);
 

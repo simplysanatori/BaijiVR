@@ -176,6 +176,25 @@ QuadHit IntersectQuad(const Ray& ray, const PanelQuad& quad) {
     return hit;
 }
 
+float CurveRadius(float width, int deg) {
+    constexpr float kDegToRad = 3.14159265f / 180.0f;
+    deg = std::min(deg, kMaxCurveDeg);
+    if (deg <= 0 || !(width > 0.0f)) {
+        return 0.0f;
+    }
+    return width / (static_cast<float>(deg) * kDegToRad);
+}
+
+Cylinder CylinderFor(const Posef& screen, float width, float height, float radius) {
+    Cylinder c;
+    c.radius = radius;
+    c.pose.orientation = screen.orientation;
+    c.pose.position = screen.position + Rotate(screen.orientation, Vec3f{0.0f, 0.0f, radius});
+    c.central_angle = radius > 0.0f ? width / radius : 0.0f;
+    c.aspect_ratio = height > 0.0f ? width / height : 1.0f;
+    return c;
+}
+
 Vec2f HitToPixels(const QuadHit& hit, float w, float h, bool clamp) {
     float x = hit.u * w;
     float y = hit.v * h;

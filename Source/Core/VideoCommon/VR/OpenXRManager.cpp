@@ -566,6 +566,11 @@ bool OpenXRManager::CreateInstance(const std::vector<const char*>& extra_extensi
   }
 #endif
 
+  // Screen Curve can be turned on at any time, so this is there whenever the runtime has it.
+  m_has_cylinder_layers = runtime_has(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+  if (m_has_cylinder_layers)
+    enabled_extensions.push_back(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+
   XrVersion requested_api_version = XR_CURRENT_API_VERSION;
   INFO_LOG_FMT(OPENXR, "OpenXR: Requesting API version {}.{}.{}.",
                XR_VERSION_MAJOR(requested_api_version), XR_VERSION_MINOR(requested_api_version),
@@ -1307,6 +1312,9 @@ void OpenXRManager::DestroySession()
     m_screen_anchor_valid = false;
   }
   m_flat_quad_layer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+  // The next session starts from the eye distance this one had.
+  m_ipd = {};
+  m_ipd.SetFallback(m_eye_distance.load(std::memory_order_relaxed));
   m_controller_anchor_cache_valid = {false, false};
 }
 
@@ -1604,24 +1612,18 @@ void OpenXRManager::FrameThreadLoop()
     // Build the layer stack from the newest content we have. Passthrough layer
     // prepending, blend mode, and the graphics queue lock live in EndFrameDetached.
     XrCompositionLayerProjection projection_layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+    std::array<XrCompositionLayerCylinderKHR, 2> cylinder_layers{};
     std::vector<XrCompositionLayerBaseHeader*> layers;
     const bool submit_content = should_render && have_frame;
     if (submit_content)
     {
       // Where the screen is now, not where it was when the game drew this frame.
-      if (last_frame.is_quad)
+      if (last_frame.is_quad || last_frame.is_stereo_quad)
       {
-        PlaceScreenLayer(&last_frame.quad);
-        layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&last_frame.quad));
-      }
-      else if (last_frame.is_stereo_quad)
-      {
-        for (uint32_t i = 0; i < last_frame.stereo_quad_count; ++i)
-        {
-          PlaceScreenLayer(&last_frame.stereo_quads[i]);
-          layers.push_back(
-              reinterpret_cast<XrCompositionLayerBaseHeader*>(&last_frame.stereo_quads[i]));
-        }
+        const FrameXr::Input::PanelQuad screen = GetScreenQuad();
+        for (XrCompositionLayerQuad& quad : last_frame.ScreenQuads())
+          PlaceScreenLayer(screen, &quad);
+        AddScreenLayers(last_frame.ScreenQuads(), screen.curve_radius, &cylinder_layers, &layers);
       }
       else
       {
@@ -3306,20 +3308,14 @@ bool OpenXRManager::EndPreparedFrameForPacingThread()
   }
 
   XrCompositionLayerProjection projection_layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+  std::array<XrCompositionLayerCylinderKHR, 2> cylinder_layers{};
   std::vector<XrCompositionLayerBaseHeader*> layers;
   if (last_frame.valid)
   {
-    if (last_frame.is_quad)
+    if (last_frame.is_quad || last_frame.is_stereo_quad)
     {
-      layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&last_frame.quad));
-    }
-    else if (last_frame.is_stereo_quad)
-    {
-      for (uint32_t i = 0; i < last_frame.stereo_quad_count; ++i)
-      {
-        layers.push_back(
-            reinterpret_cast<XrCompositionLayerBaseHeader*>(&last_frame.stereo_quads[i]));
-      }
+      AddScreenLayers(last_frame.ScreenQuads(), GetScreenQuad().curve_radius, &cylinder_layers,
+                      &layers);
     }
     else
     {
@@ -3458,8 +3454,14 @@ bool OpenXRManager::LocateViews()
   const XrVector3f& right_eye = m_views[1].pose.position;
   const float eye_distance = std::hypot(right_eye.x - left_eye.x, right_eye.y - left_eye.y,
                                         right_eye.z - left_eye.z);
-  if (eye_distance > 0.04f && eye_distance < 0.09f)
-    m_eye_distance.store(eye_distance, std::memory_order_relaxed);
+  constexpr XrViewStateFlags EYES_TRACKED =
+      XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_POSITION_TRACKED_BIT;
+  const bool eyes_tracked =
+      view_count >= 2 && (view_state.viewStateFlags & EYES_TRACKED) == EYES_TRACKED;
+  m_eye_distance.store(m_ipd.Add(display_time, eye_distance, eyes_tracked),
+                       std::memory_order_relaxed);
+  if (float ipd = 0.0f; m_ipd.TakeLog(ipd))
+    INFO_LOG_FMT(OPENXR, "OpenXR: The eyes are {:.1f} mm apart.", ipd * 1000.0f);
 
   // Diagnostic: log raw xrLocateViews output every ~2 seconds.  We want to know if the
   // OpenXR runtime is actually returning different positions per eye (real IPD) or if
@@ -3597,23 +3599,85 @@ FrameXr::Input::PanelQuad OpenXRManager::GetScreenQuad() const
   quad.height_m = placement.height;
   quad.width_m = placement.height * (aspect > 0.0f ? aspect : 16.0f / 9.0f);
   quad.visible = g_ActiveConfig.vr_flat_screen || g_ActiveConfig.vr_stereo_screen;
+  const int curve = g_ActiveConfig.vr_screen_curve;
+  if (curve > 0 && m_has_cylinder_layers)
+    quad.curve_radius = FrameXr::Input::CurveRadius(quad.width_m, curve);
+  else if (curve > 0 && quad.visible && !m_logged_no_curve.exchange(true))
+    WARN_LOG_FMT(OPENXR, "Screen Curve: the runtime has no cylinder layers, so the screen is flat.");
   return quad;
 }
 
 float OpenXRManager::GetNaturalScreenShift() const
 {
+  // On a curved screen this is the arc, not the chord (as in Azahar for Frame): the picture lies along
+  // the arc, so that is the scale of a shift on it; the chord would put infinity past parallel eyes.
   const float width = GetScreenQuad().width_m;
   return width > 0.0f ? UI::NaturalShift(m_eye_distance.load(std::memory_order_relaxed), width) :
                         0.0f;
 }
 
-void OpenXRManager::PlaceScreenLayer(XrCompositionLayerQuad* layer) const
+void OpenXRManager::PlaceScreenLayer(const FrameXr::Input::PanelQuad& screen,
+                                     XrCompositionLayerQuad* layer) const
 {
-  const FrameXr::Input::PanelQuad quad = GetScreenQuad();
-  const auto& [orientation, position] = quad.pose;
+  const auto& [orientation, position] = screen.pose;
   layer->pose = {{orientation.x, orientation.y, orientation.z, orientation.w},
                  {position.x, position.y, position.z}};
-  layer->size = {quad.width_m, quad.height_m};
+  layer->size = {screen.width_m, screen.height_m};
+}
+
+XrCompositionLayerCylinderKHR MakeCylinderLayer(const XrCompositionLayerQuad& quad, float radius)
+{
+  const auto& [orientation, position] = quad.pose;
+  const FrameXr::Input::Cylinder cylinder = FrameXr::Input::CylinderFor(
+      {{orientation.x, orientation.y, orientation.z, orientation.w},
+       {position.x, position.y, position.z}},
+      quad.size.width, quad.size.height, radius);
+  const FrameXr::Input::Vec3f& axis = cylinder.pose.position;
+
+  XrCompositionLayerCylinderKHR layer{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+  layer.layerFlags = quad.layerFlags;
+  layer.space = quad.space;
+  layer.eyeVisibility = quad.eyeVisibility;
+  layer.subImage = quad.subImage;
+  layer.pose = {orientation, {axis.x, axis.y, axis.z}};
+  layer.radius = cylinder.radius;
+  layer.centralAngle = cylinder.central_angle;
+  layer.aspectRatio = cylinder.aspect_ratio;
+  return layer;
+}
+
+void AddScreenLayers(std::span<XrCompositionLayerQuad> quads, float curve_radius,
+                     std::array<XrCompositionLayerCylinderKHR, 2>* cylinders,
+                     std::vector<XrCompositionLayerBaseHeader*>* layers)
+{
+  for (std::size_t i = 0; i < quads.size(); ++i)
+  {
+    if (curve_radius > 0.0f)
+    {
+      (*cylinders)[i] = MakeCylinderLayer(quads[i], curve_radius);
+      layers->push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&(*cylinders)[i]));
+    }
+    else
+    {
+      layers->push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&quads[i]));
+    }
+  }
+}
+
+bool OpenXRManager::EndScreenFrame(std::span<XrCompositionLayerQuad> quads, float curve_radius)
+{
+  std::array<XrCompositionLayerCylinderKHR, 2> cylinders{};
+  std::vector<XrCompositionLayerBaseHeader*> layers;
+  AddScreenLayers(quads, 0.0f, &cylinders, &layers);
+  if (curve_radius <= 0.0f)
+    return EndFrame(layers);
+
+  // The cached frame holds quads: they are bent as they are submitted.
+  CacheSubmittedFrame(layers);
+  layers.clear();
+  AddScreenLayers(quads, curve_radius, &cylinders, &layers);
+  return EndFrameDetached(m_frame_state.predictedDisplayTime, GetActiveBlendMode(),
+                          m_frame_state.shouldRender == XR_TRUE, layers);
 }
 
 std::unique_ptr<UI::Overlay> IOpenXRSwapchain::CreateUIOverlay(uint32_t, uint32_t)
@@ -3647,7 +3711,8 @@ bool OpenXRManager::SubmitFlatQuadFrame(XrSwapchain swapchain, uint32_t width, u
   m_flat_quad_layer.layerFlags = 0;
   m_flat_quad_layer.space = m_reference_space;
   m_flat_quad_layer.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-  PlaceScreenLayer(&m_flat_quad_layer);
+  const FrameXr::Input::PanelQuad screen = GetScreenQuad();
+  PlaceScreenLayer(screen, &m_flat_quad_layer);
   m_flat_quad_layer.subImage.swapchain = swapchain;
   m_flat_quad_layer.subImage.imageArrayIndex = 0;
   m_flat_quad_layer.subImage.imageRect.offset = {0, 0};
@@ -3660,9 +3725,7 @@ bool OpenXRManager::SubmitFlatQuadFrame(XrSwapchain swapchain, uint32_t width, u
     return true;
   }
 
-  const std::vector<XrCompositionLayerBaseHeader*> layers = {
-      reinterpret_cast<XrCompositionLayerBaseHeader*>(&m_flat_quad_layer)};
-  return EndFrame(layers);
+  return EndScreenFrame({&m_flat_quad_layer, 1}, screen.curve_radius);
 }
 
 bool OpenXRManager::SubmitStereoQuadFrame(std::array<XrSwapchain, 2> swapchains, uint32_t width,
@@ -3674,6 +3737,7 @@ bool OpenXRManager::SubmitStereoQuadFrame(std::array<XrSwapchain, 2> swapchains,
     return IsFrameThreadActive() ? true : EndFrame({});
   }
 
+  const FrameXr::Input::PanelQuad screen = GetScreenQuad();
   std::array<XrCompositionLayerQuad, 2> quad_layers{};
   for (uint32_t eye = 0; eye < 2; ++eye)
   {
@@ -3682,7 +3746,7 @@ bool OpenXRManager::SubmitStereoQuadFrame(std::array<XrSwapchain, 2> swapchains,
     quad_layers[eye].space = m_reference_space;
     quad_layers[eye].eyeVisibility =
         eye == 0 ? XR_EYE_VISIBILITY_LEFT : XR_EYE_VISIBILITY_RIGHT;
-    PlaceScreenLayer(&quad_layers[eye]);
+    PlaceScreenLayer(screen, &quad_layers[eye]);
     quad_layers[eye].subImage.swapchain = swapchains[eye];
     quad_layers[eye].subImage.imageArrayIndex = 0;
     quad_layers[eye].subImage.imageRect.offset = {0, 0};
@@ -3696,10 +3760,7 @@ bool OpenXRManager::SubmitStereoQuadFrame(std::array<XrSwapchain, 2> swapchains,
     return true;
   }
 
-  const std::vector<XrCompositionLayerBaseHeader*> layers = {
-      reinterpret_cast<XrCompositionLayerBaseHeader*>(&quad_layers[0]),
-      reinterpret_cast<XrCompositionLayerBaseHeader*>(&quad_layers[1])};
-  return EndFrame(layers);
+  return EndScreenFrame(quad_layers, screen.curve_radius);
 }
 
 bool IOpenXRSwapchain::SubmitFlatFrame()

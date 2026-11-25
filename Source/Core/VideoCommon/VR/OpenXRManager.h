@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -27,6 +28,7 @@
 #include "Common/Matrix.h"
 #include "Common/VR/OpenXRInputState.h"
 #include "VideoCommon/VR/FrameUI/ScreenPlacement.h"
+#include "VideoCommon/VR/FrameUI/ipd_smoother.h"
 #include "VideoCommon/AbstractFramebuffer.h"
 
 // OpenXRManager owns the XrInstance, XrSystemId, XrSession, and reference XrSpace.
@@ -326,11 +328,14 @@ public:
   // ---- The virtual screen (vr_flat_screen, vr_stereo_screen) ----
   // Any thread. The one description of where the screen is, for the layers and for pointing at it.
 
-  // As it is shown now; not visible in Immersive VR.
+  // As it is shown now; not visible in Immersive VR. Its curve_radius is above 0 when it is curved
+  // (Screen Curve): its width is then along the arc.
   FrameXr::Input::PanelQuad GetScreenQuad() const;
   // Each eye's shift at infinity for natural 3D on that screen, in NDC: there the two pictures are
   // the eyes' own distance apart. Any thread.
   float GetNaturalScreenShift() const;
+  // The runtime has cylinder layers, so Screen Curve works.
+  bool CanCurveScreen() const { return m_has_cylinder_layers; }
   UI::ScreenAnchor GetScreenAnchor() const;
   UI::ScreenPlacement GetScreenPlacement() const;
   // Until the settings change. The caller saves it to them.
@@ -547,7 +552,10 @@ private:
   void DestroyInputActions();
   void UpdateInputActions();
   void UpdateUI(std::array<Common::VR::OpenXRControllerState, 2>* controllers);
-  void PlaceScreenLayer(XrCompositionLayerQuad* layer) const;
+  void PlaceScreenLayer(const FrameXr::Input::PanelQuad& screen,
+                        XrCompositionLayerQuad* layer) const;
+  // Without the pacing thread.
+  bool EndScreenFrame(std::span<XrCompositionLayerQuad> quads, float curve_radius);
   void LogStall(u64 stalled_us) const;
   void UpdateStopConfirmationInput(
       const std::array<Common::VR::OpenXRControllerState, 2>& controllers);
@@ -595,6 +603,9 @@ private:
   IOpenXRSwapchain* m_swapchain = nullptr;
 
   std::vector<std::string> m_enabled_extensions;
+  // XR_KHR_composition_layer_cylinder is enabled. Set with the instance.
+  bool m_has_cylinder_layers = false;
+  mutable std::atomic<bool> m_logged_no_curve{false};
   std::string m_runtime_name;
   std::string m_system_name;
   // Cached IsQuestOrVirtualDesktopRuntime() result. Derived from the runtime/system names
@@ -721,6 +732,12 @@ private:
     XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
     std::array<XrCompositionLayerQuad, 2> stereo_quads{};
     uint32_t stereo_quad_count = 0;
+
+    // The virtual screen's quads, when it is one of those.
+    std::span<XrCompositionLayerQuad> ScreenQuads()
+    {
+      return is_quad ? std::span(&quad, 1) : std::span(stereo_quads.data(), stereo_quad_count);
+    }
   };
 
   std::thread m_frame_thread;
@@ -817,8 +834,9 @@ private:
   // access is synchronized because OpenXR input sampling runs on the pacing thread. The
   // composition layer member gives stable storage across xrEndFrame calls that reference it.
   std::atomic<float> m_flat_screen_aspect{16.0f / 9.0f};
-  // Metres between the eyes (LocateViews).
-  std::atomic<float> m_eye_distance{0.063f};
+  // Metres between the eyes: m_ipd's value, for any thread. m_ipd belongs to LocateViews' thread.
+  FrameXr::Ipd::Smoother m_ipd;
+  std::atomic<float> m_eye_distance{FrameXr::Ipd::kFallbackM};
   std::atomic<bool> m_flat_screen_reanchor_pending{false};
   mutable std::mutex m_flat_screen_pose_mutex;
   bool m_screen_anchor_valid = false;
@@ -828,6 +846,14 @@ private:
   mutable UI::ScreenPlacement m_screen_placement_config;
   XrCompositionLayerQuad m_flat_quad_layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
 };
+
+// The quad layer bent to `radius`: the same picture, place, size along the arc, eyes and flags.
+XrCompositionLayerCylinderKHR MakeCylinderLayer(const XrCompositionLayerQuad& quad, float radius);
+// The virtual screen's layers for xrEndFrame: the quads themselves, or `cylinders` made from them when
+// the screen is curved.
+void AddScreenLayers(std::span<XrCompositionLayerQuad> quads, float curve_radius,
+                     std::array<XrCompositionLayerCylinderKHR, 2>* cylinders,
+                     std::vector<XrCompositionLayerBaseHeader*>* layers);
 
 // Global instance — created by the backend during VideoBackend::Initialize().
 extern std::unique_ptr<OpenXRManager> g_openxr;
