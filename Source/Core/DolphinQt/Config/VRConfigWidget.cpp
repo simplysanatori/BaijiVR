@@ -4,6 +4,8 @@
 #include "DolphinQt/Config/VRConfigWidget.h"
 
 #include <fstream>
+#include <map>
+#include <optional>
 #include <sstream>
 #include <utility>
 
@@ -89,6 +91,65 @@ public:
 
   void Load(Config::Layer* layer) override
   {
+    LoadFiles(layer);
+    m_known = GetValues(*layer);
+  }
+
+  // Since they were loaded or saved here.
+  bool IsFileChanged() const { return GetValues(*ReadFiles()) != m_known; }
+
+  // Only what was changed here goes into the file: the rest is what the file has by now.
+  void Save(Config::Layer* layer) override
+  {
+    if (m_global)
+      return;
+
+    const Values mine = GetValues(*layer);
+    const auto changed = [&](const Config::Location& location) {
+      const auto in = [&location](const Values& values) {
+        const auto it = values.find(location);
+        return it == values.end() ? std::nullopt : std::optional<std::string>(it->second);
+      };
+      return in(mine) != in(m_known);
+    };
+    const Values files = GetValues(*ReadFiles());
+    for (const auto& [location, value] : files)
+    {
+      if (!changed(location))
+        layer->Set(location, value);
+    }
+    for (const auto& [location, value] : mine)
+    {
+      if (!files.contains(location) && !changed(location))
+        layer->DeleteKey(location);
+    }
+    m_known = GetValues(*layer);
+    Write(*layer);
+  }
+
+private:
+  using Values = std::map<Config::Location, std::string>;
+
+  static Values GetValues(const Config::Layer& layer)
+  {
+    Values values;
+    for (const auto& [location, value] : layer.GetLayerMap())
+    {
+      if (value)
+        values.emplace(location, *value);
+    }
+    return values;
+  }
+
+  std::unique_ptr<Config::Layer> ReadFiles() const
+  {
+    auto layer = std::make_unique<Config::Layer>(GetLayer());
+    LoadFiles(layer.get());
+    return layer;
+  }
+
+  void LoadFiles(Config::Layer* layer) const
+  {
     Common::IniFile ini;
     const std::string directory = m_global ? File::GetSysDirectory() + GAMESETTINGSVR_DIR DIR_SEP :
                                              File::GetUserPath(D_GAMESETTINGSVR_IDX);
@@ -123,11 +184,8 @@ public:
     }
   }
 
-  void Save(Config::Layer* layer) override
+  void Write(const Config::Layer& layer) const
   {
-    if (m_global)
-      return;
-
     const std::string path = GetSavePath();
     std::string base = ReadFileWithoutVRSettingsSections(path);
     while (!base.empty() &&
@@ -142,7 +200,7 @@ public:
     out << base;
     bool wrote_header = false;
 
-    for (const auto& [location, value] : layer->GetLayerMap())
+    for (const auto& [location, value] : layer.GetLayerMap())
     {
       if (location.system != Config::System::GFX || location.section != "VR" || !value ||
           location.key == "ARMode" || location.key == "AutoVBIFromHMD")
@@ -170,7 +228,6 @@ public:
     file << contents;
   }
 
-private:
   static void LoadSection(Config::Layer* layer, const Common::IniFile::Section* section)
   {
     if (!section)
@@ -196,6 +253,7 @@ private:
   const std::string m_game_id;
   const std::optional<u16> m_revision;
   const bool m_global;
+  Values m_known;
 };
 
 void ResetTabPages(QTabWidget* tab)
@@ -235,11 +293,12 @@ bool HasTab(const QTabWidget* tab, const QString& name)
 
 VRConfigWidget::VRConfigWidget(std::string game_id, std::optional<u16> revision, QWidget* parent)
     : QWidget(parent), m_game_id(std::move(game_id)), m_revision(revision),
-      m_layer(std::make_unique<Config::Layer>(
-          std::make_unique<VRGameConfigLayerLoader>(m_game_id, m_revision, false))),
       m_global_layer(std::make_unique<Config::Layer>(
           std::make_unique<VRGameConfigLayerLoader>(m_game_id, m_revision, true)))
 {
+  auto loader = std::make_unique<VRGameConfigLayerLoader>(m_game_id, m_revision, false);
+  m_is_file_changed = [loader = loader.get()] { return loader->IsFileChanged(); };
+  m_layer = std::make_unique<Config::Layer>(std::move(loader));
   CreateWidgets();
   m_saved_layer_state = GetLayerState();
 
@@ -351,12 +410,21 @@ void VRConfigWidget::CreateWidgets()
 
 void VRConfigWidget::SaveSettings()
 {
-  const std::string layer_state = GetLayerState();
-  if (layer_state == m_saved_layer_state)
+  if (GetLayerState() == m_saved_layer_state)
+  {
+    // The VR menu changed it: the controls show it, and it is not what they save.
+    if (m_is_file_changed())
+    {
+      m_layer->DeleteAllKeys();
+      m_layer->Load();
+      m_saved_layer_state = GetLayerState();
+      Config::OnConfigChanged();
+    }
     return;
+  }
 
   m_layer->Save();
-  m_saved_layer_state = layer_state;
+  m_saved_layer_state = GetLayerState();
   if (SConfig::GetInstance().GetGameID() == m_game_id)
     SConfig::GetInstance().ReloadGameVRConfigOverrides();
 }

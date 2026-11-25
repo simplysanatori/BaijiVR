@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -41,6 +42,8 @@ private:
   std::unique_ptr<Config::Layer> m_layer;
   std::unique_ptr<Config::Layer> m_global_layer;
   std::string m_saved_layer_state;
+  // The VR menu changes the running game's file, too.
+  std::function<bool()> m_is_file_changed;
 
   QTabWidget* m_default_tab = nullptr;
   QTabWidget* m_local_tab = nullptr;
