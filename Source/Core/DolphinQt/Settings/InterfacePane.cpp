@@ -349,8 +349,7 @@ void InterfacePane::AddDescriptions()
                  "<br><br><dolphin_emphasis>If unsure, leave this checked.</dolphin_emphasis>");
   static constexpr char TR_USE_COVERS_DESCRIPTION[] =
       QT_TR_NOOP("Downloads game covers from GameTDB.com, or from libretro-thumbnails on GitHub, for "
-                 "the Grid View, and for games in the List View that have no banner. The game's ID "
-                 "or its file name is sent."
+                 "the VR menu. The game's ID or its file name is sent."
                  "<br><br><dolphin_emphasis>If unsure, leave this checked.</dolphin_emphasis>");
   static constexpr char TR_DISABLE_SCREENSAVER_DESCRIPTION[] =
       QT_TR_NOOP("Disables your screensaver while running a game."

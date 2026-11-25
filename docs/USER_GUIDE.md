@@ -66,7 +66,9 @@ Remove the `baiji-vr` shortcut from your Steam library by hand.
 
 ### Box art
 
-Covers come from GameTDB, or else libretro-thumbnails. **View** > **Grid View** shows them as a grid.
+The covers in the VR menu come from GameTDB, or else libretro-thumbnails.
+
+The list and **View** > **Grid View** show the games' own banners. A Wii game has one once it has a save.
 
 ### Mods and texture packs
 

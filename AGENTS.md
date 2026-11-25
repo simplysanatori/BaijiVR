@@ -50,10 +50,13 @@
 - A dual-core FIFO reset must not run beside the GPU thread: `CommandProcessor` flushes it after reads are turned
   off and before CTRL turns them off, and `ProcessorInterface` waits for the buffer reset. Path of Radiance's own
   GPU watchdog, which halts the game, is patched off in `GFEE01.ini`.
-- Box art is `UICommon/GameCovers.*`, cached per game ID in `Cache/GameCovers/` for the list, the Grid
-  View and the VR UI.
+- Box art is `UICommon/GameCovers.*`, cached per game ID in `Cache/GameCovers/`, for the VR UI. The Qt list and
+  Grid View use the games' banners.
 - In Game Mode every Qt window is fitted to the main window by `DolphinQt/GameModeWindows.*`
   (`Common/WindowFit.h`). The default style is the dark gray Fusion one.
+- Game Mode's window: `DolphinQt/GamepadNavigation.*` is the controller in it (`Common/ListNav.h` has the rules), and
+  `DolphinQt/TheaterDock.*` keeps it in SteamVR's theater with `vrcmd`, which is a request to the running SteamVR
+  (`[Interface] TheaterDock`, 0 is off). A VR game starts once the window is out of it.
 - XR heartbeat (Frame Pacing in the UI) is `GFX_VR_EAGER_HEARTBEAT` (`Graphics.VR.EagerHeartbeat`), declared
   in `GraphicsSettings.cpp` and loaded in `VideoConfig.cpp`. `true` is Eager (submit
   each HMD refresh, reusing the last frame); `false` is Lazy (pace submissions to game
@@ -220,8 +223,8 @@ is Baiji's README as it was at 75d194fd95 and is not edited.
 - The two screen options of Immersive are defaults, not locks, and bundled game profiles do not replace them.
 - Licences: Dolphin's files are GPL-2.0-or-later. Files that follow Azahar for Frame's say GPL-3.0-or-later in their
   first lines (`DynamicResolutionController.h`, `WindowFit.h`, `GameModeWindows.*`, `GameMods/Install.cpp`, `VrMenu.*`, `VrUi.cpp`,
-  `PadEdit.*`, `GrabHint.h`, `list_scroll.*`, `ipd_smoother.h`, `cylinder_layer.h`, `ListNav.h`), so a
-  build as a whole is GPL-3.0-or-later. Keep those notices when the files change.
+  `PadEdit.*`, `GrabHint.h`, `list_scroll.*`, `ipd_smoother.h`, `cylinder_layer.h`, `ListNav.h`, `GamepadNavigation.*`,
+  `TheaterOverlay.h`, `TheaterDock.*`), so a build as a whole is GPL-3.0-or-later. Keep those notices when the files change.
 - Testing: unit tests (`VRFrameUITest`, `GameModsTest`, `DynamicResolutionTest`), and games on a desktop with a
   simulated headset. Headset results are the owner's to confirm.
 
