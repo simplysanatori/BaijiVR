@@ -29,6 +29,7 @@
 #include "Common/VR/OpenXRInputState.h"
 #include "VideoCommon/VR/FrameUI/ScreenPlacement.h"
 #include "VideoCommon/VR/FrameUI/ipd_smoother.h"
+#include "VideoCommon/VR/FrameUI/toast_corner.h"
 #include "VideoCommon/AbstractFramebuffer.h"
 
 // OpenXRManager owns the XrInstance, XrSystemId, XrSession, and reference XrSpace.
@@ -332,6 +333,8 @@ public:
   // ---- The virtual screen (vr_flat_screen, vr_stereo_screen) ----
   // Any thread. The one description of where the screen is, for the layers and for pointing at it.
 
+  // Pacing thread: both eyes at the next refresh. Empty: not tracked.
+  std::optional<std::array<FrameXr::Vis::EyeFov, 2>> LocateEyes() const;
   // As it is shown now; not visible in Immersive VR. Its curve_radius is above 0 when it is curved
   // (Screen Curve): its width is then along the arc.
   FrameXr::Input::PanelQuad GetScreenQuad() const;

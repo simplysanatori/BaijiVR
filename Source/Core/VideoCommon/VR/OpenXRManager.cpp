@@ -3608,6 +3608,39 @@ void OpenXRManager::ResetScreenPlacement()
                       Config::GFX_VR_SCREEN_PITCH.GetDefaultValue()});
 }
 
+std::optional<std::array<FrameXr::Vis::EyeFov, 2>> OpenXRManager::LocateEyes() const
+{
+  XrViewLocateInfo info{XR_TYPE_VIEW_LOCATE_INFO};
+  info.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+  info.displayTime = m_frame_state.predictedDisplayTime;
+  info.space = m_reference_space;
+  XrViewState state{XR_TYPE_VIEW_STATE};
+  std::array<XrView, 2> views;
+  views.fill({XR_TYPE_VIEW});
+  u32 count = 0;
+  constexpr XrViewStateFlags VALID =
+      XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
+  if (XR_FAILED(xrLocateViews(m_session, &info, &state, static_cast<u32>(views.size()), &count,
+                              views.data())) ||
+      count != views.size() || (state.viewStateFlags & VALID) != VALID)
+  {
+    return std::nullopt;
+  }
+  std::array<FrameXr::Vis::EyeFov, 2> eyes;
+  for (std::size_t i = 0; i < eyes.size(); ++i)
+  {
+    const auto& [orientation, position] = views[i].pose;
+    const XrFovf& fov = views[i].fov;
+    eyes[i] = {{{orientation.x, orientation.y, orientation.z, orientation.w},
+                {position.x, position.y, position.z}},
+               fov.angleLeft,
+               fov.angleRight,
+               fov.angleUp,
+               fov.angleDown};
+  }
+  return eyes;
+}
+
 FrameXr::Input::PanelQuad OpenXRManager::GetScreenQuad() const
 {
   const UI::ScreenPlacement placement = GetScreenPlacement();

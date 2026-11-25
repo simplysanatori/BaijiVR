@@ -102,16 +102,22 @@ constexpr float FAST_FORWARD_SPEED = 2.0f;
 
 std::atomic<bool> s_paused_by_menu{false};
 std::mutex s_toast_mutex;
-std::optional<std::pair<std::string, u32>> s_toast;
+struct PostedToast
+{
+  std::string text;
+  u32 ms = 0;
+  bool brief = false;
+};
+std::optional<PostedToast> s_toast;
 // After the next toast that is posted.
-std::optional<std::pair<std::string, u32>> s_next_toast;
+std::optional<PostedToast> s_next_toast;
 bool s_next_toast_ready = false;
 
 // After the one that is shown.
 void PostNextToast(std::string text, u32 ms)
 {
   std::lock_guard lock(s_toast_mutex);
-  s_next_toast.emplace(std::move(text), ms);
+  s_next_toast = PostedToast{std::move(text), ms};
   s_next_toast_ready = true;
 }
 
@@ -228,7 +234,7 @@ void ShowSaveStateNotice()
     return;
   Config::SetBaseOrCurrent(Config::MAIN_SAVE_STATE_NOTICE_SHOWN, true);
   std::lock_guard lock(s_toast_mutex);
-  s_next_toast.emplace("Save states are NOT a replacement for saving in the game", 5000);
+  s_next_toast = PostedToast{"Save states are NOT a replacement for saving in the game", 5000};
   s_next_toast_ready = false;
 }
 
@@ -436,7 +442,14 @@ VrUi::~VrUi()
 void VrUi::PostToast(std::string text, u32 ms)
 {
   std::lock_guard lock(s_toast_mutex);
-  s_toast.emplace(std::move(text), ms);
+  s_toast = PostedToast{std::move(text), ms};
+  s_next_toast_ready = true;
+}
+
+void VrUi::PostBriefToast(std::string text)
+{
+  std::lock_guard lock(s_toast_mutex);
+  s_toast = PostedToast{std::move(text), 2000, true};
   s_next_toast_ready = true;
 }
 
@@ -451,15 +464,15 @@ void VrUi::PostEmulatorMessage(std::string_view message, u32 ms)
   if (!saved && !loaded)
     PostToast(std::string(message.substr(0, message.find('\n'))), ms);
   else if (message.contains(QUICK_SAVE_SUFFIX))
-    PostToast(saved ? "Quick Saved" : "Quick Loaded", 2000);
+    PostBriefToast(saved ? "Quick Saved" : "Quick Loaded");
   else if (message == "Autosaved")
-    PostToast("Autosaved", 1500);
+    PostToast("Autosaved", 2000);
   else if (message.contains(Autosave::FILE_MARK))
-    PostToast("Autosave Loaded", 2000);
+    PostBriefToast("Autosave Loaded");
   else if (const int slot = GetSlotOf(message))
-    PostToast(fmt::format(fmt::runtime(saved ? "Saved to Slot {}" : "Slot {} Loaded"), slot), 2000);
+    PostBriefToast(fmt::format(fmt::runtime(saved ? "Saved to Slot {}" : "Slot {} Loaded"), slot));
   else
-    PostToast(saved ? "State Saved" : "State Loaded", 2000);
+    PostBriefToast(saved ? "State Saved" : "State Loaded");
 }
 
 bool VrUi::IsActive() const
@@ -542,14 +555,14 @@ void VrUi::HandleEvents(const PadEvents& events)
   if (events.reset_screen && !m_frame.has_screen)
   {
     m_manager->RequestRecenter();
-    ShowToast("View Reset", ToastFit::kShortNs);
+    ShowBriefToast("View Reset");
   }
   else if (events.reset_screen)
   {
     m_manager->ResetScreenPlacement();
     SaveScreenPlacement();
     m_manager->RequestFlatScreenReanchor();
-    ShowToast("Screen Reset", ToastFit::kShortNs);
+    ShowBriefToast("Screen Reset");
   }
   if (events.stop)
   {
@@ -572,7 +585,7 @@ void VrUi::SetFastForward(bool on)
   m_fast_forward = on;
   m_menu.fast_forward = on;
   QueueFastForward(on);
-  ShowToast(on ? "Fast Forward" : "Normal Speed", ToastFit::kShortNs);
+  ShowBriefToast(on ? "Fast Forward" : "Normal Speed");
 }
 
 void VrUi::SwitchMode()
@@ -589,8 +602,8 @@ void VrUi::LoadState(std::string path, std::string undo_label, s64 time)
     if (!File::Exists(path))
     {
       s_load_failed = true;
-      VrUi::PostToast(path.ends_with(QUICK_SAVE_SUFFIX) ? "No Quick Save" : "Save State Not Found",
-                      1500);
+      VrUi::PostBriefToast(path.ends_with(QUICK_SAVE_SUFFIX) ? "No Quick Save" :
+                                                                "Save State Not Found");
       return;
     }
     State::LoadAs(system, path);
@@ -1595,7 +1608,7 @@ void VrUi::Activate(const MenuWidget& widget, int option)
     m_menu.undo_load.clear();
     Core::QueueHostJob([](Core::System& system) {
       State::UndoLoadState(system);
-      VrUi::PostToast("Load Undone", 2000);
+      VrUi::PostBriefToast("Load Undone");
     });
     CloseMenu();
     break;
@@ -1848,11 +1861,34 @@ void VrUi::ShowToast(std::string text, s64 duration_ns)
   m_toast_scale = distance / TOAST_DISTANCE;
   m_toast_pose = PlaceAhead(distance, TOAST_DROP * m_toast_scale);
   m_toast_until_ns = m_frame.time_ns + duration_ns;
+  m_toast_corner = false;
+}
+
+FrameXr::Vis::Toast::Placed VrUi::GetToastCorner() const
+{
+  const PanelQuad screen = m_manager->GetScreenQuad();
+  const float aspect = static_cast<float>(m_toast_boxes[TOAST_ROW].box_px) / ToastFit::kRowPx;
+  return FrameXr::Vis::Toast::OnScreen(screen.pose, screen.width_m, screen.height_m,
+                                       screen.curve_radius, aspect);
+}
+
+void VrUi::ShowBriefToast(std::string text)
+{
+  if (!g_ActiveConfig.vr_stereo_screen)
+  {
+    ShowToast(std::move(text), ToastFit::kShortNs);
+    return;
+  }
+  ShowToast(std::move(text), ToastFit::kBriefNs);
+  if (!m_frame.head_valid || m_toast_until_ns == 0 || m_menu_open)
+    return;
+  const auto eyes = m_manager->LocateEyes();
+  m_toast_corner = eyes && FrameXr::Vis::Toast::InView(*eyes, GetToastCorner());
 }
 
 void VrUi::UpdateToasts(const Frame& frame)
 {
-  std::optional<std::pair<std::string, u32>> posted;
+  std::optional<PostedToast> posted;
   {
     std::lock_guard lock(s_toast_mutex);
     posted = std::exchange(s_toast, std::nullopt);
@@ -1861,9 +1897,12 @@ void VrUi::UpdateToasts(const Frame& frame)
   }
   if (posted && g_ActiveConfig.vr_toasts)
   {
-    const s64 duration = std::clamp<s64>(s64{posted->second} * 1'000'000, ToastFit::kShortNs,
+    const s64 duration = std::clamp<s64>(s64{posted->ms} * 1'000'000, ToastFit::kShortNs,
                                          ToastFit::kLongNs);
-    ShowToast(std::move(posted->first), duration);
+    if (posted->brief)
+      ShowBriefToast(std::move(posted->text));
+    else
+      ShowToast(std::move(posted->text), duration);
   }
   if (frame.time_ns >= m_toast_until_ns)
     m_toast_until_ns = 0;
@@ -1975,8 +2014,14 @@ void VrUi::BuildLayers(XrSpace space, std::size_t game_layers,
     if (m_toast_until_ns != 0)
     {
       const ToastFit::Box& box = m_toast_boxes[TOAST_ROW];
-      AddQuad(Group::Toast, *m_toasts, m_toast_pose, box.width_m * m_toast_scale,
-              box.height_m * m_toast_scale, row_rect(TOAST_ROW));
+      // Not on that screen any more, or under the menu: ahead, as it was when it appeared.
+      m_toast_corner = m_toast_corner && g_ActiveConfig.vr_stereo_screen && !m_menu_open;
+      const FrameXr::Vis::Toast::Placed toast =
+          m_toast_corner ? GetToastCorner() :
+                           FrameXr::Vis::Toast::Placed{m_toast_pose, box.width_m * m_toast_scale,
+                                                       box.height_m * m_toast_scale};
+      AddQuad(Group::Toast, *m_toasts, toast.pose, toast.width, toast.height,
+              row_rect(TOAST_ROW));
     }
     if (m_hint != Hint::None && m_hint == m_hint_drawn && m_frame.head_valid)
     {

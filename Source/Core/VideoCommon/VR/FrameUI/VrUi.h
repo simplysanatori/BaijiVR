@@ -27,6 +27,7 @@
 #include "VideoCommon/VR/FrameUI/beam.h"
 #include "VideoCommon/VR/FrameUI/layer_slots.h"
 #include "VideoCommon/VR/FrameUI/list_scroll.h"
+#include "VideoCommon/VR/FrameUI/toast_corner.h"
 #include "VideoCommon/VR/FrameUI/toast_fit.h"
 #include "VideoCommon/VR/FrameUI/ui_canvas.h"
 
@@ -81,6 +82,9 @@ public:
 
   // Any thread: a message in the headset for `ms`. A newer one replaces it.
   static void PostToast(std::string text, u32 ms);
+  // The same for the answer to a press, whose effect shows: in Stereoscopic 3D it is short, in the
+  // screen's corner (toast_corner.h).
+  static void PostBriefToast(std::string text);
   // The same for one of the emulator's own messages: shorter, and without its progress.
   static void PostEmulatorMessage(std::string_view message, u32 ms);
 
@@ -151,6 +155,8 @@ private:
   // Says when a download is done, the menu open or not.
   void WatchInstall();
   void ShowToast(std::string text, s64 duration_ns);
+  void ShowBriefToast(std::string text);
+  FrameXr::Vis::Toast::Placed GetToastCorner() const;
   void SaveScreenPlacement();
 
   FrameXr::Input::PanelQuad GetMenuQuad() const;
@@ -256,6 +262,7 @@ private:
   s64 m_toast_until_ns = 0;
   FrameXr::Input::Posef m_toast_pose;
   float m_toast_scale = 1.0f;
+  bool m_toast_corner = false;
   Hint m_hint = Hint::None;
   Hint m_hint_drawn = Hint::None;
   bool m_toasts_dirty = false;

@@ -339,6 +339,8 @@ if(ENABLE_VR)
     VR/FrameUI/md3.cpp
     VR/FrameUI/stats_place.cpp
     VR/FrameUI/stats_place.h
+    VR/FrameUI/toast_corner.cpp
+    VR/FrameUI/toast_corner.h
     VR/FrameUI/stb_truetype.cpp
     VR/FrameUI/ui_canvas.cpp
     VR/FrameUI/ui_ttf.cpp
