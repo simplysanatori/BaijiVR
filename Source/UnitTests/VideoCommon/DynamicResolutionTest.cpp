@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include "VideoCommon/VR/Perf/DynamicResolutionController.h"
+#include "VideoCommon/VR/Perf/VRPerf.h"
 
 using namespace VR::DynamicResolution;
 
@@ -480,4 +481,20 @@ TEST(DynamicResolution, ImmersiveHasItsOwnPlaceInTheStore)
   EXPECT_EQ(StoreKey("", true), "");
   const ScaleStore store{{StoreKey("GM4E01", true), 4}, {StoreKey("GM4E01", false), 3}};
   EXPECT_EQ(ParseStore(FormatStore(store)), store);
+}
+
+TEST(DynamicResolution, ImmersiveGpuTimeLeavesOutTheWaitBetweenTheEyes)
+{
+  using VR::Perf::GpuBusyUs;
+  // The first eye's work was done before the last eye was submitted: the gap is not the GPU's.
+  EXPECT_EQ(GpuBusyUs(1000, 4000, 9000, 9500), 3500u);
+  // Still at it when the last eye came: all of it.
+  EXPECT_EQ(GpuBusyUs(1000, 9200, 9000, 9500), 8500u);
+  EXPECT_EQ(GpuBusyUs(1000, 9000, 9000, 9500), 8500u);
+  // One submit for both eyes.
+  EXPECT_EQ(GpuBusyUs(1000, 4000, 1000, 4001), 3001u);
+  // Clocks that make no sense count as the whole, or nothing.
+  EXPECT_EQ(GpuBusyUs(1000, 900, 2000, 3000), 2000u);
+  EXPECT_EQ(GpuBusyUs(1000, 1500, 4000, 3000), 2000u);
+  EXPECT_EQ(GpuBusyUs(3000, 3500, 4000, 2000), 0u);
 }

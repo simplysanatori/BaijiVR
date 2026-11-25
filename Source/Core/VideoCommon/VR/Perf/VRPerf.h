@@ -46,6 +46,21 @@ struct Second
 // Whether anything wants Immersive's GPU time (Stereoscopic 3D's is always there). Video thread.
 bool WantsGpuTime();
 
+// Immersive's GPU time for a frame whose eye images go into the queue one after the other: the work up
+// to the first eye's submit was done at `first_done_us`, the rest, submitted at `last_submit_us`, at
+// `last_done_us`. The time between the two that the GPU had nothing of this frame's is left out.
+constexpr u64 GpuBusyUs(u64 first_submit_us, u64 first_done_us, u64 last_submit_us, u64 last_done_us)
+{
+  if (last_done_us <= first_submit_us)
+    return 0;
+  if (first_done_us <= first_submit_us || first_done_us >= last_submit_us ||
+      last_submit_us > last_done_us)
+  {
+    return last_done_us - first_submit_us;
+  }
+  return (first_done_us - first_submit_us) + (last_done_us - last_submit_us);
+}
+
 void AddGpuFrame(u64 us);
 void CountSkippedPair();
 void AddGpuWait(u64 us);

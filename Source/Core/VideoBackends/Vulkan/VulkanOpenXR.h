@@ -207,9 +207,8 @@ private:
   XRVkLayeredSwapchain m_layered_swapchain{};
   std::unique_ptr<VulkanOpenXRConfirmationOverlay> m_stop_confirmation_overlay;
 
-  // Made when it is first wanted. The video thread's, as the time of the frame's first eye submit (0: none).
+  // Made when it is first wanted. The video thread's.
   std::unique_ptr<VulkanGpuTimer> m_gpu_timer;
-  u64 m_eye_submit_us = 0;
 
   // Image index selected by xrAcquireSwapchainImage for the current frame.
   std::array<uint32_t, 2> m_acquired_image_index{0, 0};

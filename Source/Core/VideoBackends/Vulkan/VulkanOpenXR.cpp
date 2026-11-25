@@ -14,6 +14,7 @@
 #include <array>
 #include <atomic>
 #include <cfloat>
+#include <chrono>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -125,59 +126,77 @@ static void AppendOptionalOpenXRExtensions(std::vector<const char*>* extensions)
 }
 }  // namespace
 
-// Immersive submits its eye images without waiting for them. This says when the GPU is done: a batch with
-// nothing in it but a fence goes into the queue after them (a fence of vkQueueSubmit signals once all the
-// work before it in the queue has completed), and a thread of its own waits for that with no lock held.
+// Immersive submits its eye images without waiting for them. This says how long the GPU was at them: a
+// batch with nothing in it but a fence goes into the queue after each eye's submit (a fence of
+// vkQueueSubmit signals once all the work before it in the queue has completed), and a thread of its own
+// waits for the two with no lock held. Two fences, because the second eye is only submitted after
+// xrReleaseSwapchainImage, xrAcquireSwapchainImage and xrWaitSwapchainImage: the time the GPU sat idle
+// while the runtime kept the video thread there is not the GPU's (VR::Perf::GpuBusyUs).
 class VulkanGpuTimer
 {
 public:
   VulkanGpuTimer()
   {
     const VkFenceCreateInfo info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    const VkResult res =
-        vkCreateFence(g_vulkan_context->GetDevice(), &info, nullptr, &m_fence);
-    if (res != VK_SUCCESS)
+    for (VkFence& fence : m_fences)
     {
-      LOG_VULKAN_ERROR(res, "vkCreateFence failed (GPU time): ");
-      m_fence = VK_NULL_HANDLE;
-      return;
+      const VkResult res = vkCreateFence(g_vulkan_context->GetDevice(), &info, nullptr, &fence);
+      if (res != VK_SUCCESS)
+      {
+        LOG_VULKAN_ERROR(res, "vkCreateFence failed (GPU time): ");
+        fence = VK_NULL_HANDLE;
+        return;
+      }
     }
     m_thread = std::thread(&VulkanGpuTimer::Run, this);
   }
 
-  // After the GPU is idle (the fence may have been left in the queue).
+  // After the GPU is idle (a fence may have been left in the queue).
   ~VulkanGpuTimer()
   {
     Stop();
-    if (m_fence != VK_NULL_HANDLE)
-      vkDestroyFence(g_vulkan_context->GetDevice(), m_fence, nullptr);
+    for (const VkFence fence : m_fences)
+    {
+      if (fence != VK_NULL_HANDLE)
+        vkDestroyFence(g_vulkan_context->GetDevice(), fence, nullptr);
+    }
   }
 
-  // Video thread, right after the submit of the frame's last eye image.
-  void EndFrame(u64 submit_us)
+  // Video thread, right after the submit of the frame's first eye image.
+  void BeginFrame(u64 submit_us)
   {
     if (!m_thread.joinable())
       return;
+    if (std::exchange(m_frame_open, false))
+    {
+      // The frame before never had its last eye image: the thread stops waiting for it.
+      m_last.store(Last::None, std::memory_order_release);
+      m_last_event.Set();
+    }
     if (m_busy.load(std::memory_order_acquire))
     {
       VR::Perf::CountSkippedPair();
       return;
     }
-
-    VkResult res;
-    {
-      auto queue_lock = g_command_buffer_mgr->AcquireQueueLock();
-      res = vkQueueSubmit(g_vulkan_context->GetGraphicsQueue(), 0, nullptr, m_fence);
-    }
-    if (res != VK_SUCCESS)
-    {
-      // A lost device is found by the next submit of the game's own work.
-      LOG_VULKAN_ERROR(res, "vkQueueSubmit failed (GPU time): ");
+    if (!Submit(m_fences[0]))
       return;
-    }
-    m_submit_us = submit_us;
+    m_first_submit_us = submit_us;
+    m_last.store(Last::NotYet, std::memory_order_release);
+    m_last_event.Reset();
+    m_frame_open = true;
     m_busy.store(true, std::memory_order_release);
     m_wake.Set();
+  }
+
+  // Video thread, right after the submit of the frame's last eye image.
+  void EndFrame(u64 submit_us)
+  {
+    if (!std::exchange(m_frame_open, false))
+      return;
+    const bool submitted = Submit(m_fences[1]);
+    m_last_submit_us = submit_us;
+    m_last.store(submitted ? Last::Submitted : Last::None, std::memory_order_release);
+    m_last_event.Set();
   }
 
   void Stop()
@@ -186,11 +205,45 @@ public:
       return;
     m_stop.store(true, std::memory_order_release);
     m_wake.Set();
+    m_last_event.Set();
     m_thread.join();
   }
 
 private:
   static constexpr u64 STOP_POLL_NS = 100'000'000;
+
+  enum class Last
+  {
+    NotYet,
+    Submitted,
+    None,
+  };
+
+  static bool Submit(VkFence fence)
+  {
+    VkResult res;
+    {
+      auto queue_lock = g_command_buffer_mgr->AcquireQueueLock();
+      res = vkQueueSubmit(g_vulkan_context->GetGraphicsQueue(), 0, nullptr, fence);
+    }
+    // A lost device is found by the next submit of the game's own work.
+    if (res != VK_SUCCESS)
+      LOG_VULKAN_ERROR(res, "vkQueueSubmit failed (GPU time): ");
+    return res == VK_SUCCESS;
+  }
+
+  // False: stopped, or the device is lost.
+  bool WaitFor(VkFence fence)
+  {
+    VkResult res;
+    do
+    {
+      res = vkWaitForFences(g_vulkan_context->GetDevice(), 1, &fence, VK_TRUE, STOP_POLL_NS);
+    } while (res == VK_TIMEOUT && !m_stop.load(std::memory_order_acquire));
+    if (res != VK_SUCCESS && res != VK_TIMEOUT)
+      LOG_VULKAN_ERROR(res, "Waiting for the GPU time's fence failed: ");
+    return res == VK_SUCCESS;
+  }
 
   void Run()
   {
@@ -202,33 +255,51 @@ private:
       if (m_stop.load(std::memory_order_acquire))
         return;
 
-      VkResult res;
-      do
+      if (!WaitFor(m_fences[0]))
+        return;
+      const u64 first_done_us = Common::Timer::NowUs();
+
+      Last last;
+      while ((last = m_last.load(std::memory_order_acquire)) == Last::NotYet)
       {
-        res = vkWaitForFences(device, 1, &m_fence, VK_TRUE, STOP_POLL_NS);
-      } while (res == VK_TIMEOUT && !m_stop.load(std::memory_order_acquire));
-      if (res == VK_SUCCESS)
-      {
-        VR::Perf::AddGpuFrame(Common::Timer::NowUs() - m_submit_us);
-        res = vkResetFences(device, 1, &m_fence);
+        if (m_stop.load(std::memory_order_acquire))
+          return;
+        m_last_event.WaitFor(std::chrono::nanoseconds(STOP_POLL_NS));
       }
+
+      uint32_t fences = 1;
+      if (last == Last::Submitted)
+      {
+        if (!WaitFor(m_fences[1]))
+          return;
+        VR::Perf::AddGpuFrame(VR::Perf::GpuBusyUs(m_first_submit_us, first_done_us,
+                                                   m_last_submit_us, Common::Timer::NowUs()));
+        fences = 2;
+      }
+      const VkResult res = vkResetFences(device, fences, m_fences.data());
       if (res != VK_SUCCESS)
       {
-        if (res != VK_TIMEOUT)
-          LOG_VULKAN_ERROR(res, "Waiting for the GPU time's fence failed: ");
+        LOG_VULKAN_ERROR(res, "vkResetFences failed (GPU time): ");
         return;
       }
       m_busy.store(false, std::memory_order_release);
     }
   }
 
-  VkFence m_fence = VK_NULL_HANDLE;
+  // After the first eye's submit and after the last one's.
+  std::array<VkFence, 2> m_fences{};
   std::thread m_thread;
   Common::Event m_wake;
+  Common::Event m_last_event;
   std::atomic<bool> m_stop{false};
-  // From the submit until the fence is reset: the thread's. Otherwise the video thread's.
+  // From the first submit until the fences are reset they are the thread's. Otherwise the video thread's.
   std::atomic<bool> m_busy{false};
-  u64 m_submit_us = 0;
+  // The video thread's word on the last eye's fence while the thread has the first one's.
+  std::atomic<Last> m_last{Last::NotYet};
+  u64 m_first_submit_us = 0;
+  u64 m_last_submit_us = 0;
+  // The video thread's: the first eye was submitted and timed, the last one is to come.
+  bool m_frame_open = false;
 };
 
 class VulkanOpenXRConfirmationOverlay
@@ -2120,20 +2191,21 @@ AbstractFramebuffer* VulkanOpenXR::AcquireLayeredFramebuffer()
 
 std::function<void(VkResult)> VulkanOpenXR::TimeGpuFrame(bool first, bool last)
 {
-  if (first)
-    m_eye_submit_us = 0;
   if (g_ActiveConfig.stereo_mode != StereoMode::OpenXR || !VR::Perf::WantsGpuTime())
     return {};
 
   return [this, first, last](VkResult submit_result) {
-    if (first)
-      m_eye_submit_us = Common::Timer::NowUs();
-    if (!last || submit_result != VK_SUCCESS || m_eye_submit_us == 0)
+    if (submit_result != VK_SUCCESS)
       return;
-    if (!m_gpu_timer)
-      m_gpu_timer = std::make_unique<VulkanGpuTimer>();
-    m_gpu_timer->EndFrame(m_eye_submit_us);
-    m_eye_submit_us = 0;
+    const u64 now_us = Common::Timer::NowUs();
+    if (first)
+    {
+      if (!m_gpu_timer)
+        m_gpu_timer = std::make_unique<VulkanGpuTimer>();
+      m_gpu_timer->BeginFrame(now_us);
+    }
+    if (last && m_gpu_timer)
+      m_gpu_timer->EndFrame(now_us);
   };
 }
 
