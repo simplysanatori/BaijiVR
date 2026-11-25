@@ -14,13 +14,20 @@ Known issues:
 
 ## Requirements
 
-- A Steam Frame with Developer Mode and SSH, and about 250 MB free, plus your games
-- A Linux PC (x86-64) with Git and Podman. Flatpak is needed for the first build
+- A Steam Frame with about 250 MB free, plus your games
 - Your own GameCube and Wii games, dumped from your own discs
+
+Developer Mode, SSH and a PC are only needed to build it yourself.
 
 ## Install, update and uninstall
 
-### Connect to the Frame
+The README has the download, Frametanium and FrameDrop. The program is in `~/baiji` on the Frame. `install.sh --dry-run` shows what would happen without changing anything.
+
+### Build and install from a PC
+
+You need a Linux PC (x86-64) with Git and Podman, and Flatpak for the first build. On the Frame, Developer Mode and SSH.
+
+#### Connect to the Frame
 
 Turn on Developer Mode and SSH on the Frame. Valve's steps: <https://partner.steamgames.com/doc/steamhardware/steamframe/setup>. Then add this to `~/.ssh/config` on your PC, with your Frame's address:
 
@@ -32,13 +39,19 @@ Host frame
 
 Check it with `ssh frame`. With another name, give that name to `deploy-frame.sh`.
 
-### Install
+#### Build
 
-The README has the steps. The finished files are in `state/stage-frame/home/steamos/baiji` on your PC, and in `~/baiji` on the Frame. Add debug symbols with `DEBUG_SYMBOLS=1 ./scripts/compile-cross-sdk.sh`. Build notes, a release tarball and smoke tests are in [build-runbook.md](build-runbook.md).
+```sh
+git clone --recurse-submodules https://github.com/simplysanatori/BaijiVR.git
+cd BaijiVR
+./scripts/compile-cross-sdk.sh
+./scripts/deploy-frame.sh frame
+ssh frame "steamos-add-to-steam ./baiji/bin/baiji-vr"
+```
 
-### Update
+The finished files are in `state/stage-frame/home/steamos/baiji` on your PC, and in `~/baiji` on the Frame. Add debug symbols with `DEBUG_SYMBOLS=1 ./scripts/compile-cross-sdk.sh`. Build notes, a release tarball and smoke tests are in [build-runbook.md](build-runbook.md).
 
-Quit the emulator, then run this in the `BaijiVR` folder on your PC:
+To update, quit the emulator, then run this in the `BaijiVR` folder on your PC:
 
 ```sh
 git pull
@@ -175,7 +188,7 @@ Copy [perf-test.example.txt](perf-test.example.txt) to `~/.config/baiji/perf-tes
 
 ## Reporting a problem
 
-Turn on the detailed log with `ssh frame "touch ~/.config/baiji/debug-logging"`, play until the problem happens, then delete that file. A report holds:
+Turn on the detailed log with `touch ~/.config/baiji/debug-logging` in Konsole on the Frame, play until the problem happens, then delete that file. A report holds:
 
 1. The game and its region, and the **Display** you used.
 2. What you did, what happened, and what you expected.

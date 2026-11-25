@@ -86,32 +86,24 @@ Off by default: **Dynamic Resolution**, **Pin Emulation Threads**, **Performance
 
 ## Requirements
 
-- A Steam Frame with Developer Mode, SSH and 250 MB free
-- A Linux PC (x86-64) with Git, Podman and Flatpak
+- A Steam Frame with 250 MB free
 - Your own GameCube and Wii games
 
 ## Install
 
-There is no download yet; testing on the Frame is in progress.
+There is no download yet; testing on the Frame is in progress. It will come as:
 
-1. Set up the [SSH name `frame`](docs/USER_GUIDE.md#connect-to-the-frame) on your PC.
+- [Frametanium](https://github.com/Cogential/frametanium): add `simplysanatori/BaijiVR`.
+- [FrameDrop](https://framedropvr.com): [Install with FrameDrop](https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fsimplysanatori%2FBaijiVR%2Freleases%2Flatest%2Fdownload%2Fbaijivr.framedrop.json).
+- By hand: download `baijivr-<version>-linux-arm64.tar.gz` from [Releases](https://github.com/simplysanatori/BaijiVR/releases). In Konsole on the Frame:
 
-2. Get the repository, build it and install it:
+  ```sh
+  mkdir -p ~/Downloads/baijivr
+  tar -xzf ~/Downloads/baijivr-<version>-linux-arm64.tar.gz -C ~/Downloads/baijivr
+  bash ~/Downloads/baijivr/install.sh
+  ```
 
-   ```sh
-   git clone --recurse-submodules https://github.com/simplysanatori/BaijiVR.git
-   cd BaijiVR
-   ./scripts/compile-cross-sdk.sh
-   ./scripts/deploy-frame.sh frame
-   ```
-
-3. Add it to Steam:
-
-   ```sh
-   ssh frame "steamos-add-to-steam ./baiji/bin/baiji-vr"
-   ```
-
-4. Launch **baiji-vr** from your Steam library.
+Building it on a Linux PC needs Developer Mode on the Frame: [user guide](docs/USER_GUIDE.md#build-and-install-from-a-pc).
 
 ## First run
 
@@ -136,18 +128,11 @@ Full list: [docs/CONTROLS.md](docs/CONTROLS.md).
 
 ## Update
 
-Quit the emulator. In the `BaijiVR` folder:
-
-```sh
-git pull
-git submodule update --init --recursive
-./scripts/compile-cross-sdk.sh
-./scripts/deploy-frame.sh frame
-```
+Quit the emulator, then install the new version the same way.
 
 ## Uninstall
 
-On the Frame. `--purge` also deletes your settings and saves. [More](docs/USER_GUIDE.md#uninstall).
+In Konsole on the Frame. `--purge` also deletes your settings and saves. [More](docs/USER_GUIDE.md#uninstall).
 
 ```sh
 ~/baiji/bin/baiji-uninstall
@@ -163,10 +148,10 @@ More: [docs/USER_GUIDE.md](docs/USER_GUIDE.md#troubleshooting).
 
 ## Reporting a problem
 
-Turn on the detailed log, then play until the problem happens:
+In Konsole on the Frame, turn on the detailed log, then play until the problem happens:
 
 ```sh
-ssh frame "touch ~/.config/baiji/debug-logging"
+touch ~/.config/baiji/debug-logging
 ```
 
 Logs: `~/.local/share/baiji/Logs`. Check them before sharing. Don't report this fork's problems to Dolphin or Baiji.
