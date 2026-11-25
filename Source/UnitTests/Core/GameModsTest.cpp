@@ -236,12 +236,18 @@ TEST_F(GameModsTest, RevisionFilterAndOrder)
   SetCatalog(GameMods::List::Mods,
              Catalog({Entry("zeta", base), Entry("alpha", base), Entry("rev1", std::string(base) + R"(,"revisions":[1])"),
                       Entry("pick", std::string(base) + R"(,"recommended":true)"), Entry("other", base, "GALE01")}));
-  const auto items = GameMods::GetItems(GameMods::List::Mods, GAME, 0);
+  // Without the built-in patches, which are there when Sys is.
+  const auto get = [](u16 revision) {
+    auto listed = GameMods::GetItems(GameMods::List::Mods, GAME, revision);
+    std::erase_if(listed, [](const auto& item) { return item.category == "patch"; });
+    return listed;
+  };
+  const auto items = get(0);
   ASSERT_EQ(items.size(), 3u);
   EXPECT_EQ(items[0].id, "pick");
   EXPECT_EQ(items[1].id, "alpha");
   EXPECT_EQ(items[2].id, "zeta");
-  EXPECT_EQ(GameMods::GetItems(GameMods::List::Mods, GAME, 1).size(), 4u);
+  EXPECT_EQ(get(1).size(), 4u);
   EXPECT_TRUE(GameMods::GetItems(GameMods::List::Mods, "bad", 0).empty());
 }
 
@@ -487,6 +493,38 @@ TEST(GameModsSys, ShippedCatalogueHasNoBadEntries)
     ASSERT_TRUE(parsed);
     EXPECT_EQ(parsed->size(), expected);
   }
+}
+
+// A patch that Sys has on by default, switched as the Mods tab does and read as a boot does.
+TEST_F(GameModsTest, BuiltInPatchesAreListed)
+{
+  if (!File::Exists(File::GetSysDirectory() + "GameMods/mods.json"))
+    GTEST_SKIP() << "the Sys folder is not where this binary looks";
+  const std::string game = "GFEE01";
+  const std::string id = "patch-gpu-hang-watchdog-off";
+  const auto state = [&] {
+    for (const auto& item : GameMods::GetItems(GameMods::List::Mods, game, 0))
+    {
+      if (item.id == id)
+        return item.state;
+    }
+    return GameMods::State::Available;
+  };
+  const auto boots_with_it = [&] {
+    std::vector<PatchEngine::Patch> patches;
+    PatchEngine::LoadPatchSection("OnFrame", &patches, SConfig::LoadDefaultGameIni(game, 0),
+                                  SConfig::LoadLocalGameIni(game, 0));
+    return std::ranges::any_of(patches, [](const auto& p) { return p.enabled; });
+  };
+  EXPECT_EQ(state(), GameMods::State::On);
+  EXPECT_TRUE(boots_with_it());
+  EXPECT_TRUE(GameMods::SetEnabled(GameMods::List::Mods, game, id, false).ok);
+  EXPECT_EQ(state(), GameMods::State::Off);
+  EXPECT_FALSE(boots_with_it());
+  EXPECT_TRUE(GameMods::SetEnabled(GameMods::List::Mods, game, id, true).ok);
+  EXPECT_EQ(state(), GameMods::State::On);
+  EXPECT_TRUE(boots_with_it());
+  EXPECT_FALSE(GameMods::SetEnabled(GameMods::List::Mods, game, "patch-none", true).ok);
 }
 
 // Built-in codes of the shipped catalogue against the real Sys INIs, read back the way a boot does.

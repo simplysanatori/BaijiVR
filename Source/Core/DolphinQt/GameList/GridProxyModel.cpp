@@ -52,6 +52,8 @@ QVariant GridProxyModel::data(const QModelIndex& i, int role) const
     const QSize size = (QSizeF(GRID_BANNER_SIZE) * scale).toSize();
     QPixmap banner = ToQPixmap(game->GetBannerImage());
     if (banner.isNull())
+      banner = model->GetBanner(game->GetFilePath());
+    if (banner.isNull())
       banner = Resources::GetMisc(Resources::MiscID::BannerMissing).pixmap(size, 1.0);
 
     return banner.scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation);

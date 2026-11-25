@@ -27,7 +27,7 @@ Baiji's own changelog is in [its README](../README.upstream.md). Thanks to theje
 - The **Games** tab: covers or banners, GameCube and Wii chips, search, sorting and favourites.
 - Choosing a game closes the running one, after a question, and starts in VR.
 - **Add Folder** adds games to the list.
-- **Download Thumbnails** and **Download Game Covers**: covers from libretro-thumbnails on GitHub. Nothing is downloaded until you choose it.
+- **Download Thumbnails** and **Download Game Covers**: covers, and banners for games without one, from libretro-thumbnails on GitHub. Nothing is downloaded until you choose it.
 - **Choose Another Cover**, **Use My Own Image**, **No Cover** and **Reset Cover** for one game.
 
 ### 3D modes
@@ -60,6 +60,7 @@ Baiji's own changelog is in [its README](../README.upstream.md). Thanks to theje
 - In Game Mode: **Window Scale**, windows that fit the screen, and the controller works in them.
 - In SteamVR's theater at the start and after a VR game.
 - A roomier Grid View, with the covers of the VR menu.
+- The **Mods** tab lists a game's built-in patches.
 - **3D Depth** on a game's own VR page, which saves only what is changed on it.
 - `baiji-uninstall`, which can also copy your saves to Dolphin.
 

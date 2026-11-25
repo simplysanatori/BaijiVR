@@ -15,6 +15,7 @@
 
 #include "Common/Config/Config.h"
 
+#include "Common/FileUtil.h"
 #include "Core/Config/UISettings.h"
 #include "Core/Core.h"
 #include "Core/System.h"
@@ -501,10 +502,10 @@ void GameTracker::AskAboutCovers()
   box->setIcon(QMessageBox::Question);
   box->setWindowTitle(tr("Download Thumbnails?"));
   box->setText(games.size() == 1 ?
-                   tr("A cover for the game found can be downloaded from libretro-thumbnails on "
-                      "GitHub.") :
-                   tr("Covers for the %1 games found can be downloaded from libretro-thumbnails on "
-                      "GitHub.")
+                   tr("A cover and a banner for the game found can be downloaded from "
+                      "libretro-thumbnails on GitHub.") :
+                   tr("Covers and banners for the %1 games found can be downloaded from "
+                      "libretro-thumbnails on GitHub.")
                        .arg(games.size()));
   QPushButton* const download = box->addButton(tr("Download"), QMessageBox::AcceptRole);
   QPushButton* const not_now = box->addButton(tr("Not Now"), QMessageBox::RejectRole);
@@ -544,11 +545,17 @@ void GameTracker::DownloadCover(const std::string& path, UICommon::CoverKind kin
 void GameTracker::DownloadAllCoversInternal()
 {
   std::vector<std::string> games;
+  std::vector<UICommon::CoverState> before;
   for (auto it = m_tracked_files.cbegin(); it != m_tracked_files.cend(); ++it)
   {
     const auto game = m_cache.Find(it.key().toStdString());
-    if (game && UICommon::NeedsCover(game->GetCoverState()))
-      games.push_back(game->GetFilePath());
+    if (!game)
+      continue;
+    const UICommon::CoverState state = game->GetCoverState();
+    if (!UICommon::NeedsCover(state))
+      continue;
+    games.push_back(game->GetFilePath());
+    before.push_back(state);
   }
   if (m_cache.DownloadCovers(games, [this](const auto& game) { emit GameUpdated(game); },
                              m_processing_halted))
@@ -557,11 +564,15 @@ void GameTracker::DownloadAllCoversInternal()
   }
   int found = 0;
   int unanswered = 0;
-  for (const std::string& path : games)
+  for (size_t i = 0; i < games.size(); ++i)
   {
-    const auto game = m_cache.Find(path);
+    const auto game = m_cache.Find(games[i]);
     const UICommon::CoverState state = game ? game->GetCoverState() : UICommon::CoverState{};
-    found += state.has_cached ? 1 : 0;
+    const bool cover = state.has_cached && !before[i].has_cached;
+    const bool banner =
+        before[i].needs_banner &&
+        File::Exists(UICommon::GetCoverPath(state.game_id, UICommon::CoverKind::Logo));
+    found += cover || banner ? 1 : 0;
     unanswered += UICommon::NeedsCover(state) ? 1 : 0;
   }
   emit CoversDownloaded(static_cast<int>(games.size()), found, unanswered);

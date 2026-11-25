@@ -64,7 +64,7 @@ void SetDown(const std::string& host)
 // After the game ID in a file's name.
 const char* GetSuffix(CoverKind kind)
 {
-  static constexpr std::array SUFFIXES{"", ".title", ".snap"};
+  static constexpr std::array SUFFIXES{"", ".title", ".snap", ".logo"};
   return SUFFIXES[static_cast<size_t>(kind)];
 }
 
@@ -126,6 +126,18 @@ void RemoveEnd(std::string* text, std::string_view end)
     text->resize(text->size() - end.size());
 }
 
+// Read when the first picture is looked for.
+std::string KnownName(const CoverQuery& query)
+{
+  static const CoverNames names = [] {
+    std::string text;
+    File::ReadFileToString(File::GetSysDirectory() + "covers.txt", text);
+    return ParseCoverNames(text);
+  }();
+  const auto it = names.find(query.game_id);
+  return it == names.end() ? std::string{} : it->second[static_cast<size_t>(query.kind)];
+}
+
 std::string WithoutTag(const std::string& name, std::string_view tag)
 {
   const size_t start = name.find(fmt::format(" ({}", tag));
@@ -173,17 +185,51 @@ std::vector<std::string> LibretroNames(const CoverQuery& query)
       title.replace(at, 2, " - ");
     for (const char* const languages : {"", " (En,Fr,Es)", " (En,Fr,De,Es,It)"})
       add(fmt::format("{} ({}){}", title, RegionName(query.region), languages));
+    if (query.region == DiscIO::Region::PAL)
+    {
+      for (const char* const languages : {"", " (En,Fr,De,Es,It)"})
+        add(fmt::format("{} (Europe, Australia){}", title, languages));
+    }
   }
   return names;
 }
 
-std::vector<std::string> CoverUrls(const CoverQuery& query)
+CoverNames ParseCoverNames(std::string_view text)
+{
+  static constexpr std::string_view KINDS = "BTSL";
+  CoverNames names;
+  while (!text.empty())
+  {
+    const size_t end = text.find('\n');
+    const std::string_view line = text.substr(0, end);
+    text.remove_prefix(end == text.npos ? text.size() : end + 1);
+    const size_t kinds = line.find(' ');
+    const size_t name = kinds == line.npos ? line.npos : line.find(' ', kinds + 1);
+    if (name == line.npos)
+      continue;
+    for (const char kind : line.substr(kinds + 1, name - kinds - 1))
+    {
+      if (const size_t i = KINDS.find(kind); i != KINDS.npos)
+        names[std::string{line.substr(0, kinds)}][i] = line.substr(name + 1);
+    }
+  }
+  return names;
+}
+
+std::vector<std::string> CoverUrls(const CoverQuery& query, const std::string& known_name)
 {
   std::vector<std::string> urls;
-  static constexpr std::array FOLDERS{"Named_Boxarts", "Named_Titles", "Named_Snaps"};
+  static constexpr std::array FOLDERS{"Named_Boxarts", "Named_Titles", "Named_Snaps",
+                                      "Named_Logos"};
   const char* const folder = FOLDERS[static_cast<size_t>(query.kind)];
   const char* const system = query.is_wii ? "Nintendo_-_Wii" : "Nintendo_-_GameCube";
-  for (const std::string& name : LibretroNames(query))
+  std::vector<std::string> names = LibretroNames(query);
+  if (!known_name.empty())
+  {
+    std::erase(names, known_name);
+    names.insert(names.begin(), known_name);
+  }
+  for (const std::string& name : names)
   {
     urls.push_back(fmt::format(
         "https://raw.githubusercontent.com/libretro-thumbnails/{}/master/{}/{}.png", system, folder,
@@ -195,7 +241,8 @@ std::vector<std::string> CoverUrls(const CoverQuery& query)
 bool NeedsCover(const CoverState& state)
 {
   return !state.game_id.empty() && std::ranges::all_of(state.game_id, Common::IsAlnum) &&
-         !state.has_custom && !state.has_cached && !state.known_missing;
+         (state.needs_banner ||
+          (!state.has_custom && !state.has_cached && !state.known_missing));
 }
 
 void FillCoverCacheState(CoverState* state, CoverKind kind)
@@ -276,7 +323,7 @@ bool EnsureCover(const CoverQuery& query)
     return false;
 
   bool all_answered = true;
-  std::vector<std::string> urls = CoverUrls(query);
+  std::vector<std::string> urls = CoverUrls(query, KnownName(query));
   bool linked = false;
   for (size_t i = 0; i < urls.size(); ++i)
   {

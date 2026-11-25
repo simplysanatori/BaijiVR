@@ -57,6 +57,26 @@ TEST(GameCovers, Urls)
                          "master/Named_Boxarts/A%20_%20B%20%28USA%29.png");
 }
 
+TEST(GameCovers, KnownNames)
+{
+  const auto names = ParseCoverNames("RSBE01 BT Brawl (USA)\nRSBE01 L Brawl (USA) (Rev 1)\n\nbad\nx y\n"
+                                     "RMCP01 L Mario Kart (Europe)");
+  ASSERT_EQ(names.size(), 2u);
+  const auto& brawl = names.at("RSBE01");
+  EXPECT_EQ(brawl[static_cast<size_t>(CoverKind::Box)], "Brawl (USA)");
+  EXPECT_EQ(brawl[static_cast<size_t>(CoverKind::Title)], "Brawl (USA)");
+  EXPECT_EQ(brawl[static_cast<size_t>(CoverKind::Snap)], "");
+  EXPECT_EQ(brawl[static_cast<size_t>(CoverKind::Logo)], "Brawl (USA) (Rev 1)");
+  EXPECT_EQ(names.at("RMCP01")[static_cast<size_t>(CoverKind::Logo)], "Mario Kart (Europe)");
+
+  // First, once, and the guesses after it.
+  const CoverQuery query = Query("x.iso", "Brawl");
+  EXPECT_EQ(CoverUrls(query, "Brawl (USA)"), CoverUrls(query));
+  const auto urls = CoverUrls(query, "Other (USA)");
+  EXPECT_EQ(urls.size(), CoverUrls(query).size() + 1);
+  EXPECT_TRUE(urls.front().ends_with("/Other%20%28USA%29.png"));
+}
+
 TEST(GameCovers, OtherPictures)
 {
   CoverQuery query = Query("A (USA).rvz");
@@ -67,6 +87,9 @@ TEST(GameCovers, OtherPictures)
   EXPECT_TRUE(GetCoverPath("RSBE01").ends_with("RSBE01.png"));
   EXPECT_TRUE(GetCoverPath("RSBE01", CoverKind::Title).ends_with("RSBE01.title.png"));
   EXPECT_TRUE(GetCoverPath("RSBE01", CoverKind::Snap).ends_with("RSBE01.snap.png"));
+  query.kind = CoverKind::Logo;
+  EXPECT_NE(CoverUrls(query).front().find("/Named_Logos/"), std::string::npos);
+  EXPECT_TRUE(GetCoverPath("RSBE01", CoverKind::Logo).ends_with("RSBE01.logo.png"));
 }
 
 TEST(GameCovers, NeedsCover)
@@ -76,6 +99,8 @@ TEST(GameCovers, NeedsCover)
   EXPECT_FALSE(NeedsCover({.game_id = "RSBE01", .has_custom = true}));
   EXPECT_FALSE(NeedsCover({.game_id = "RSBE01", .has_cached = true}));
   EXPECT_FALSE(NeedsCover({.game_id = "RSBE01", .known_missing = true}));
+  EXPECT_TRUE(NeedsCover({.game_id = "RSBE01", .has_cached = true, .needs_banner = true}));
+  EXPECT_FALSE(NeedsCover({.game_id = "../x", .needs_banner = true}));
   EXPECT_FALSE(NeedsCover({}));
   EXPECT_FALSE(NeedsCover({.game_id = "../x"}));
 }

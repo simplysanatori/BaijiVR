@@ -1136,6 +1136,64 @@ namespace GameMods
 {
 using namespace Internal;
 
+// The patches that the game's own INIs in Sys have, as built-in codes. The list's own entries for
+// one are used instead.
+static std::vector<Entry> GetBuiltInPatches(const std::string& game_id,
+                                            std::optional<u16> revision)
+{
+  Entry any;
+  if (revision)
+    any.revisions = {*revision};
+  Common::IniFile sys;
+  if (revision)
+  {
+    const std::string dir = File::GetSysDirectory() + GAMESETTINGS_DIR DIR_SEP;
+    for (const std::string& name : ConfigLoaders::GetGameIniFilenames(game_id, revision))
+      sys.Load(dir + name, true);
+  }
+  else
+  {
+    sys = LoadSysIni(game_id, any);
+  }
+
+  const std::vector<Entry> listed = LoadEntries(List::Mods);
+  std::vector<Entry> patches;
+  for (const auto& patch : FrameOps::Load(sys, {}))
+  {
+    Entry e;
+    e.kind = "builtin";
+    e.code_type = FrameOps::TYPE;
+    e.revisions = any.revisions;
+    e.game_ids = {game_id};
+    e.notes = "Built-in patch";
+    e.name = patch.name;
+    // "Name [author]"
+    if (const size_t author = e.name.find(" ["); author != std::string::npos)
+    {
+      e.author = e.name.substr(author + 2, e.name.find(']', author) - author - 2);
+      e.name.resize(author);
+    }
+    e.code_name = e.name;
+    e.id = "patch-";
+    for (const char c : e.name)
+    {
+      if (Common::IsAlnum(c))
+        e.id += Common::ToLower(c);
+      else if (e.id.back() != '-')
+        e.id += '-';
+    }
+    const auto same = [&](const Entry& other) {
+      return Common::Contains(other.game_ids, game_id) &&
+             (other.id == e.id ||
+              (other.kind == "builtin" && other.code_type == FrameOps::TYPE &&
+               other.code_name == e.code_name));
+    };
+    if (!std::ranges::any_of(listed, same) && !std::ranges::any_of(patches, same))
+      patches.push_back(std::move(e));
+  }
+  return patches;
+}
+
 std::vector<Item> GetItems(List list, const std::string& game_id, u16 revision)
 {
   std::vector<Item> items;
@@ -1194,6 +1252,20 @@ std::vector<Item> GetItems(List list, const std::string& game_id, u16 revision)
       return a.verified;
     return Common::CaseInsensitiveLess{}(a.name, b.name);
   });
+  if (list == List::Mods)
+  {
+    for (const Entry& e : GetBuiltInPatches(game_id, revision))
+    {
+      Item item;
+      item.id = e.id;
+      item.name = e.name;
+      item.author = e.author;
+      item.notes = e.notes;
+      item.category = "patch";
+      item.state = CodeEntryIsOn(game_id, e) ? State::On : State::Off;
+      items.push_back(std::move(item));
+    }
+  }
   return items;
 }
 
@@ -1205,6 +1277,14 @@ static std::optional<Entry> FindEntry(List list, const std::string& game_id, con
   {
     if (e.id == id && Common::Contains(e.game_ids, game_id))
       return std::move(e);
+  }
+  if (list == List::Mods)
+  {
+    for (Entry& e : GetBuiltInPatches(game_id, std::nullopt))
+    {
+      if (e.id == id)
+        return std::move(e);
+    }
   }
   return std::nullopt;
 }

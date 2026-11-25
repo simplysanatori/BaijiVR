@@ -154,7 +154,7 @@ Under **Interface**.
 |---|---|
 | **Download Game Covers** | off |
 
-On, the covers for the games in the list are downloaded from libretro-thumbnails on GitHub. Off, covers already on your computer are used, and adding a directory under **Paths**, or a new game found by a refresh, asks **Download Thumbnails?** for those games. GitHub sees your IP address and the names of the games that are asked for.
+On, the covers for the games in the list, and banners for those without one, are downloaded from libretro-thumbnails on GitHub. Off, covers already on your computer are used, and adding a directory under **Paths**, or a new game found by a refresh, asks **Download Thumbnails?** for those games. GitHub sees your IP address and the names of the games that are asked for.
 
 ## The Window in SteamVR
 

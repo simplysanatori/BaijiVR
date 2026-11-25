@@ -78,11 +78,13 @@ public:
 
   const Core::TitleDatabase& GetTitleDatabase() const { return m_title_database; }
 
-  // Its cover, as in the VR menu; null when it has none. SetCovers has every game's files by path,
-  // each game's best first.
-  QPixmap GetCover(const std::string& path) const;
+  // Its cover, as in the VR menu, and the downloaded banner; null when it has none. SetPictures has
+  // every game's files by path, each game's best first.
+  using PictureFiles = std::map<std::string, std::vector<std::string>>;
+  QPixmap GetCover(const std::string& path) const { return GetPicture(&m_covers, path); }
+  QPixmap GetBanner(const std::string& path) const { return GetPicture(&m_banners, path); }
   bool HasCovers() const { return m_has_covers; }
-  void SetCovers(const std::map<std::string, std::vector<std::string>>& files);
+  void SetPictures(const PictureFiles& covers, const PictureFiles& banners);
 
   void SetScale(float scale);
   float GetScale() const;
@@ -114,7 +116,7 @@ private:
   QList<std::shared_ptr<const UICommon::GameFile>> m_games;
   Core::TitleDatabase m_title_database;
   TimePlayed m_timer;
-  struct Cover
+  struct Picture
   {
     // Those that are there, and when they were written.
     std::vector<std::pair<QString, qint64>> files;
@@ -123,7 +125,13 @@ private:
     QPixmap picture;
   };
 
-  mutable std::map<std::string, Cover> m_covers;
+  using Pictures = std::map<std::string, Picture>;
+
+  static QPixmap GetPicture(Pictures* pictures, const std::string& path);
+  static std::vector<std::string> UpdatePictures(Pictures* pictures, const PictureFiles& files);
+
+  mutable Pictures m_covers;
+  mutable Pictures m_banners;
   bool m_has_covers = false;
   QString m_term;
   float m_scale = 1.0;

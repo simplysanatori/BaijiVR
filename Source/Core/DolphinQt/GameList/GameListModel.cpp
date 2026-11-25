@@ -3,13 +3,17 @@
 
 #include "DolphinQt/GameList/GameListModel.h"
 
+#include <algorithm>
+#include <iterator>
 #include <utility>
 
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QPainter>
 #include <QPixmap>
+#include <QPixmapCache>
 #include <QRegularExpression>
 
 #include "Core/Config/MainSettings.h"
@@ -59,6 +63,27 @@ GameListModel::GameListModel(QObject* parent) : QAbstractTableModel(parent)
   m_game_tags = settings.value(QStringLiteral("gamelist/game_tags")).toMap();
 }
 
+// The picture in the middle of a banner.
+static QPixmap ToBanner(const QPixmap& picture)
+{
+  const QSize size = (QSizeF(GAMECUBE_BANNER_SIZE) * qGuiApp->devicePixelRatio()).toSize();
+  const QString key =
+      QStringLiteral("banner/%1/%2").arg(picture.cacheKey()).arg(size.width());
+  QPixmap banner;
+  if (QPixmapCache::find(key, &banner))
+    return banner;
+
+  const QPixmap scaled = picture.scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+  banner = QPixmap(size);
+  banner.fill(Qt::transparent);
+  QPainter painter(&banner);
+  painter.drawPixmap((size.width() - scaled.width()) / 2, (size.height() - scaled.height()) / 2,
+                     scaled);
+  painter.end();
+  QPixmapCache::insert(key, banner);
+  return banner;
+}
+
 QVariant GameListModel::data(const QModelIndex& index, int role) const
 {
   if (!index.isValid())
@@ -87,12 +112,11 @@ QVariant GameListModel::data(const QModelIndex& index, int role) const
       QPixmap banner = ToQPixmap(game.GetBannerImage());
       if (banner.isNull())
       {
-        banner = GetCover(game.GetFilePath());
+        banner = GetBanner(game.GetFilePath());
+        if (banner.isNull())
+          banner = GetCover(game.GetFilePath());
         if (!banner.isNull())
-        {
-          banner = banner.scaled(GAMECUBE_BANNER_SIZE * qGuiApp->devicePixelRatio(),
-                                 Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        }
+          banner = ToBanner(banner);
       }
       if (banner.isNull())
         banner = Resources::GetMisc(Resources::MiscID::BannerMissing).pixmap(GAMECUBE_BANNER_SIZE);
@@ -460,47 +484,55 @@ void GameListModel::SetSearchTerm(const QString& term)
   m_term = term;
 }
 
-QPixmap GameListModel::GetCover(const std::string& path) const
+QPixmap GameListModel::GetPicture(Pictures* pictures, const std::string& path)
 {
-  const auto it = m_covers.find(path);
-  if (it == m_covers.end())
+  const auto it = pictures->find(path);
+  if (it == pictures->end())
     return QPixmap();
-  Cover& cover = it->second;
-  if (!std::exchange(cover.read, true))
+  Picture& picture = it->second;
+  if (!std::exchange(picture.read, true))
   {
-    for (const auto& [file, time] : cover.files)
+    for (const auto& [file, time] : picture.files)
     {
-      if (cover.picture.load(file))
+      if (picture.picture.load(file))
         break;
     }
   }
-  return cover.picture;
+  return picture.picture;
 }
 
-void GameListModel::SetCovers(const std::map<std::string, std::vector<std::string>>& files)
+// The games whose picture is another now.
+std::vector<std::string> GameListModel::UpdatePictures(Pictures* pictures, const PictureFiles& files)
 {
   std::vector<std::string> changed;
-  std::map<std::string, Cover> covers;
-  bool has_covers = false;
+  Pictures updated;
   for (const auto& [path, candidates] : files)
   {
-    Cover cover;
+    Picture picture;
     for (const std::string& candidate : candidates)
     {
       const QFileInfo info(QString::fromStdString(candidate));
       if (info.isFile())
-        cover.files.emplace_back(info.filePath(), info.lastModified().toMSecsSinceEpoch());
+        picture.files.emplace_back(info.filePath(), info.lastModified().toMSecsSinceEpoch());
     }
-    has_covers |= !cover.files.empty();
-    const auto it = m_covers.find(path);
-    if (it != m_covers.end() && it->second.files == cover.files)
-      cover = std::move(it->second);
-    else if (it != m_covers.end() || !cover.files.empty())
+    const auto it = pictures->find(path);
+    if (it != pictures->end() && it->second.files == picture.files)
+      picture = std::move(it->second);
+    else if (it != pictures->end() || !picture.files.empty())
       changed.push_back(path);
-    covers.emplace(path, std::move(cover));
+    updated.emplace(path, std::move(picture));
   }
-  m_covers = std::move(covers);
+  *pictures = std::move(updated);
+  return changed;
+}
 
+void GameListModel::SetPictures(const PictureFiles& covers, const PictureFiles& banners)
+{
+  std::vector<std::string> changed = UpdatePictures(&m_covers, covers);
+  std::ranges::copy(UpdatePictures(&m_banners, banners), std::back_inserter(changed));
+
+  const bool has_covers =
+      std::ranges::any_of(m_covers, [](const auto& c) { return !c.second.files.empty(); });
   if (std::exchange(m_has_covers, has_covers) != has_covers)
   {
     // The tiles have another shape.

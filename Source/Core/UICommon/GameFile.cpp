@@ -238,17 +238,26 @@ CoverState GameFile::GetCoverState() const
                                  File::Exists(path + name + ".cover.png") ||
                                  File::Exists(path + "cover.png")};
   FillCoverCacheState(&state);
+  if (GetBannerImage().empty())
+  {
+    CoverState logo{.game_id = m_gametdb_id};
+    FillCoverCacheState(&logo, CoverKind::Logo);
+    state.needs_banner = !logo.has_cached && !logo.known_missing;
+  }
   return state;
 }
 
 void GameFile::DownloadDefaultCover(bool force)
 {
-  if (!m_default_cover.buffer.empty() || m_gametdb_id.empty())
+  if (m_gametdb_id.empty())
     return;
   if (!COVERS_ARE_SHOWN || !HandlesCovers() || !(force || DownloadsCovers()))
     return;
 
-  DownloadCover(CoverKind::Box);
+  if (m_default_cover.buffer.empty() && !GetCoverState().has_custom)
+    DownloadCover(CoverKind::Box);
+  if (GetBannerImage().empty())
+    DownloadCover(CoverKind::Logo);
 }
 
 bool GameFile::DownloadCover(CoverKind kind) const

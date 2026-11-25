@@ -79,15 +79,15 @@ Remove the `baiji-vr` shortcut from your Steam library by hand.
 
 ### Covers
 
-The covers in the VR menu's Games tab come from libretro-thumbnails on GitHub. Nothing is downloaded until you say so: when you add a directory under **Paths**, or a refresh finds a new game, and the games lack covers, a question offers **Download Thumbnails?** (**Download** or **Not Now**). It is not asked during a game. **Download Thumbnails** in a game's menu on the Games tab does the same at any time. To fetch covers for every game in the list by itself, turn on **Download Game Covers** under **Interface** in the settings. A cover you put beside a game (`Game.cover.png` or `cover.png`) and covers already downloaded are used either way.
+The covers, and the banners of games without one, come from libretro-thumbnails on GitHub. Nothing is downloaded until you say so: when you add a directory under **Paths**, or a refresh finds a new game, and the games lack covers or banners, a question offers **Download Thumbnails?** (**Download** or **Not Now**). It is not asked during a game. **Download Thumbnails** in a game's menu on the Games tab does the same at any time. To fetch them for every game in the list by itself, turn on **Download Game Covers** under **Interface** in the settings. A cover you put beside a game (`Game.cover.png` or `cover.png`) and covers already downloaded are used either way.
 
 ### Covers and Banners
 
-**View** > **Grid View** shows the same covers as the VR menu's **Games** tab, and the banner of a game without one. The list shows banners, and the cover of a game without one. A Wii game has a banner once it has a save.
+**View** > **Grid View** shows the same covers as the VR menu's **Games** tab, and the banner of a game without one. The list shows banners. A GameCube game has one, a Wii game once it has a save; until then, the downloaded one is shown.
 
 ### Mods and texture packs
 
-They are in the **Mods** tab of the VR menu, and on the **Mods** page of a game's properties. The list has 37 cheats, patches and game settings, 3 mods, and 24 texture packs. Some can be downloaded on the page; the others open their own page. Changes are for the game's next start.
+They are in the **Mods** tab of the VR menu, and on the **Mods** page of a game's properties. The list has 37 cheats, patches and game settings, 3 mods, and 24 texture packs. Some can be downloaded on the page; the others open their own page. A game's built-in patches are listed, too; some are on by default. Changes are for the game's next start.
 
 ## The VR menu
 

@@ -104,10 +104,16 @@ void VRGames::Publish()
   const int count = m_model.rowCount(QModelIndex());
   for (int i = 0; i < count; ++i)
     games.push_back(m_model.GetGameFile(i));
-  std::map<std::string, std::vector<std::string>> covers;
+  GameListModel::PictureFiles covers, banners;
   for (const auto& game : games)
+  {
     covers.emplace(game->GetFilePath(), UICommon::GetCoverFiles(*game, m_store));
-  m_model.SetCovers(covers);
+    const std::string& id = game->GetGameTDBID();
+    banners.emplace(game->GetFilePath(),
+                    id.empty() ? std::vector<std::string>{} :
+                                 std::vector{UICommon::GetCoverPath(id, UICommon::CoverKind::Logo)});
+  }
+  m_model.SetPictures(covers, banners);
 
   const TimePlayed time_played;
   auto list = std::make_shared<const FrameXr::Menu::GamesSnapshot>(
@@ -225,13 +231,13 @@ void VRGames::ChooseCover(const std::string& path, VR::UI::CoverChoice choice,
 void VRGames::OnCoversDownloaded(int asked, int found, int unanswered)
 {
   if (asked == 0)
-    OSD::AddMessage("No Covers to Download", MESSAGE_MS);
+    OSD::AddMessage("No Thumbnails to Download", MESSAGE_MS);
   else if (found == 0)
-    OSD::AddMessage(unanswered > 0 ? "Could Not Reach GitHub" : "No Covers Found", MESSAGE_MS);
+    OSD::AddMessage(unanswered > 0 ? "Could Not Reach GitHub" : "No Thumbnails Found", MESSAGE_MS);
   else if (found == 1)
-    OSD::AddMessage("1 Cover Downloaded", MESSAGE_MS);
+    OSD::AddMessage("Thumbnails for 1 Game Downloaded", MESSAGE_MS);
   else
-    OSD::AddMessage(fmt::format("{} Covers Downloaded", found), MESSAGE_MS);
+    OSD::AddMessage(fmt::format("Thumbnails for {} Games Downloaded", found), MESSAGE_MS);
 }
 
 void VRGames::OnCoverDownloaded(const std::string& path, UICommon::CoverKind kind, bool found,

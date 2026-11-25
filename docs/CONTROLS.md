@@ -62,7 +62,7 @@ The chips show all games, **GameCube** or **Wii**; **Search** finds games as you
 | **No Cover** | Its banner, or else its initials |
 | **Use My Own Image** | A PNG or JPEG image of yours |
 | **Reset Cover** | The cover it has by itself |
-| **Download Thumbnails** | Covers for all games that lack one |
+| **Download Thumbnails** | Covers and banners for all games that lack one |
 
 ### Stats
 

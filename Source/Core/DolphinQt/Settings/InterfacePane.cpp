@@ -352,7 +352,7 @@ void InterfacePane::AddDescriptions()
       QT_TR_NOOP("Requires the render window to be focused for hotkeys to take effect."
                  "<br><br><dolphin_emphasis>If unsure, leave this checked.</dolphin_emphasis>");
   static constexpr char TR_USE_COVERS_DESCRIPTION[] =
-      QT_TR_NOOP("Downloads game covers for the VR menu from libretro-thumbnails on GitHub, for the "
+      QT_TR_NOOP("Downloads game covers, and banners for games without one, from libretro-thumbnails on GitHub, for the "
                  "games in the list. Covers already on your computer are used either way; when this is unchecked, adding a "
                  "game directory or finding a new game asks whether to download them."
                  "<br><br><dolphin_emphasis>If unsure, leave this unchecked.</dolphin_emphasis>");

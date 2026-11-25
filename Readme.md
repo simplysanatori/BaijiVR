@@ -110,7 +110,7 @@ Building it yourself: [user guide](docs/USER_GUIDE.md#build-and-install-from-a-p
 ## First run
 
 1. Add your games' folder in the settings, under **Paths**.
-2. Choose **Download** when it asks **Download Thumbnails?** if you want covers.
+2. Choose **Download** when it asks **Download Thumbnails?** if you want covers and banners.
 3. Double-click a game.
 
 ## Controls
@@ -183,7 +183,7 @@ If you want to support this app or my other VR emulator, [Azahar VR](https://git
 - [dolphinXR](https://github.com/iChris4/dolphinXR/) by iChris4: the VR modes, and some performance switches
 - [Dolphin](https://dolphin-emu.org/): the emulator
 - [Azahar VR](https://github.com/simplysanatori/AzaharVR), my Azahar fork: the VR menu, Dynamic Resolution, the window in Game Mode and downloads
-- [libretro-thumbnails](https://github.com/libretro-thumbnails): the covers
+- [libretro-thumbnails](https://github.com/libretro-thumbnails): the covers and banners
 - [GameTDB](https://www.gametdb.com/): game names
 - Mods, cheats and texture packs: their authors, named in the app
 - Valve: SteamVR and the Frame

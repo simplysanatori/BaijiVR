@@ -155,9 +155,11 @@ bool GameFileCache::UpdateAdditionalMetadata(const GameUpdatedFn& game_updated,
     if (processing_halted)
       break;
 
+    const bool needed_banner = file->GetCoverState().needs_banner;
     const bool updated = UpdateAdditionalMetadata(&file);
     cache_changed |= updated;
-    if (game_updated && updated)
+    // (A downloaded banner is not in the cache of the list.)
+    if (game_updated && (updated || (needed_banner && !file->GetCoverState().needs_banner)))
       game_updated(file);
   }
 
@@ -215,9 +217,10 @@ bool GameFileCache::DownloadCovers(std::span<const std::string> game_paths,
     const auto it = std::ranges::find(m_cached_files, path, &GameFile::GetFilePath);
     if (it == m_cached_files.end())
       continue;
+    const bool needed_banner = (*it)->GetCoverState().needs_banner;
     const bool updated = UpdateAdditionalMetadata(&*it, true);
     cache_changed |= updated;
-    if (game_updated && updated)
+    if (game_updated && (updated || (needed_banner && !(*it)->GetCoverState().needs_banner)))
       game_updated(*it);
   }
   return cache_changed;
