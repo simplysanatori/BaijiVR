@@ -6,6 +6,7 @@
 #include <array>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "Common/IniFile.h"
 
@@ -63,7 +64,7 @@ Choice Resolve(const Rules& rules);
 // What the running game has. Host thread.
 Choice GetCurrent(Core::System& system);
 
-// Not with NetPlay, a movie or a controller profile named by the game's settings.
+// Not with NetPlay or a movie.
 bool CanChoose(Core::System& system);
 
 // Changes the emulated hardware of the running game, now and when it is started again. Host thread.
@@ -76,8 +77,44 @@ void OnSessionStarted(Core::System& system);
 // Loads the mapping of every game, or the one the running game has. Any thread.
 void LoadMapping();
 
-// An InputConfig::SaveOverride: saves the mapping of one choice into its profile.
-bool SaveOwnMapping(int index, Common::IniFile::Section* section);
+// The first Wii Remote and the first GameCube Controller have one of these mappings:
+// - the one of every game (WiimoteNew.ini, GCPadNew.ini),
+// - for a Wii Remote that the one of every game is not for (another extension, sideways): the
+//   profile "VR <controller>.ini" of every game, which is the Steam Frame profile until it is
+//   changed,
+// - the running game's own: the profile its settings name, as Dolphin has it ([Controls]
+//   PadProfile1 or WiimoteProfile1 in the game's INI; a profile of the User or the Sys folder).
+//   "Per-Game" makes one, "<game ID> <controller>.ini", from the mapping the game has.
+// Whoever saves the mapping (the VR menu, a mapping window) saves it where it is from: the file of
+// every game is only written with the mapping of every game.
+enum class Kind
+{
+  GameCube,
+  Remote,
+};
+
+// InputConfig's overrides for these two.
+bool LoadPad(int index, Common::IniFile::Section* section);
+bool SavePad(int index, Common::IniFile::Section* section);
+bool LoadRemote(int index, Common::IniFile::Section* section);
+bool SaveRemote(int index, Common::IniFile::Section* section);
+
+// The running game's settings name a profile, and that is its mapping.
+bool HasGameMapping(Kind kind);
+// Why it cannot have one, or empty. Host thread.
+std::string GetGameMappingLock(Kind kind);
+// Its own copy of the mapping it has now, and without it again. Host thread.
+void MakeGameMapping(Core::System& system, Kind kind);
+void RemoveGameMapping(Core::System& system, Kind kind);
+
+// The profiles a mapping window lists, the one the running game's settings name (or empty), and
+// another one for it (empty: none). Host thread.
+std::vector<std::string> GetProfiles(Kind kind);
+std::string GetProfile(Kind kind);
+void SetProfile(Core::System& system, Kind kind, const std::string& name);
+
+// What a mapping window says after the controller's name, or empty with the mapping of every game.
+std::string DescribeMappingStore(Kind kind, int index);
 
 // The choice whose own mapping the Wii Remote has, or None: it has the one of every game.
 Choice GetOwnMapping();
@@ -86,6 +123,6 @@ void KeepChoice(int index, Common::IniFile::Section* section);
 // The Steam Frame profile for a Wii Remote: a file name in the Sys profiles.
 std::string GetDefaultProfile(int index);
 
-// The Wii Remote's mapping is to be the Steam Frame profile. Host thread.
-void ResetMapping();
+// The mapping is to be the Steam Frame profile. Host thread.
+void ResetMapping(Kind kind);
 }  // namespace VRWiiController

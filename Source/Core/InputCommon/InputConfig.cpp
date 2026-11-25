@@ -51,6 +51,12 @@ bool InputConfig::LoadConfig()
         if (control_section->Get(profile_name, &profile_setting))
         {
           auto profiles = InputProfile::GetProfilesFromSetting(profile_setting, profile_directory);
+          // One that comes with the program, as the mapping windows list them.
+          if (profiles.empty())
+          {
+            profiles = InputProfile::GetProfilesFromSetting(profile_setting,
+                                                            GetSysProfileDirectoryPath());
+          }
 
           if (profiles.empty())
           {
@@ -91,7 +97,8 @@ bool InputConfig::LoadConfig()
       {
         config = *inifile.GetOrCreateSection(controller->GetName());
       }
-      controller->LoadConfig(&config);
+      if (!m_load_override || !m_load_override(n, &config))
+        controller->LoadConfig(&config);
       controller->UpdateReferences(g_controller_interface);
 
       // Next profile
@@ -106,6 +113,12 @@ bool InputConfig::LoadConfig()
     if (m_controllers.size() > 0)
     {
       m_controllers[0]->LoadDefaults(g_controller_interface);
+      if (m_load_override)
+      {
+        Common::IniFile::Section defaults;
+        m_controllers[0]->SaveConfig(&defaults);
+        m_load_override(0, &defaults);
+      }
       m_controllers[0]->UpdateReferences(g_controller_interface);
     }
     for (size_t i = 1; i < m_controllers.size(); ++i)

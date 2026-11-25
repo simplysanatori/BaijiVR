@@ -118,7 +118,10 @@ struct PadEditView
   bool operator==(const PadEditView&) const = default;
 };
 
+// What to do, while a control waits for it: "Press a Button…", "Push the Stick Up…".
 std::string GetPrompt(const PadEditView& view);
+// The line above the drawing.
+inline constexpr const char* PAD_EDIT_GUIDE = "Select a control, then press the button for it.";
 
 class PadEdit
 {

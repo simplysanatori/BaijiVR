@@ -653,7 +653,7 @@ void Initialize(InitializeMode init_mode)
   }
 
   s_config.RegisterHotplugCallback();
-  s_config.SetSaveOverride(VRWiiController::SaveOwnMapping);
+  s_config.SetOverrides(VRWiiController::LoadRemote, VRWiiController::SaveRemote);
 
   LoadConfig();
 

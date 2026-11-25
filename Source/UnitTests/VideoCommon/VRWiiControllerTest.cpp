@@ -1,6 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <map>
@@ -95,12 +96,17 @@ protected:
     InputConfig* const config = Wiimote::GetConfig();
     for (int i = 0; i < 5; ++i)
       config->CreateController<WiimoteEmu::Wiimote>(i);
-    config->SetSaveOverride(SaveOwnMapping);
+    config->SetOverrides(LoadRemote, SaveRemote);
+    for (int i = 0; i < 4; ++i)
+      Pad::GetConfig()->CreateController<GCPad>(i);
+    Pad::GetConfig()->SetOverrides(LoadPad, SavePad);
     auto& system = Core::System::GetInstance();
     m_was_wii = system.IsWii();
     system.SetIsWii(true);
     Wiimote::LoadConfig();
     config->SaveConfig();
+    Pad::LoadConfig();
+    Pad::GetConfig()->SaveConfig();
   }
 
   void TearDown() override
@@ -108,8 +114,10 @@ protected:
     if (m_folder.empty())
       return;
     EndGame();
-    Wiimote::GetConfig()->SetSaveOverride(nullptr);
+    Wiimote::GetConfig()->SetOverrides(nullptr, nullptr);
     Wiimote::GetConfig()->ClearControllers();
+    Pad::GetConfig()->SetOverrides(nullptr, nullptr);
+    Pad::GetConfig()->ClearControllers();
     Core::System::GetInstance().SetIsWii(m_was_wii);
     SConfig::Shutdown();
     Config::Shutdown();
@@ -121,6 +129,7 @@ protected:
   {
     SConfig::GetInstance().SetRunningGameMetadata(id);
     Wiimote::LoadConfig();
+    Pad::LoadConfig();
   }
   static void EndGame()
   {
@@ -129,17 +138,27 @@ protected:
     Config::RemoveLayer(Config::LayerType::LocalGame);
     SConfig::GetInstance().ResetRunningGameMetadata();
     Wiimote::LoadConfig();
+    Pad::LoadConfig();
   }
   static void Choose(Choice choice)
   {
     VRWiiController::Choose(Core::System::GetInstance(), choice);
   }
   static Choice Current() { return GetCurrent(Core::System::GetInstance()); }
-  static std::string EveryGame()
+  static std::string EveryGame(const char* name = "WiimoteNew.ini")
   {
     std::string text;
-    File::ReadFileToString(File::GetUserPath(D_CONFIG_IDX) + "WiimoteNew.ini", text);
+    File::ReadFileToString(File::GetUserPath(D_CONFIG_IDX) + name, text);
     return text;
+  }
+  static std::string GetGameProfile(const char* folder, const std::string& name)
+  {
+    return File::GetUserPath(D_CONFIG_IDX) + "Profiles/" + folder + "/" + name + ".ini";
+  }
+  static void SetScope(PadKind kind, PadScope scope)
+  {
+    SetPadScope(kind, scope);
+    EXPECT_EQ(GetPadScope(kind), scope);
   }
   static std::string GetUserProfile(Choice choice)
   {
@@ -192,7 +211,7 @@ TEST(VRWiiController, ThePlayersChoiceAndTheGamesSettingsAreFirst)
 TEST(VRWiiController, BundledIsByTheWholeID)
 {
   Common::IniFile ini;
-  ini.GetOrCreateSection("Controllers")->Set("RMGE01", "Wii Remote + Nunchuk");
+  ini.GetOrCreateSection("Controllers")->Set("RMGE01", std::string("Wii Remote + Nunchuk"));
   EXPECT_EQ(FindBundled(ini, "RMGE01"), Choice::RemoteNunchuk);
   EXPECT_EQ(FindBundled(ini, "RMGE52"), Choice::None);
   EXPECT_EQ(FindBundled(ini, "RMG"), Choice::None);
@@ -477,8 +496,228 @@ TEST_F(VRWiiControllerMapping, AProfileOfTheGameIsInFront)
   Write(File::GetUserPath(D_GAMESETTINGS_IDX) + "SUKE01.ini",
         "[Controls]\nWiimoteProfile1 = Mine\n");
   Start("SUKE01");
-  EXPECT_FALSE(CanChoose(Core::System::GetInstance()));
   EXPECT_EQ(Current(), Choice::None);
   EXPECT_EQ(GetOwnMapping(), Choice::None);
   EXPECT_NE(GetPadEditLock(PadKind::WiiRemote), "");
+}
+
+TEST_F(VRWiiControllerMapping, AGameHasItsOwnMappingOfAController)
+{
+  constexpr PadKind KIND = PadKind::WiiRemoteSideways;
+  const std::string before = EveryGame();
+  EXPECT_NE(GetPadScopeLock(KIND), "");
+  SetPadScope(KIND, PadScope::Game);
+  EXPECT_EQ(GetPadScope(KIND), PadScope::Global);
+
+  Start("GTST01");
+  Choose(Choice::RemoteSideways);
+  EXPECT_EQ(GetPadScopeLock(KIND), "");
+  EXPECT_EQ(GetPadScope(KIND), PadScope::Global);
+  const PadTable global = GetPadTable(KIND);
+  SetScope(KIND, PadScope::Game);
+  const std::string path = GetGameProfile("Wiimote", "GTST01 Wii Remote (Sideways)");
+  EXPECT_TRUE(File::Exists(path));
+  // It starts as the one of every game.
+  EXPECT_EQ(GetPadTable(KIND), global);
+  EXPECT_EQ(Current(), Choice::RemoteSideways);
+
+  SetPadBindings(KIND, {{PadTarget::One, PadBinding{{"Left Bumper"}, {}}}});
+  EXPECT_EQ(LoadProfile(path).at("Buttons/1"), "`Left Bumper`");
+  EXPECT_FALSE(File::Exists(GetUserProfile(Choice::RemoteSideways)));
+  EXPECT_EQ(EveryGame(), before);
+
+  // Another controller of this game has the mapping of every game, and this one keeps its own.
+  Choose(Choice::Classic);
+  EXPECT_EQ(GetPadScope(PadKind::WiiClassic), PadScope::Global);
+  Choose(Choice::RemoteSideways);
+  EXPECT_EQ(GetPadScope(KIND), PadScope::Game);
+  EXPECT_EQ(Describe(KIND, PadTarget::One), "Left Bumper");
+
+  // Another game has not.
+  EndGame();
+  Start("GTST02");
+  Choose(Choice::RemoteSideways);
+  EXPECT_EQ(GetPadScope(KIND), PadScope::Global);
+  EXPECT_EQ(GetPadTable(KIND), global);
+  EndGame();
+  EXPECT_EQ(GetPadScope(KIND), PadScope::Global);
+
+  // The Steam Frame profile is for the game's own, and "Use Global Values" removes it.
+  Start("GTST01");
+  EXPECT_EQ(GetPadScope(KIND), PadScope::Game);
+  EXPECT_EQ(Describe(KIND, PadTarget::One), "Left Bumper");
+  ResetPadBindings(KIND);
+  EXPECT_EQ(GetPadTable(KIND), global);
+  EXPECT_TRUE(File::Exists(path));
+  SetPadBindings(KIND, {{PadTarget::One, PadBinding{{"Left Bumper"}, {}}}});
+  SetScope(KIND, PadScope::Global);
+  EXPECT_FALSE(File::Exists(path));
+  EXPECT_EQ(GetPadTable(KIND), global);
+  EXPECT_EQ(EveryGame(), before);
+}
+
+TEST_F(VRWiiControllerMapping, AGameHasItsOwnMappingOfTheOneOfEveryGame)
+{
+  constexpr PadKind KIND = PadKind::WiiNunchuk;
+  const std::string before = EveryGame();
+  Start("GTST01");
+  EXPECT_EQ(Current(), Choice::RemoteNunchuk);
+  SetScope(KIND, PadScope::Game);
+  SetPadBindings(KIND, {{PadTarget::C, PadBinding{{"Left Grip"}, {}}}});
+  EXPECT_EQ(EveryGame(), before);
+  // As a window that is opened and closed.
+  Wiimote::LoadConfig();
+  Wiimote::GetConfig()->SaveConfig();
+  EXPECT_EQ(Describe(KIND, PadTarget::C), "Left Grip");
+  EXPECT_EQ(EveryGame(), before);
+  EndGame();
+  EXPECT_EQ(Describe(KIND, PadTarget::C), "Left Bumper");
+  Wiimote::GetConfig()->SaveConfig();
+  EXPECT_EQ(EveryGame(), before);
+  Start("GTST01");
+  EXPECT_EQ(Describe(KIND, PadTarget::C), "Left Grip");
+  SetScope(KIND, PadScope::Global);
+  EXPECT_EQ(Describe(KIND, PadTarget::C), "Left Bumper");
+  EXPECT_EQ(EveryGame(), before);
+}
+
+TEST_F(VRWiiControllerMapping, AGameHasItsOwnMappingOfTheGameCubeController)
+{
+  constexpr PadKind KIND = PadKind::GameCube;
+  const std::string before = EveryGame("GCPadNew.ini");
+  ASSERT_FALSE(before.empty());
+  Core::System::GetInstance().SetIsWii(false);
+  EXPECT_NE(GetPadScopeLock(KIND), "");
+  Start("GTST01");
+  EXPECT_EQ(GetPadScopeLock(KIND), "");
+  const PadTable global = GetPadTable(KIND);
+  SetScope(KIND, PadScope::Game);
+  const std::string path = GetGameProfile("GCPad", "GTST01 GameCube Controller");
+  EXPECT_TRUE(File::Exists(path));
+  EXPECT_EQ(GetPadTable(KIND), global);
+  SetPadBindings(KIND, {{PadTarget::Z, PadBinding{{"Left Grip"}, {}}}});
+  EXPECT_EQ(LoadProfile(path).at("Buttons/Z"), "`Left Grip`");
+  EXPECT_EQ(EveryGame("GCPadNew.ini"), before);
+  Pad::LoadConfig();
+  Pad::GetConfig()->SaveConfig();
+  EXPECT_EQ(EveryGame("GCPadNew.ini"), before);
+  EXPECT_EQ(Describe(KIND, PadTarget::Z), "Left Grip");
+
+  EndGame();
+  EXPECT_EQ(GetPadTable(KIND), global);
+  Start("GTST02");
+  EXPECT_EQ(GetPadScope(KIND), PadScope::Global);
+  EXPECT_EQ(GetPadTable(KIND), global);
+  // An edit of the one of every game does not reach the game's own.
+  SetPadBindings(KIND, {{PadTarget::Z, PadBinding{{"Left Trigger"}, {}}}});
+  EXPECT_NE(EveryGame("GCPadNew.ini"), before);
+  EndGame();
+  Start("GTST01");
+  EXPECT_EQ(Describe(KIND, PadTarget::Z), "Left Grip");
+  ResetPadBindings(KIND);
+  EXPECT_EQ(GetPadTable(KIND), global);
+  EXPECT_TRUE(File::Exists(path));
+  SetScope(KIND, PadScope::Global);
+  EXPECT_FALSE(File::Exists(path));
+  EXPECT_EQ(Describe(KIND, PadTarget::Z), "Left Trigger");
+}
+
+// Dolphin's own: the game's INI names a profile of the mapping windows.
+TEST_F(VRWiiControllerMapping, AProfileOfTheGameIsItsOwnMapping)
+{
+  constexpr PadKind KIND = PadKind::WiiNunchuk;
+  const std::string before = EveryGame();
+  const std::string mine = GetGameProfile("Wiimote", "Mine");
+  Write(mine, "[Profile]\nDevice = OpenXR/0/OpenXR Controller\nExtension = Nunchuk\n"
+              "Nunchuk/Buttons/C = `Left Grip`\n");
+  Write(File::GetUserPath(D_GAMESETTINGS_IDX) + "GTST01.ini",
+        "[Controls]\nWiimoteProfile1 = Mine\n");
+  Start("GTST01");
+  EXPECT_EQ(GetPadScope(KIND), PadScope::Game);
+  EXPECT_EQ(GetPadProfile(KIND), "Mine");
+  EXPECT_EQ(GetPadEditLock(KIND), "");
+  EXPECT_EQ(Describe(KIND, PadTarget::C), "Left Grip");
+
+  // An edit, and a window that saves, are the profile's.
+  SetPadBindings(KIND, {{PadTarget::NunchukZ, PadBinding{{"Left Bumper"}, {}}}});
+  Wiimote::GetConfig()->SaveConfig();
+  EXPECT_EQ(LoadProfile(mine).at("Nunchuk/Buttons/Z"), "`Left Bumper`");
+  EXPECT_EQ(LoadProfile(mine).at("Nunchuk/Buttons/C"), "`Left Grip`");
+  EXPECT_EQ(EveryGame(), before);
+
+  // Another extension in a window is the profile's, too.
+  static_cast<ControllerEmu::Attachments*>(
+      Wiimote::GetWiimoteGroup(0, WiimoteEmu::WiimoteGroup::Attachments))
+      ->SetSelectedAttachment(WiimoteEmu::ExtensionNumber::CLASSIC);
+  Wiimote::GetConfig()->SaveConfig();
+  EXPECT_EQ(LoadProfile(mine).at("Extension"), "Classic");
+  EXPECT_EQ(Current(), Choice::Classic);
+  EXPECT_EQ(EveryGame(), before);
+
+  // "Use Global Values": the profile is not this game's any more, and stays.
+  SetScope(PadKind::WiiClassic, PadScope::Global);
+  EXPECT_EQ(GetPadProfile(KIND), "");
+  EXPECT_TRUE(File::Exists(mine));
+  EXPECT_EQ(Current(), Choice::RemoteNunchuk);
+  EXPECT_EQ(Describe(KIND, PadTarget::C), "Left Bumper");
+  EXPECT_EQ(EveryGame(), before);
+}
+
+TEST_F(VRWiiControllerMapping, AProfileIsChosenForTheGame)
+{
+  const std::string before = EveryGame();
+  Write(GetGameProfile("Wiimote", "Mine"),
+        "[Profile]\nDevice = OpenXR/0/OpenXR Controller\nExtension = Classic\n"
+        "Classic/Buttons/A = `Left Grip`\n");
+  Start("GTST01");
+  const std::vector<std::string> names = GetPadProfiles(PadKind::WiiNunchuk);
+  EXPECT_TRUE(std::ranges::contains(names, "Mine"));
+  EXPECT_TRUE(std::ranges::contains(names, "Steam Frame Classic Controller"));
+  EXPECT_EQ(GetPadProfile(PadKind::WiiNunchuk), "");
+
+  SetPadProfile(PadKind::WiiNunchuk, "Mine");
+  EXPECT_EQ(GetPadProfile(PadKind::WiiClassic), "Mine");
+  EXPECT_EQ(GetPadScope(PadKind::WiiClassic), PadScope::Game);
+  EXPECT_EQ(Current(), Choice::Classic);
+  EXPECT_EQ(Describe(PadKind::WiiClassic, PadTarget::A), "Left Grip");
+  std::string text;
+  File::ReadFileToString(File::GetUserPath(D_GAMESETTINGS_IDX) + "GTST01.ini", text);
+  EXPECT_TRUE(text.contains("WiimoteProfile1 = Mine"));
+
+  // One that comes with the program: an edit makes the player's of that name.
+  SetPadProfile(PadKind::WiiClassic, "Steam Frame Wii Remote (Sideways)");
+  EXPECT_EQ(Current(), Choice::RemoteSideways);
+  const std::string own = GetGameProfile("Wiimote", "Steam Frame Wii Remote (Sideways)");
+  Wiimote::GetConfig()->SaveConfig();
+  EXPECT_FALSE(File::Exists(own));
+  SetPadBindings(PadKind::WiiRemoteSideways, {{PadTarget::One, PadBinding{{"Left Bumper"}, {}}}});
+  EXPECT_EQ(LoadProfile(own).at("Buttons/1"), "`Left Bumper`");
+
+  // The game is started again.
+  EndGame();
+  EXPECT_EQ(Current(), Choice::RemoteNunchuk);
+  Start("GTST01");
+  EXPECT_EQ(GetPadProfile(PadKind::WiiRemoteSideways), "Steam Frame Wii Remote (Sideways)");
+  EXPECT_EQ(Describe(PadKind::WiiRemoteSideways, PadTarget::One), "Left Bumper");
+
+  // Another controller is chosen: its mapping is that controller's, not this profile.
+  Choose(Choice::Classic);
+  EXPECT_EQ(GetPadProfile(PadKind::WiiClassic), "");
+  EXPECT_EQ(Describe(PadKind::WiiClassic, PadTarget::A), "B");
+  SetPadProfile(PadKind::WiiClassic, "Mine");
+  SetPadProfile(PadKind::WiiClassic, "");
+  EXPECT_EQ(GetPadScope(PadKind::WiiClassic), PadScope::Global);
+  EXPECT_EQ(EveryGame(), before);
+}
+
+TEST_F(VRWiiControllerMapping, AProfileThatIsNotThere)
+{
+  const std::string before = EveryGame();
+  Write(File::GetUserPath(D_GAMESETTINGS_IDX) + "GTST01.ini",
+        "[Controls]\nWiimoteProfile1 = Gone\n");
+  Start("GTST01");
+  EXPECT_EQ(Current(), Choice::RemoteNunchuk);
+  EXPECT_EQ(GetPadScope(PadKind::WiiNunchuk), PadScope::Global);
+  Wiimote::GetConfig()->SaveConfig();
+  EXPECT_EQ(EveryGame(), before);
 }

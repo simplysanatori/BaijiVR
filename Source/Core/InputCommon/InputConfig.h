@@ -31,10 +31,16 @@ public:
   bool LoadConfig();
   void SaveConfig();
 
-  // For a controller that has another mapping than the one in the file: the function saves it where
-  // it belongs and returns true, and its section stays what it is.
-  using SaveOverride = bool (*)(int index, Common::IniFile::Section* section);
-  void SetSaveOverride(SaveOverride save_override) { m_save_override = save_override; }
+  // For a controller that may have another mapping than the one in the file. `load` is given the
+  // file's and loads that one or another; `save` saves the mapping where it is from and changes
+  // the file's section only if the mapping is the file's. They return false for a controller that
+  // is not theirs.
+  using Override = bool (*)(int index, Common::IniFile::Section* section);
+  void SetOverrides(Override load, Override save)
+  {
+    m_load_override = load;
+    m_save_override = save;
+  }
 
   // Changes when a mapping was changed by something else than the window that shows it.
   u32 GetGeneration() const { return m_generation; }
@@ -72,7 +78,8 @@ private:
   const std::string m_gui_name;
   const std::string m_profile_directory_name;
   const std::string m_profile_key;
-  SaveOverride m_save_override = nullptr;
+  Override m_load_override = nullptr;
+  Override m_save_override = nullptr;
   std::atomic<u32> m_generation{0};
   InputCommon::DynamicInputTextureManager m_dynamic_input_tex_config_manager;
 };

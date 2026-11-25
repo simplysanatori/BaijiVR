@@ -26,11 +26,12 @@ void WiimoteEmuMotionControl::CreateMainLayout()
   m_main_layout->addWidget(
       CreateGroupBox(Wiimote::GetWiimoteGroup(GetPort(), WiimoteEmu::WiimoteGroup::Point)));
 
+  m_main_layout->addWidget(
+      CreateGroupBox(Wiimote::GetWiimoteGroup(GetPort(), WiimoteEmu::WiimoteGroup::Shake)));
+
   const WiimoteSource source = Config::Get(Config::GetInfoForWiimoteSource(GetPort()));
   if (source != WiimoteSource::OpenXR)
   {
-    m_main_layout->addWidget(
-        CreateGroupBox(Wiimote::GetWiimoteGroup(GetPort(), WiimoteEmu::WiimoteGroup::Shake)));
     m_main_layout->addWidget(
         CreateGroupBox(Wiimote::GetWiimoteGroup(GetPort(), WiimoteEmu::WiimoteGroup::Tilt)));
     m_main_layout->addWidget(

@@ -62,13 +62,14 @@ constexpr std::array<TargetInfo, NUM_PAD_TARGETS> TARGETS{{
     {"Right Stick", PadControl::RightStick},
 }};
 
-// The chips on the left (above) and on the right (below), as their controls are on the drawing.
-// `over`: above the ones above.
+// The chips beside the drawing and, for one that is wide, above and below it: each where its
+// control is on the drawing, so that the lines do not cross.
 struct Sides
 {
-  std::vector<PadTarget> first;
-  std::vector<PadTarget> second;
-  std::vector<PadTarget> over{};
+  std::vector<PadTarget> left;
+  std::vector<PadTarget> right;
+  std::vector<PadTarget> above{};
+  std::vector<PadTarget> below{};
 };
 
 Sides GetSides(PadKind kind)
@@ -84,12 +85,11 @@ Sides GetSides(PadKind kind)
     return {{NunchukStick, C, NunchukZ, DPadUp, DPadLeft, DPadRight, DPadDown},
             {B, A, Home, Plus, Minus, One, Two, Shake}};
   case PadKind::WiiRemoteSideways:
-    return {{A, Plus, One},
-            {B, Home, Minus, Two, Shake},
-            {DPadUp, DPadLeft, DPadRight, DPadDown}};
+    return {{DPadUp, DPadLeft, DPadRight, DPadDown}, {One, Two, Shake}, {A, Plus},
+            {B, Home, Minus}};
   case PadKind::WiiClassic:
     return {{ZL, L, Minus, DPadUp, DPadLeft, DPadRight, DPadDown, LeftStick},
-            {ZR, R, Home, Plus, X, Y, A, B, RightStick}};
+            {ZR, R, Home, Plus, X, A, B, Y, RightStick}};
   }
   return {};
 }
@@ -195,9 +195,8 @@ const std::vector<PadTarget>& GetTargets(PadKind kind)
     for (std::size_t i = 0; i < all.size(); ++i)
     {
       const Sides sides = GetSides(static_cast<PadKind>(i));
-      all[i] = sides.first;
-      all[i].insert(all[i].end(), sides.second.begin(), sides.second.end());
-      all[i].insert(all[i].end(), sides.over.begin(), sides.over.end());
+      for (const auto* const side : {&sides.left, &sides.right, &sides.above, &sides.below})
+        all[i].insert(all[i].end(), side->begin(), side->end());
     }
     return all;
   }();
@@ -449,26 +448,9 @@ std::vector<PadChip> GetPadChips(PadKind kind, const Rect& area)
 {
   const Sides sides = GetSides(kind);
   std::vector<PadChip> chips;
-  if (kind == PadKind::WiiRemoteSideways)
-  {
-    const auto add = [&](const std::vector<PadTarget>& targets, float y, bool above) {
-      const auto count = static_cast<float>(targets.size());
-      float x = area.Cx() - (count * ROW_CHIP_W + (count - 1.0f) * CHIP_GAP) * 0.5f;
-      for (const PadTarget target : targets)
-      {
-        const Rect rect{x, y, x + ROW_CHIP_W, y + PAD_CHIP_H};
-        chips.push_back({target, rect, rect.Cx(), above ? rect.y1 : rect.y0});
-        x += ROW_CHIP_W + CHIP_GAP;
-      }
-    };
-    add(sides.over, area.y0, true);
-    add(sides.first, area.y0 + PAD_CHIP_H + CHIP_GAP, true);
-    add(sides.second, area.y1 - PAD_CHIP_H, false);
-    return chips;
-  }
   for (const bool left : {true, false})
   {
-    const std::vector<PadTarget>& targets = left ? sides.first : sides.second;
+    const std::vector<PadTarget>& targets = left ? sides.left : sides.right;
     const auto count = static_cast<float>(targets.size());
     const float pitch = std::min(PAD_CHIP_H + CHIP_GAP, area.H() / count);
     const float x = left ? area.x0 : area.x1 - CHIP_W;
@@ -480,16 +462,30 @@ std::vector<PadChip> GetPadChips(PadKind kind, const Rect& area)
       y += pitch;
     }
   }
+  for (const bool above : {true, false})
+  {
+    const std::vector<PadTarget>& targets = above ? sides.above : sides.below;
+    const auto count = static_cast<float>(targets.size());
+    const float y = above ? area.y0 : area.y1 - PAD_CHIP_H;
+    float x = area.Cx() - (count * ROW_CHIP_W + (count - 1.0f) * CHIP_GAP) * 0.5f;
+    for (const PadTarget target : targets)
+    {
+      const Rect rect{x, y, x + ROW_CHIP_W, y + PAD_CHIP_H};
+      chips.push_back({target, rect, rect.Cx(), above ? rect.y1 : rect.y0});
+      x += ROW_CHIP_W + CHIP_GAP;
+    }
+  }
   return chips;
 }
 
 Rect GetPadEditArt(PadKind kind, const Rect& area)
 {
-  if (kind == PadKind::WiiRemoteSideways)
-  {
-    const float inset = PAD_CHIP_H + ART_GAP * 2.0f;
-    return {area.x0, area.y0 + PAD_CHIP_H + CHIP_GAP + inset, area.x1, area.y1 - inset};
-  }
-  return {area.x0 + CHIP_W + ART_GAP, area.y0, area.x1 - CHIP_W - ART_GAP, area.y1};
+  const Sides sides = GetSides(kind);
+  Rect art{area.x0 + CHIP_W + ART_GAP, area.y0, area.x1 - CHIP_W - ART_GAP, area.y1};
+  if (!sides.above.empty())
+    art.y0 += PAD_CHIP_H + ART_GAP;
+  if (!sides.below.empty())
+    art.y1 -= PAD_CHIP_H + ART_GAP;
+  return art;
 }
 }  // namespace VR::UI

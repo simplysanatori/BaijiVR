@@ -51,6 +51,12 @@ InputConfig* GetConfig(PadKind kind)
   return kind == PadKind::GameCube ? Pad::GetConfig() : Wiimote::GetConfig();
 }
 
+VRWiiController::Kind GetStoreKind(PadKind kind)
+{
+  return kind == PadKind::GameCube ? VRWiiController::Kind::GameCube :
+                                     VRWiiController::Kind::Remote;
+}
+
 // Where a control is in the mapping.
 struct Place
 {
@@ -416,11 +422,6 @@ std::string GetPadEditLock(PadKind kind)
     return "The game has another controller.";
   if (GetConfig(kind)->GetController(0)->GetDefaultDevice().ToString() != FRAME_DEVICE)
     return "Only for the Frame controllers.";
-  // Saving would put the game's profile into the mapping of every game.
-  Common::IniFile game_ini = SConfig::GetInstance().LoadGameIni();
-  const std::string profile = fmt::format("{}Profile1", GetConfig(kind)->GetProfileKey());
-  if (game_ini.GetOrCreateSection("Controls")->Exists(profile))
-    return "This game has a controller profile of its own.";
   return {};
 }
 
@@ -486,17 +487,43 @@ void SetPadBindings(PadKind kind, const std::vector<std::pair<PadTarget, PadBind
 
 void ResetPadBindings(PadKind kind)
 {
-  InputConfig* const config = GetConfig(kind);
-  if (kind != PadKind::GameCube)
-  {
-    VRWiiController::ResetMapping();
-    config->GenerateControllerTextures();
-    return;
-  }
-  Common::IniFile ini;
-  if (!ini.Load(config->GetSysProfileDirectoryPath() + "Steam Frame GameCube.ini"))
-    return;
-  config->GetController(0)->LoadConfig(ini.GetOrCreateSection("Profile"));
-  ApplyAndSave(kind);
+  VRWiiController::ResetMapping(GetStoreKind(kind));
+  GetConfig(kind)->GenerateControllerTextures();
+}
+
+PadScope GetPadScope(PadKind kind)
+{
+  return VRWiiController::HasGameMapping(GetStoreKind(kind)) ? PadScope::Game : PadScope::Global;
+}
+
+std::string GetPadScopeLock(PadKind kind)
+{
+  return VRWiiController::GetGameMappingLock(GetStoreKind(kind));
+}
+
+std::vector<std::string> GetPadProfiles(PadKind kind)
+{
+  return VRWiiController::GetProfiles(GetStoreKind(kind));
+}
+
+std::string GetPadProfile(PadKind kind)
+{
+  return VRWiiController::GetProfile(GetStoreKind(kind));
+}
+
+void SetPadProfile(PadKind kind, const std::string& name)
+{
+  VRWiiController::SetProfile(Core::System::GetInstance(), GetStoreKind(kind), name);
+  GetConfig(kind)->GenerateControllerTextures();
+}
+
+void SetPadScope(PadKind kind, PadScope scope)
+{
+  auto& system = Core::System::GetInstance();
+  if (scope == PadScope::Game)
+    VRWiiController::MakeGameMapping(system, GetStoreKind(kind));
+  else
+    VRWiiController::RemoveGameMapping(system, GetStoreKind(kind));
+  GetConfig(kind)->GenerateControllerTextures();
 }
 }  // namespace VR::UI

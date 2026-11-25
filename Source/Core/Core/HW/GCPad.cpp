@@ -5,6 +5,7 @@
 
 #include "Common/Common.h"
 #include "Core/HW/GCPadEmu.h"
+#include "Core/VRWiiController.h"
 #include "InputCommon/ControllerEmu/ControlGroup/ControlGroup.h"
 #include "InputCommon/GCPadStatus.h"
 #include "InputCommon/InputConfig.h"
@@ -33,6 +34,7 @@ void Initialize()
   }
 
   s_config.RegisterHotplugCallback();
+  s_config.SetOverrides(VRWiiController::LoadPad, VRWiiController::SavePad);
 
   // Load the saved controller config
   s_config.LoadConfig();

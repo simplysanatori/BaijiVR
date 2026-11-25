@@ -41,8 +41,30 @@ The **Controls** tab has the controller of a Wii game: **GameCube Controller**, 
 | | |
 |---|---|
 | Without a choice | The Wii Remote of the Controllers settings: Wii Remote + Nunchuk at first. |
-| Well-known games | Start with their own: Wii Remote (Sideways) in *Kirby's Return to Dream Land* and *New Super Mario Bros. Wii*, for example. The list is `Data/Sys/WiiControllers.ini`. |
+| Well-known games | Start with their own, and a notice says which: Wii Remote (Sideways) in *Kirby's Return to Dream Land* and *New Super Mario Bros. Wii*, for example. The list is `Data/Sys/WiiControllers.ini`. Your choice is in front of it. |
 | A game's own settings | A profile, the first port or the Wii Remote's source in its INI is in front of the list. A profile is in front of your choice, too. |
-| **Edit** | Changes the mapping of that controller, in every game that has it. The mapping window in the Controllers settings shows the same one. |
 
-The Wii Remote's extension can be chosen in the Controllers settings without opening the mapping window. During a game with its own controller, that changes the game's.
+With the Wii Remote on its side, rolling the right controller tilts it, as turning a wheel.
+
+## Editing the Controls
+
+**Edit Controls** on the **Controls** tab shows the game's controller with a chip on every button and stick.
+
+| | |
+|---|---|
+| A chip | Listens: **Press a Button…** shows. Press the Frame button for it. |
+| A stick's chip | **Push the Stick Up…**, then **Push the Stick Right…**. |
+| **Cancel** | Stops listening. |
+| **Reset to Default** | The Steam Frame layout of this controller. |
+| **Global** | The mapping of this controller in every game. |
+| **Per-Game** | This game gets its own copy of the mapping. **Use Global Values** removes it. |
+
+Each controller has its own mapping: GameCube Controller, Wii Remote, Wii Remote + Nunchuk, Wii Remote (Sideways) and Classic Controller. The mapping window in the Controllers settings shows the one the game has, and its title says which.
+
+| Mapping | File in `Config/` |
+|---|---|
+| Every game | `GCPadNew.ini`, `WiimoteNew.ini` |
+| A Wii Remote that `WiimoteNew.ini` is not for | `Profiles/Wiimote/VR <controller>.ini` |
+| One game | `Profiles/GCPad/VR GameCube Controller - <game ID>.ini`, `Profiles/Wiimote/VR <controller> - <game ID>.ini` |
+
+The Wii Remote's extension can be chosen in the Controllers settings without opening the mapping window. During a Wii game, that changes the game's controller.

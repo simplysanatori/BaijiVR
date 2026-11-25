@@ -575,7 +575,7 @@ void MappingWindow::SetMappingType(MappingWindow::Type type)
   case Type::MAPPING_GC_DANCEMAT:
   case Type::MAPPING_GCPAD:
     widget = CreateStandardControllerMappingWidget(this);
-    setWindowTitle(tr("GameCube Controller at Port %1").arg(GetPort() + 1));
+    UpdateTitle();
     AddWidget(tr("GameCube Controller"), widget);
     break;
   case Type::MAPPING_GC_MICROPHONE:
@@ -593,8 +593,9 @@ void MappingWindow::SetMappingType(MappingWindow::Type type)
     widget = new WiimoteEmuGeneral(this, extension);
     UpdateTitle();
     AddWidget(tr("General and Options"), widget);
-    if (!m_is_openxr_wiimote)
-      AddWidget(tr("Motion Simulation"), new WiimoteEmuMotionControl(this));
+    // The Frame's Wii Remote has it for what the controller's own motion does not do: Shake, and
+    // the pointer without a headset.
+    AddWidget(tr("Motion Simulation"), new WiimoteEmuMotionControl(this));
     AddWidget(tr("Motion Input"), new WiimoteEmuMotionControlIMU(this));
     m_extension_tab = AddWidget(tr("Extension"), extension);
     m_extension_motion_simulation_tab =
@@ -718,16 +719,17 @@ QWidget* MappingWindow::AddWidget(const QString& name, QWidget* widget)
 
 void MappingWindow::UpdateTitle()
 {
-  if (m_mapping_type != Type::MAPPING_WIIMOTE_EMU)
+  // The mapping that is shown is not always the one of every game.
+  using VRWiiController::Kind;
+  if (m_mapping_type != Type::MAPPING_WIIMOTE_EMU && m_mapping_type != Type::MAPPING_GCPAD)
     return;
-  const auto own =
-      GetPort() == 0 ? VRWiiController::GetOwnMapping() : VRWiiController::Choice::None;
-  QString title = tr("Wii Remote %1").arg(GetPort() + 1);
-  if (own != VRWiiController::Choice::None)
-  {
-    const char* const name = VRWiiController::NAMES[static_cast<std::size_t>(own)];
-    title = tr("%1 - %2 of This Game").arg(title, QString::fromLatin1(name));
-  }
+  const bool remote = m_mapping_type == Type::MAPPING_WIIMOTE_EMU;
+  const std::string store =
+      VRWiiController::DescribeMappingStore(remote ? Kind::Remote : Kind::GameCube, GetPort());
+  QString title = (remote ? tr("Wii Remote %1") : tr("GameCube Controller at Port %1"))
+                      .arg(GetPort() + 1);
+  if (!store.empty())
+    title = tr("%1 - %2").arg(title, QString::fromStdString(store));
   setWindowTitle(title);
 }
 
