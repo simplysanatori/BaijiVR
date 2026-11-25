@@ -213,6 +213,8 @@ extern const Info<float> GFX_VR_SCREEN_SIZE;
 extern const Info<float> GFX_VR_SCREEN_YAW;
 extern const Info<float> GFX_VR_SCREEN_PITCH;
 extern const Info<bool> GFX_VR_LOCK_SCREEN;
+// Degrees the screen is bent round you: 0 (flat), 15, 30, 45, 60, 75 or 90.
+extern const Info<int> GFX_VR_SCREEN_CURVE;
 // Stereoscopic 3D, percent of natural 3D: at 100 the farthest things are as far apart on the screen
 // as the eyes, and depth is true to the screen's distance.
 extern const Info<float> GFX_VR_SCREEN_DEPTH;

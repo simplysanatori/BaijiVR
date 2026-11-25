@@ -401,6 +401,7 @@ struct VideoConfig final
   float vr_screen_yaw = 0.0f;
   float vr_screen_pitch = 0.0f;
   bool vr_lock_screen = false;
+  int vr_screen_curve = 0;
   float vr_screen_depth = 100.0f;
   bool vr_pointer_beams = true;
   bool vr_toasts = true;
