@@ -36,6 +36,9 @@ class OpenXRManager;
 
 namespace VR::UI
 {
+// Goes on with the game in a flat window (Main's bottom button). Host thread.
+void RequestSwitchToFlat();
+
 // What is drawn over the game in the headset, and the controls that are the same in every game:
 // the VR menu, the toasts, the pointer beams, moving the screen with a grip (PadFilter.h has the
 // buttons). It lives on the XR pacing thread and keeps going when the game is paused or has drawn

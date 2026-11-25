@@ -328,6 +328,11 @@ void QueueSwitchMode(bool to_immersive)
 }
 }  // namespace
 
+void RequestSwitchToFlat()
+{
+  VrUi::PostToast("Switch to Flat Is Not Available Yet", 5000);
+}
+
 VrUi::VrUi(OpenXRManager* manager, CreateOverlay create_overlay, u32 max_layers)
     : m_manager(manager), m_create_overlay(std::move(create_overlay)), m_max_layers(max_layers)
 {
@@ -1221,6 +1226,10 @@ void VrUi::Activate(const MenuWidget& widget, int option)
     events.stop = true;
     HandleEvents(events);
     CloseMenu();
+    break;
+  case MenuItem::SwitchToFlat:
+    CloseMenu();
+    Core::QueueHostJob([](Core::System&) { RequestSwitchToFlat(); });
     break;
   case MenuItem::Section:
     if (option >= 0)

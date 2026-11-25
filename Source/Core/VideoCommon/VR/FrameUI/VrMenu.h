@@ -64,6 +64,7 @@ enum class MenuItem
   QuickLoad,
   FastForward,
   Stop,
+  SwitchToFlat,
   // A row's setting: the index is its SettingId.
   Setting,
   Section,

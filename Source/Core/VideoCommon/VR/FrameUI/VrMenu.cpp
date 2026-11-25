@@ -132,12 +132,24 @@ void AddRail(Builder* builder, const MenuState& state)
   }
 }
 
+// Azahar for Frame's page: eight tiles between two buttons as wide as the page.
 void AddMain(Builder* builder, const MenuState& state)
 {
-  builder->Headline(state.title);
+  constexpr float GAP = 12.0f;
+  constexpr int COLUMNS = 4;
+  constexpr float TILE_W = (RIGHT - LEFT - GAP * (COLUMNS - 1)) / COLUMNS;
+  constexpr float BOTTOM = PANE.y1 - 24.0f;
+  constexpr float RESUME_Y0 = PANE.y0 + 24.0f + 52.0f;
+  constexpr float TILES_Y0 = RESUME_Y0 + 64.0f + 20.0f;
+  constexpr float TILES_Y1 = BOTTOM - 56.0f - GAP;
+  constexpr float TILE_H = (TILES_Y1 - TILES_Y0 - GAP) * 0.5f;
+
+  MenuWidget& headline = builder->Add(Kind::Headline, MenuItem::None);
+  headline.rect = {LEFT, PANE.y0 + 24.0f, RIGHT, RESUME_Y0 - 8.0f};
+  headline.label = state.title;
 
   MenuWidget& resume = builder->Add(Kind::Button, MenuItem::Resume);
-  resume.rect = {LEFT, builder->GetY() - 8.0f, RIGHT, builder->GetY() + 56.0f};
+  resume.rect = {LEFT, RESUME_Y0, RIGHT, RESUME_Y0 + 64.0f};
   resume.icon = Icon::kPlayArrow;
   resume.label = "Continue";
   resume.active = true;
@@ -156,35 +168,28 @@ void AddMain(Builder* builder, const MenuState& state)
       {MenuItem::SaveState, Icon::kSaveAs, "Save State"},
       {MenuItem::LoadState, Icon::kFolderOpen, "Load State"},
       {MenuItem::Screenshot, Icon::kPhotoCamera, "Screenshot"},
-      {MenuItem::ResetScreen, Icon::kRecenter, state.settings.immersive ? "Reset View" : "Reset Screen"},
-      {MenuItem::FastForward, Icon::kSpeed, "Fast Forward", state.fast_forward},
+      {MenuItem::Restart, Icon::kRestartAlt, "Restart"},
       state.wii ? TileItem{MenuItem::Home, Icon::kHome, "Wii Home"} :
-                  TileItem{MenuItem::Restart, Icon::kRestartAlt, "Restart"},
+                  TileItem{MenuItem::FastForward, Icon::kSpeed, "Fast Forward", state.fast_forward},
+      {MenuItem::Stop, Icon::kClose, "Close Game"},
   }};
-
-  constexpr int COLUMNS = 4;
-  constexpr float GAP = 12.0f;
-  constexpr float TILE_W = (RIGHT - LEFT - GAP * (COLUMNS - 1)) / COLUMNS;
-  constexpr float STOP_TOP = PANE.y1 - 24.0f - 56.0f;
-  const float top = resume.rect.y1 + 20.0f;
-  const float tile_h = (STOP_TOP - GAP - top - GAP) * 0.5f;
   for (std::size_t i = 0; i < tiles.size(); ++i)
   {
     const float x = LEFT + static_cast<float>(i % COLUMNS) * (TILE_W + GAP);
-    const float y = top + static_cast<float>(i / COLUMNS) * (tile_h + GAP);
+    const float y = TILES_Y0 + static_cast<float>(i / COLUMNS) * (TILE_H + GAP);
     MenuWidget& w = builder->Add(Kind::Tile, tiles[i].item);
-    w.rect = {x, y, x + TILE_W, y + tile_h};
+    w.rect = {x, y, x + TILE_W, y + TILE_H};
     w.icon = tiles[i].icon;
     w.label = tiles[i].label;
     w.active = tiles[i].active;
     w.disabled = tiles[i].disabled;
+    w.danger = tiles[i].item == MenuItem::Stop;
   }
 
-  MenuWidget& stop = builder->Add(Kind::Button, MenuItem::Stop);
-  stop.rect = {LEFT, STOP_TOP, RIGHT, PANE.y1 - 24.0f};
-  stop.icon = Icon::kClose;
-  stop.label = "Close Game";
-  stop.danger = true;
+  MenuWidget& flat = builder->Add(Kind::Button, MenuItem::SwitchToFlat);
+  flat.rect = {LEFT, BOTTOM - 56.0f, RIGHT, BOTTOM};
+  flat.icon = Icon::kTv;
+  flat.label = "Switch to Flat";
 }
 
 // Save State and Load State: the slots in two columns, over them in Load State the autosaves' card
@@ -742,7 +747,11 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
       kit->RailItem(w.rect, w.icon, w.label, w.active, look);
       break;
     case Kind::Tile:
-      kit->Tile(w.rect, w.active ? ButtonStyle::Filled : ButtonStyle::Tonal, w.icon, w.label, look);
+      kit->Tile(w.rect,
+                w.danger ? ButtonStyle::Danger :
+                w.active ? ButtonStyle::Filled :
+                           ButtonStyle::Tonal,
+                w.icon, w.label, look);
       break;
     case Kind::Button:
       kit->Button(w.rect,
@@ -750,7 +759,7 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
                   w.active ? ButtonStyle::Filled :
                   w.item == MenuItem::AutosaveSettings ? ButtonStyle::Text :
                                                          ButtonStyle::Tonal,
-                  w.icon, w.label, look);
+                  w.icon, w.label, look, w.rect.H() >= 56.0f ? Type::Title : Type::Label);
       break;
     case Kind::Segmented:
     {

@@ -374,6 +374,30 @@ TEST(VRFrameUI, MenuFindsWhatIsOnTop)
   EXPECT_EQ(slot->index, 1);
 }
 
+TEST(VRFrameUI, MainPage)
+{
+  MenuState s;
+  s.title = "Game";
+  for (const bool wii : {false, true})
+  {
+    s.wii = wii;
+    const auto widgets = VrMenu::Layout(s);
+    std::vector<MenuItem> tiles;
+    for (const MenuWidget& w : widgets)
+    {
+      if (w.kind == MenuWidget::Kind::Tile)
+        tiles.push_back(w.item);
+    }
+    EXPECT_EQ(tiles, (std::vector{MenuItem::QuickSave, MenuItem::QuickLoad, MenuItem::SaveState,
+                                  MenuItem::LoadState, MenuItem::Screenshot, MenuItem::Restart,
+                                  wii ? MenuItem::Home : MenuItem::FastForward, MenuItem::Stop}));
+    const auto flat = std::ranges::find(widgets, MenuItem::SwitchToFlat, &MenuWidget::item);
+    const auto resume = std::ranges::find(widgets, MenuItem::Resume, &MenuWidget::item);
+    ASSERT_TRUE(flat != widgets.end() && resume != widgets.end());
+    EXPECT_EQ(flat->rect.W(), resume->rect.W());
+  }
+}
+
 TEST(VRFrameUI, MenuIsOnThePanelWithoutOverlaps)
 {
   for (const bool immersive : {false, true})
