@@ -2,7 +2,7 @@
 
 Baiji's own changelog is in [its README](../README.upstream.md). Thanks to thejerf for Baiji and to iChris4 for dolphinXR, which Baiji VR is built on.
 
-## Baiji VR, first release (not out yet, November 2026)
+## Baiji VR 0.9.0 (beta, not out yet)
 
 ### Highlights
 
