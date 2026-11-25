@@ -435,6 +435,13 @@ bool VRModeSwitch::SaveState()
 
 void VRModeSwitch::Request(Mode mode)
 {
+  // Out of Host_YieldToUI, while this thread has the core locked: later.
+  if (Core::IsCPUThread())
+  {
+    QTimer::singleShot(POLL_MS, this, [this, mode] { Request(mode); });
+    return;
+  }
+
   if (IsSwitching() || (m_question && m_question->isVisible()))
     return;
 

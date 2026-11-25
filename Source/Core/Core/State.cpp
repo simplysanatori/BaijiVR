@@ -132,6 +132,17 @@ static const std::map<u32, std::pair<std::string, std::string>> s_old_versions =
   return std::shared_lock{s_state_saves_in_progress};
 }
 
+// Waits for the state saves in progress. Not inside of a pause of the core (Host_YieldToUI gets there
+// from the UI's events): the save may be this thread's own, or a job the paused CPU thread has yet to
+// run. The file is whole without the wait as well, it is renamed when it was written.
+[[nodiscard]] static auto WaitForStateSaveTasks()
+{
+  std::unique_lock lock{s_state_saves_in_progress, std::defer_lock};
+  if (!Core::IsCPUThread())
+    lock.lock();
+  return lock;
+}
+
 static bool ReadHeader(const std::string& filename, StateHeader& header);
 
 static void DoState(Core::System& system, PointerWrap& p)
@@ -636,7 +647,7 @@ static bool ReadHeader(const std::string& filename, StateHeader& header)
 
 std::string GetInfoStringOfSlot(int slot, bool translate)
 {
-  std::lock_guard lk{s_state_saves_in_progress};
+  const auto lk = WaitForStateSaveTasks();
 
   std::string filename = MakeStateFilename(slot);
   if (!File::Exists(filename))
@@ -651,7 +662,7 @@ std::string GetInfoStringOfSlot(int slot, bool translate)
 
 u64 GetUnixTimeOfSlot(int slot)
 {
-  std::lock_guard lk{s_state_saves_in_progress};
+  const auto lk = WaitForStateSaveTasks();
 
   State::StateHeader header;
   if (!ReadHeader(MakeStateFilename(slot), header))
@@ -917,7 +928,7 @@ void Init(Core::System& system)
 
   s_flush_unsaved_data_hook = UICommon::AddFlushUnsavedDataCallback([] {
     // Holding the lock for any amount of time means there are no pending state save tasks.
-    std::lock_guard lk{s_state_saves_in_progress};
+    const auto lk = WaitForStateSaveTasks();
   });
 }
 

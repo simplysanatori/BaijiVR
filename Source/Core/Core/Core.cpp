@@ -114,6 +114,11 @@ static std::atomic<bool> s_stop_frame_step;
 // to s_state.
 static std::recursive_mutex s_core_mutex;
 
+// This thread is between PauseAndLock and RestoreStateAndUnlock. The host's events may run there
+// (Host_YieldToUI): what waits for the core would wait for this very thread.
+static thread_local bool tls_has_core_locked = false;
+static thread_local bool tls_host_jobs_put_off = false;
+
 // The value Paused is never stored in this variable. The core is considered to be in
 // the Paused state if this variable is Running and the CPU reports that it's stepping.
 static std::atomic<State> s_state = State::Uninitialized;
@@ -746,6 +751,14 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
 void SetState(Core::System& system, State state, bool report_state_change,
               bool override_achievement_restrictions)
 {
+  if (tls_has_core_locked)
+  {
+    QueueHostJob([=](Core::System& job_system) {
+      SetState(job_system, state, report_state_change, override_achievement_restrictions);
+    });
+    return;
+  }
+
   {
     std::lock_guard lock(s_core_mutex);
 
@@ -857,6 +870,7 @@ static bool PauseAndLock(Core::System& system)
   // First pause the CPU.  This acquires a wrapper mutex and converts the current thread into
   // a temporary replacement CPU Thread.
   const bool was_unpaused = system.GetCPU().PauseAndLock();
+  tls_has_core_locked = true;
 
   // audio has to come after CPU, because CPU thread can wait for audio thread (m_throttle).
   system.GetDSP().GetDSPEmulator()->PauseAndLock();
@@ -872,7 +886,12 @@ static bool PauseAndLock(Core::System& system)
 
 static void RestoreStateAndUnlock(Core::System& system, const bool unpause_on_unlock)
 {
-  Common::ScopeGuard scope_guard([] { s_core_mutex.unlock(); });
+  Common::ScopeGuard scope_guard([] {
+    s_core_mutex.unlock();
+    tls_has_core_locked = false;
+    if (std::exchange(tls_host_jobs_put_off, false))
+      Host_Message(HostMessageID::WMUserJobDispatch);
+  });
 
   if (!IsRunning(system))
     return;
@@ -1046,6 +1065,12 @@ void HostDispatchJobs(Core::System& system)
   // WARNING: This should only run on the Host Thread.
   // NOTE: This function is potentially re-entrant. If a job calls
   //   Core::Stop for instance then we'll enter this a second time.
+  if (tls_has_core_locked)
+  {
+    tls_host_jobs_put_off = true;
+    return;
+  }
+
   std::unique_lock guard(s_host_jobs_lock);
   while (!s_host_jobs_queue.empty())
   {
