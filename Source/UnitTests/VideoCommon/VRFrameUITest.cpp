@@ -112,7 +112,7 @@ std::vector<MenuState> GetPages(bool immersive)
   {
     MenuState s = base;
     s.section = static_cast<MenuSection>(i);
-    s.tab = s.section == MenuSection::Screen ? MenuTab::Screen : MenuTab::Settings;
+    s.tab = s.section == MenuSection::Screen ? MenuTab::Position : MenuTab::Settings;
     const float most = VrMenu::GetList(s)->bar.max_scroll;
     for (const float scroll : {0.0f, most * 0.5f, most})
     {
@@ -383,6 +383,39 @@ TEST(VRFrameUI, NaturalShiftIsTheEyesApartAtInfinity)
     EXPECT_NEAR(DISTANCE / (1.0f - apart(w) / EYES), DISTANCE * w / CONVERGENCE, 1e-2f);
 }
 
+TEST(VRFrameUI, Rail)
+{
+  MenuState s;
+  s.tab = MenuTab::Position;
+  std::vector<std::string> labels;
+  for (const MenuWidget& w : VrMenu::Layout(s))
+  {
+    if (w.kind != MenuWidget::Kind::Rail)
+      continue;
+    labels.push_back(w.label);
+    EXPECT_EQ(w.active, w.label == "Position");
+    EXPECT_GE(w.rect.y0, 0.0f);
+    EXPECT_LE(w.rect.y1, VrMenu::HEIGHT);
+  }
+  EXPECT_EQ(labels, (std::vector<std::string>{"Main", "Position", "Controls", "Mods", "Settings"}));
+}
+
+TEST(VRFrameUI, TheGameGoesOnWhereItsSettingsShow)
+{
+  for (const MenuTab tab : {MenuTab::Main, MenuTab::Controls, MenuTab::Mods})
+  {
+    for (const MenuSection section : {MenuSection::General, MenuSection::Graphics,
+                                      MenuSection::Immersive})
+    {
+      EXPECT_FALSE(ShowsGame(tab, section));
+      EXPECT_TRUE(ShowsGame(MenuTab::Position, section));
+    }
+  }
+  EXPECT_FALSE(ShowsGame(MenuTab::Settings, MenuSection::General));
+  EXPECT_TRUE(ShowsGame(MenuTab::Settings, MenuSection::Graphics));
+  EXPECT_TRUE(ShowsGame(MenuTab::Settings, MenuSection::Immersive));
+}
+
 TEST(VRFrameUI, MenuFindsWhatIsOnTop)
 {
   MenuState state;
@@ -502,7 +535,7 @@ TEST(VRFrameUI, EveryRowCanBeScrolledTo)
   {
     MenuState s;
     s.section = static_cast<MenuSection>(i);
-    s.tab = s.section == MenuSection::Screen ? MenuTab::Screen : MenuTab::Settings;
+    s.tab = s.section == MenuSection::Screen ? MenuTab::Position : MenuTab::Settings;
     std::set<int> found;
     for (float scroll = 0.0f;; scroll += 8.0f)
     {
@@ -634,7 +667,7 @@ TEST(VRFrameUI, SliderWithStops)
 TEST(VRFrameUI, GreyedRowsSayWhy)
 {
   MenuState s;
-  s.tab = MenuTab::Screen;
+  s.tab = MenuTab::Position;
   s.settings.immersive = true;
   const auto widgets = VrMenu::Layout(s);
   const MenuWidget* const lock = FindSetting(widgets, SettingId::LockScreen);
@@ -763,7 +796,7 @@ TEST(VRFrameUI, AutosaveRules)
 TEST(VRFrameUI, ScopeControls)
 {
   MenuState s;
-  s.tab = MenuTab::Screen;
+  s.tab = MenuTab::Position;
   const auto find = [&s](MenuItem item) {
     const auto widgets = VrMenu::Layout(s);
     return *std::ranges::find(widgets, item, &MenuWidget::item);
@@ -783,7 +816,7 @@ TEST(VRFrameUI, ScopeControls)
   s.tab = MenuTab::Settings;
   EXPECT_TRUE(find(MenuItem::ScopeMore).disabled);
 
-  s.tab = MenuTab::Screen;
+  s.tab = MenuTab::Position;
   EXPECT_EQ(GetLock(GetSettingRow(SettingId::Size), s.settings), Lock::None);
   s.settings.scope = SettingScope::Global;
   EXPECT_EQ(GetLock(GetSettingRow(SettingId::Size), s.settings), Lock::GameValue);

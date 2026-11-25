@@ -426,7 +426,7 @@ void VrUi::Update(const Frame& frame, Controllers* controllers)
   UpdateMenu(frame, raw, dt);
   UpdateGrab(frame, raw, dt);
 
-  // With the menu on its Screen tab the game runs, but it does not get the controllers.
+  // With the menu on its Position tab the game runs, but it does not get the controllers.
   const PadEvents events =
       m_filter.Update(controllers, frame.time_ns, m_menu_open, m_grab_hand);
   HandleEvents(events);
@@ -801,10 +801,8 @@ void VrUi::CloseMenu()
 
 void VrUi::UpdatePause()
 {
-  // These settings show on the running game.
-  const bool shown = m_menu.tab == MenuTab::Screen ||
-                     (m_menu.tab == MenuTab::Settings && m_menu.section != MenuSection::General);
-  const bool wanted = m_menu_open && !shown && m_frame.time_ns >= m_pause_after_ns;
+  const bool wanted = m_menu_open && !ShowsGame(m_menu.tab, m_menu.section) &&
+                      m_frame.time_ns >= m_pause_after_ns;
   if (wanted == m_pause_wanted)
     return;
   m_pause_wanted = wanted;
@@ -883,7 +881,7 @@ void VrUi::EndDrag()
 void VrUi::UseGlobalValues()
 {
   const MenuSection section =
-      m_menu.tab == MenuTab::Screen ? MenuSection::Screen : m_menu.section;
+      m_menu.tab == MenuTab::Position ? MenuSection::Screen : m_menu.section;
   QueueConfig([section] { UI::UseGlobalValues(section); });
   if (section == MenuSection::Screen)
   {
@@ -1257,8 +1255,8 @@ void VrUi::Activate(const MenuWidget& widget, int option)
     m_menu.tab = MenuTab::Main;
     m_menu.page = MenuPage::Main;
     break;
-  case MenuItem::TabScreen:
-    m_menu.tab = MenuTab::Screen;
+  case MenuItem::TabPosition:
+    m_menu.tab = MenuTab::Position;
     m_menu.page = MenuPage::Main;
     break;
   case MenuItem::TabControls:

@@ -82,7 +82,7 @@ enum class SettingId : int
 
 constexpr std::size_t NUM_SETTINGS = static_cast<std::size_t>(SettingId::Count);
 
-// Where the rows are: the Screen tab, or a section of the Settings tab.
+// Where the rows are: the Position tab, or a section of the Settings tab.
 enum class MenuSection
 {
   Screen,

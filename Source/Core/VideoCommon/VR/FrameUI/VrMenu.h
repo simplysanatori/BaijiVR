@@ -25,7 +25,7 @@ namespace VR::UI
 enum class MenuTab
 {
   Main,
-  Screen,
+  Position,
   Controls,
   Mods,
   Settings,
@@ -35,7 +35,7 @@ enum class MenuItem
 {
   None,
   TabMain,
-  TabScreen,
+  TabPosition,
   TabControls,
   TabMods,
   TabSettings,
@@ -221,6 +221,9 @@ struct MenuList
   MenuSection section = MenuSection::General;
   float row_h = 0.0f;
 };
+
+// Whether the game goes on behind the menu: a page whose settings show on it.
+bool ShowsGame(MenuTab tab, MenuSection section);
 
 // A menu picture: RGBA.
 struct MenuPicture

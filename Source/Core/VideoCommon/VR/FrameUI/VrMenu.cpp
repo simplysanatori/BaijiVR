@@ -120,7 +120,7 @@ void AddRail(Builder* builder, const MenuState& state)
   };
   static constexpr RailItem ITEMS[] = {
       {MenuTab::Main, MenuItem::TabMain, Icon::kHome, "Main"},
-      {MenuTab::Screen, MenuItem::TabScreen, Icon::kTv, "Screen"},
+      {MenuTab::Position, MenuItem::TabPosition, Icon::kOpenWith, "Position"},
       {MenuTab::Controls, MenuItem::TabControls, Icon::kStadiaController, "Controls"},
       {MenuTab::Mods, MenuItem::TabMods, Icon::kExtension, "Mods"},
       {MenuTab::Settings, MenuItem::TabSettings, Icon::kSettings, "Settings"},
@@ -288,7 +288,7 @@ constexpr Rect LIST{PANE.x0, TOP + CONTROL_H + 12.0f, PANE.x1, PANE.y1 - 8.0f};
 
 std::optional<MenuSection> GetSection(const MenuState& state)
 {
-  if (state.tab == MenuTab::Screen)
+  if (state.tab == MenuTab::Position)
     return MenuSection::Screen;
   if (state.tab == MenuTab::Settings)
     return state.section;
@@ -739,6 +739,22 @@ void AddSettings(Builder* builder, const MenuState& state)
 }
 }  // namespace
 
+bool ShowsGame(MenuTab tab, MenuSection section)
+{
+  switch (tab)
+  {
+  case MenuTab::Position:
+    return true;
+  case MenuTab::Settings:
+    return section != MenuSection::General;
+  case MenuTab::Main:
+  case MenuTab::Controls:
+  case MenuTab::Mods:
+    break;
+  }
+  return false;
+}
+
 std::vector<MenuWidget> VrMenu::Layout(const MenuState& state)
 {
   Builder builder;
@@ -751,7 +767,7 @@ std::vector<MenuWidget> VrMenu::Layout(const MenuState& state)
     else
       AddSlots(&builder, state);
     break;
-  case MenuTab::Screen:
+  case MenuTab::Position:
     AddScreen(&builder, state);
     break;
   case MenuTab::Controls:
