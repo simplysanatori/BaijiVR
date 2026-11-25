@@ -1375,9 +1375,11 @@ void MainWindow::BootGame(std::unique_ptr<BootParameters>&& parameters)
 
 #ifdef BAIJI_STEAMVR
   const OpenXRPresentationMode presentation_mode = Config::Get(Config::GFX_VR_PRESENTATION_MODE);
-  if (presentation_mode == OpenXRPresentationMode::Vulkan ||
-      (presentation_mode == OpenXRPresentationMode::Legacy &&
-       !Config::Get(Config::GFX_VR_ENABLE_OPENXR)))
+  // In the theater the controllers are the game's.
+  if (!m_theater_dock &&
+      (presentation_mode == OpenXRPresentationMode::Vulkan ||
+       (presentation_mode == OpenXRPresentationMode::Legacy &&
+        !Config::Get(Config::GFX_VR_ENABLE_OPENXR))))
   {
     FrameFlatModeInputWarningDialog::ShowUnlessDisabled(this);
   }
