@@ -53,6 +53,7 @@
 #include "DolphinQt/Updater.h"
 
 #include "UICommon/CommandLineParse.h"
+#include "UICommon/ProblemReport.h"
 #include "UICommon/UICommon.h"
 
 #ifdef ENABLE_VR
@@ -266,6 +267,10 @@ int main(int argc, char* argv[])
 
   UICommon::SetUserDirectory(static_cast<const char*>(options.get("user")));
   UICommon::CreateDirectories();
+  // Before Init opens the logs. What the last run left is for a start that has only its window.
+  ProblemReport::StartRun(!options.is_set("batch") && !options.is_set("exec") &&
+                          !options.is_set("nand_title") && args.empty());
+  Common::ScopeGuard run_guard([] { ProblemReport::EndRun(); });
   UICommon::Init();
 #ifdef __linux__
   LogWindowScale(scale_from_outside);

@@ -585,6 +585,13 @@ TEST(VRFrameUI, MenuTextFits)
                   w.control.x0 - 8.0f)
             << w.label;
       }
+      if (w.kind == Kind::Action)
+      {
+        EXPECT_LE(kit.TextWidth(FrameXr::Menu::Type::Body, w.label) +
+                      kit.TextWidth(FrameXr::Menu::Type::Label, w.value),
+                  w.rect.W() - 64.0f)
+            << w.label;
+      }
       if (w.kind == Kind::Dropdown)
       {
         EXPECT_LE(kit.TextWidth(FrameXr::Menu::Type::Label, w.value), w.control.W() - 64.0f)
@@ -630,6 +637,41 @@ TEST(VRFrameUI, EveryRowCanBeScrolledTo)
       }
     }
   }
+}
+
+TEST(VRFrameUI, HelpIsAfterGeneralsSettings)
+{
+  MenuState s;
+  s.tab = MenuTab::Settings;
+  for (const MenuSection section :
+       {MenuSection::General, MenuSection::Graphics, MenuSection::Immersive})
+  {
+    const bool general = section == MenuSection::General;
+    s.section = section;
+    s.scroll[static_cast<std::size_t>(section)] = VrMenu::GetList(s)->bar.max_scroll;
+    const MenuList list = *VrMenu::GetList(s);
+    const auto widgets = VrMenu::Layout(s);
+    for (const MenuItem item : {MenuItem::ReportProblem, MenuItem::Support})
+    {
+      const auto row = std::ranges::find(widgets, item, &MenuWidget::item);
+      ASSERT_EQ(row != widgets.end(), general);
+      if (!general)
+        continue;
+      // At the end of the list all of it can be pressed, without a game, too.
+      EXPECT_GE(row->rect.y0, list.bar.list.y0);
+      EXPECT_LE(row->rect.y1, list.bar.list.y1);
+      EXPECT_EQ(VrMenu::At(widgets, row->rect.Cx(), row->rect.Cy()), &*row);
+      EXPECT_FALSE(row->tooltip.empty());
+    }
+  }
+  const auto widgets = [&s] {
+    s.section = MenuSection::General;
+    return VrMenu::Layout(s);
+  }();
+  const auto report = std::ranges::find(widgets, MenuItem::ReportProblem, &MenuWidget::item);
+  const auto support = std::ranges::find(widgets, MenuItem::Support, &MenuWidget::item);
+  EXPECT_LT(report->rect.y0, support->rect.y0);
+  EXPECT_EQ(support->value, "ko-fi.com/sana748653");
 }
 
 TEST(VRFrameUI, ARowPastTheListIsNotHit)

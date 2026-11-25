@@ -2,6 +2,13 @@
 
 Thanks to thejerf for [Baiji](../README.upstream.md) and to iChris4 for dolphinXR, which Baiji VR is built on.
 
+## Baiji VR 0.9.1 (beta)
+
+- **Report a Problem** in the Help menu and in the VR menu's settings. Nothing is sent unless you press **Send Report**
+- After a crash, the next start offers a report
+- The logs of the last 8 runs are kept
+- A support link
+
 ## Baiji VR 0.9.0 (beta)
 
 ### Highlights

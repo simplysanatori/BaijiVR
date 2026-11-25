@@ -67,6 +67,10 @@ endif()
 # unique name here.
 set(DISTRIBUTOR "BaijiSteamVR" CACHE STRING "Name of the distributor.")
 
+# Of Baiji VR itself, as in docs/CHANGELOG.md.
+set(BAIJI_VERSION "0.9.1")
+option(BAIJI_RELEASE_BUILD "A build to publish: its problem reports are \"production\"" OFF)
+
 set(DOLPHIN_DEFAULT_UPDATE_TRACK "" CACHE STRING "Name of the default update track. If empty, disables auto-update.")
 
 if(UNIX AND NOT APPLE AND NOT ANDROID)

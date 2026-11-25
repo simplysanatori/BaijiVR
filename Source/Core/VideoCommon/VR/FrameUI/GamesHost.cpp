@@ -12,6 +12,7 @@ namespace VR::UI
 namespace
 {
 GamesHost s_host;
+std::function<std::string()> s_save_report;
 
 std::mutex s_mutex;
 PublishedGames s_published;
@@ -26,6 +27,16 @@ void SetGamesHost(GamesHost host)
 const GamesHost* GetGamesHost()
 {
   return s_host.play ? &s_host : nullptr;
+}
+
+void SetReportSaver(std::function<std::string()> save)
+{
+  s_save_report = std::move(save);
+}
+
+std::string SaveReport()
+{
+  return s_save_report ? s_save_report() : std::string();
 }
 
 void PublishGames(FrameXr::Menu::GamesList list, std::string running)

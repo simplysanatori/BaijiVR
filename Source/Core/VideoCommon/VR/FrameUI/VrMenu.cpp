@@ -400,6 +400,34 @@ void AddRow(Builder* builder, const MenuState& state, const SettingRow& row, flo
   }
 }
 
+// What is after General's settings: a heading, and rows that do something.
+constexpr int HELP_ROWS = 3;
+
+void AddHelp(Builder* builder, float y)
+{
+  const auto add = [&](Kind kind, MenuItem item, int row, const char* label) -> MenuWidget* {
+    const float y0 = y + ROW_H * static_cast<float>(row);
+    if (y0 + ROW_H <= LIST.y0 || y0 >= LIST.y1)
+      return nullptr;
+    MenuWidget& w = builder->Add(kind, item);
+    w.rect = kind == Kind::Header ? Rect{LEFT, y0, RIGHT, y0 + ROW_H} :
+                                    Rect{LEFT - 12.0f, y0, RIGHT, y0 + ROW_H - 4.0f};
+    w.label = label;
+    return &w;
+  };
+  add(Kind::Header, MenuItem::None, 0, "Help");
+  if (MenuWidget* const w = add(Kind::Action, MenuItem::ReportProblem, 1, "Report a Problem"))
+  {
+    w->value = "Save Report";
+    w->tooltip = "Saves a report to your Downloads folder. Nothing is sent.";
+  }
+  if (MenuWidget* const w = add(Kind::Action, MenuItem::Support, 2, "Support simplysanatori"))
+  {
+    w->value = "ko-fi.com/sana748653";
+    w->tooltip = "Opens the page.";
+  }
+}
+
 // The menu of a drop-down control, under it or over it.
 void AddMenu(Builder* builder, const Rect& anchor, float width, std::vector<std::string> options,
              int selected)
@@ -434,6 +462,8 @@ void AddList(Builder* builder, const MenuState& state, MenuSection section)
       AddRow(builder, state, *row, y);
     y += ROW_H;
   }
+  if (section == MenuSection::General)
+    AddHelp(builder, y);
   builder->Clip(first, LIST);
 
   const std::optional<MenuList> list = VrMenu::GetList(state);
@@ -1471,7 +1501,8 @@ std::optional<MenuList> VrMenu::GetList(const MenuState& state)
   const std::optional<MenuSection> section = GetSection(state);
   if (!section)
     return std::nullopt;
-  const float height = ROW_H * static_cast<float>(GetRows(*section).size());
+  const int help = *section == MenuSection::General ? HELP_ROWS : 0;
+  const float height = ROW_H * static_cast<float>(static_cast<int>(GetRows(*section).size()) + help);
   return MenuList{{LIST, PANE.x1, height, std::max(0.0f, height - LIST.H())}, *section, ROW_H};
 }
 
@@ -1786,6 +1817,11 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
                    kit->Fit(Type::Value, w.value, room), 2);
       break;
     }
+    case Kind::Action:
+      kit->StateLayer(w.rect, 12.0f, Tok::kOnSurface, look);
+      kit->TextMid(LEFT, w.rect.Cy(), Type::Body, Tok::kOnSurface, w.label);
+      kit->TextMid(RIGHT - 12.0f, w.rect.Cy(), Type::Label, Tok::kPrimary, w.value, 2);
+      break;
     case Kind::Dropdown:
       kit->MenuButton(w.control, kit->Fit(Type::Label, w.value, w.control.W() - 64.0f), w.active,
                       look);
@@ -1990,7 +2026,8 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
   const float wrap_w = PANE.W() * 0.8f;
   const bool wrap = kit->TextWidth(Type::Tooltip, text) + 20.0f > wrap_w;
   const float half = wrap ? wrap_w * 0.5f : kit->TextWidth(Type::Tooltip, text) * 0.5f + 10.0f;
-  const bool row = pointed->item == MenuItem::Setting && !pointed->label.empty();
+  const bool row = (pointed->item == MenuItem::Setting || pointed->kind == Kind::Action) &&
+                   !pointed->label.empty();
   const float at =
       row ? LEFT + kit->TextWidth(Type::Body, pointed->label) * 0.5f : pointed->rect.Cx();
   const float cx = std::clamp(at, PANE.x0 + half + 4.0f, PANE.x1 - half - 4.0f);

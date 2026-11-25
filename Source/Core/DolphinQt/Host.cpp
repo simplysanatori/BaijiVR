@@ -7,15 +7,19 @@
 
 #include <QAbstractEventDispatcher>
 #include <QApplication>
+#include <QDesktopServices>
 #include <QGuiApplication>
 #include <QLocale>
 #include <QThread>
+#include <QUrl>
 
 #include <imgui.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+#include "Common/OpenPage.h"
 
 #include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
@@ -83,6 +87,16 @@ bool Host::IsGameMode()
     return false;
   // Steam's Game Mode runs Baiji under gamescope; the KDE desktop does not.
   return qEnvironmentVariable("XDG_CURRENT_DESKTOP") == QStringLiteral("gamescope");
+}
+
+void Host::OpenPage(const QString& url)
+{
+  if (IsGameMode() &&
+      Common::OpenPage::Open(url.toStdString()) != Common::OpenPage::Opener::Nothing)
+  {
+    return;
+  }
+  QDesktopServices::openUrl(QUrl(url));
 }
 
 bool Host::IsRenderToMain()

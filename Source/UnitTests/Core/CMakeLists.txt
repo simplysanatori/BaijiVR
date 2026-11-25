@@ -6,6 +6,10 @@ add_dolphin_test(PatchAllowlistTest PatchAllowlistTest.cpp)
 add_dolphin_test(GameModsTest GameModsTest.cpp)
 add_dolphin_test(GameCoversTest GameCoversTest.cpp)
 add_dolphin_test(ModeSwitchTest ModeSwitchTest.cpp)
+add_dolphin_test(ProblemReportTest ProblemReportTest.cpp)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_dolphin_test(CrashRecordTest CrashRecordTest.cpp)
+endif()
 
 add_dolphin_test(DSPAcceleratorTest DSP/DSPAcceleratorTest.cpp)
 add_dolphin_test(DSPAssemblyTest

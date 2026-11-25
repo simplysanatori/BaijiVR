@@ -75,6 +75,18 @@ fi
 IMAGE_CONFIGURATION_HASH="$(sha256sum Containerfile.cross | cut -d ' ' -f 1)"
 mkdir -p "$BUILD_DIR" state/ccache-cross-sdk "$STAGE_DIR" dist
 
+# Send Report's address: a file only its owner can read, deleted once CMake has read it. The header it
+# goes into is beside it, outside the source tree, and goes with the folder. Neither is on a command
+# line or in a log (Tools/report-dsn.sh has where it comes from; without one there is no Send Report).
+BAIJI_RELEASE_BUILD="${BAIJI_RELEASE_BUILD:-OFF}"
+REPORT_DIR="$(umask 077; mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/baiji-report.XXXXXX")"
+trap 'rm -rf -- "$REPORT_DIR"' EXIT
+REPORT_STATUS=0
+Tools/report-dsn.sh --file "$REPORT_DIR/dsn" || REPORT_STATUS=$?
+if (( REPORT_STATUS > 1 )); then
+  exit 1
+fi
+
 # Build one complete sysroot view instead of mounting child directories under the read-only SDK
 # mount. Podman/runc cannot reliably create those nested mountpoints in a read-only parent mount.
 mkdir -p "$SDK_INCLUDE_OVERLAY" "$SDK_OVERLAY/usr/lib"
@@ -133,6 +145,9 @@ fi
   -v "$BUILD_DIR:/work/build:Z" \
   -v "$PWD/state/ccache-cross-sdk:/run/ccache:Z" \
   -v "$STAGE_DIR:/work/stage:Z" \
+  -v "$REPORT_DIR:/run/baiji-report:Z" \
+  -e BAIJI_REPORT_DSN_FILE=/run/baiji-report/dsn \
+  -e BAIJI_REPORT_CONFIG_DIR=/run/baiji-report \
   -e CCACHE_DIR=/run/ccache \
   -e LD_LIBRARY_PATH=/sysroot/lib/aarch64-linux-gnu \
   -e INSTALL_PREFIX="$INSTALL_PREFIX" \
@@ -229,6 +244,7 @@ fi
       -DENABLE_SDL=ON \
       -DENABLE_EVDEV=ON \
       -DENABLE_TESTS=OFF \
+      -DBAIJI_RELEASE_BUILD=$BAIJI_RELEASE_BUILD \
       -DENABLE_VR=ON \
       -DENABLE_VULKAN=ON \
       -DENABLE_OPENGL=OFF \
@@ -246,6 +262,7 @@ fi
       -DCMAKE_EXE_LINKER_FLAGS='-L/sysroot/lib/aarch64-linux-gnu -L/sysroot/lib/aarch64-linux-gnu/pulseaudio -L/sysroot/usr/lib/aarch64-linux-gnu -Wl,-rpath-link,/sysroot/lib/aarch64-linux-gnu -Wl,-rpath-link,/sysroot/lib/aarch64-linux-gnu/pulseaudio -Wl,-rpath-link,/sysroot/usr/lib/aarch64-linux-gnu' \
       -DCMAKE_SHARED_LINKER_FLAGS='-L/sysroot/lib/aarch64-linux-gnu -L/sysroot/lib/aarch64-linux-gnu/pulseaudio -L/sysroot/usr/lib/aarch64-linux-gnu -Wl,-rpath-link,/sysroot/lib/aarch64-linux-gnu -Wl,-rpath-link,/sysroot/lib/aarch64-linux-gnu/pulseaudio -Wl,-rpath-link,/sysroot/usr/lib/aarch64-linux-gnu' \
       -DCMAKE_MODULE_LINKER_FLAGS='-L/sysroot/lib/aarch64-linux-gnu -L/sysroot/lib/aarch64-linux-gnu/pulseaudio -L/sysroot/usr/lib/aarch64-linux-gnu -Wl,-rpath-link,/sysroot/lib/aarch64-linux-gnu -Wl,-rpath-link,/sysroot/lib/aarch64-linux-gnu/pulseaudio -Wl,-rpath-link,/sysroot/usr/lib/aarch64-linux-gnu'
+    rm -f /run/baiji-report/dsn
     cmake --build /work/build --target dolphin-emu dolphin-nogui dolphin-tool -j12
     DESTDIR=/work/stage cmake --install /work/build
     install -D -m 644 /work/build/_deps/libevdev/src/libevdev-libevdev-1.13.4/COPYING /work/stage\$INSTALL_PREFIX/share/baiji/licenses/libevdev-COPYING

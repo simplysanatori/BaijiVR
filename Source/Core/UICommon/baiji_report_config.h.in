@@ -1,0 +1,7 @@
+// Made by CMake (UICommon/CMakeLists.txt). Never commit the made file.
+#pragma once
+
+// Where Send Report sends to; "" takes Send Report away (Save Report stays).
+#define BAIJI_REPORT_DSN "@BAIJI_REPORT_DSN_VALUE@"
+// "production" in a release build (BAIJI_RELEASE_BUILD), else "development".
+#define BAIJI_REPORT_ENVIRONMENT "@BAIJI_REPORT_ENVIRONMENT_VALUE@"

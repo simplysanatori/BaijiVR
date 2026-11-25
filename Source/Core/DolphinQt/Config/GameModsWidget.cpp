@@ -6,7 +6,6 @@
 #include <algorithm>
 
 #include <QCheckBox>
-#include <QDesktopServices>
 #include <QFont>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -22,9 +21,9 @@
 #include <QScrollArea>
 #include <QShowEvent>
 #include <QTimer>
-#include <QUrl>
 #include <QVBoxLayout>
 
+#include "DolphinQt/Host.h"
 #include "DolphinQt/QtUtils/ClearLayoutRecursively.h"
 
 namespace
@@ -225,8 +224,8 @@ void GameModsWidget::AddRow(const GameMods::Item& item)
   if (item.state == GameMods::State::LinkOnly)
   {
     auto* const open = new QPushButton(tr("Open Page"));
-    const QUrl homepage = QUrl(QString::fromStdString(item.homepage));
-    connect(open, &QPushButton::clicked, row, [homepage] { QDesktopServices::openUrl(homepage); });
+    const QString homepage = QString::fromStdString(item.homepage);
+    connect(open, &QPushButton::clicked, row, [homepage] { Host::OpenPage(homepage); });
     controls->addWidget(open);
   }
   else if (item.state == GameMods::State::Available && item.downloads)

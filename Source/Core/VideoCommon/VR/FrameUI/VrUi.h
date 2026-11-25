@@ -88,6 +88,8 @@ public:
   // The same for the answer to a press, whose effect shows: in Stereoscopic 3D it is short, in the
   // screen's corner (toast_corner.h).
   static void PostBriefToast(std::string text);
+  // What a press in the menu came to: also with Messages off.
+  static void PostAnswer(std::string text);
   // The same for one of the emulator's own messages: shorter, and without its progress.
   static void PostEmulatorMessage(std::string_view message, u32 ms);
 

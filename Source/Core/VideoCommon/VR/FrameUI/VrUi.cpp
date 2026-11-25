@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +24,7 @@
 #include "Common/FileUtil.h"
 #include "Common/Image.h"
 #include "Common/Logging/Log.h"
+#include "Common/OpenPage.h"
 #include "Common/VR/OpenXRInputState.h"
 
 #include "Core/Autosave.h"
@@ -111,6 +113,7 @@ struct PostedToast
   std::string text;
   u32 ms = 0;
   bool brief = false;
+  bool always = false;
 };
 std::optional<PostedToast> s_toast;
 // After the next toast that is posted.
@@ -499,6 +502,45 @@ void QueueSwitchMode(bool to_immersive, std::optional<SettingScope> keep = std::
     }
   });
 }
+
+// A second press before this is the first one's.
+constexpr auto PRESS_AGAIN = std::chrono::seconds(3);
+
+void QueueReport()
+{
+  Core::QueueHostJob([](Core::System&) {
+    static std::chrono::steady_clock::time_point s_last;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - s_last < PRESS_AGAIN)
+      return;
+    s_last = now;
+    const std::string answer = SaveReport();
+    VrUi::PostAnswer(answer.empty() ? "The Report Cannot Be Saved" : answer);
+  });
+}
+
+void QueueSupportPage()
+{
+  Core::QueueHostJob([](Core::System&) {
+    static std::chrono::steady_clock::time_point s_last;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - s_last < PRESS_AGAIN)
+      return;
+    s_last = now;
+    switch (Common::OpenPage::Open("https://ko-fi.com/sana748653"))
+    {
+    case Common::OpenPage::Opener::Steam:
+      VrUi::PostAnswer("Opening Ko-fi in Steam");
+      break;
+    case Common::OpenPage::Opener::Xdg:
+      VrUi::PostAnswer("Opening Ko-fi");
+      break;
+    case Common::OpenPage::Opener::Nothing:
+      VrUi::PostAnswer("ko-fi.com/sana748653");
+      break;
+    }
+  });
+}
 }  // namespace
 
 void RequestSwitchToFlat()
@@ -551,6 +593,13 @@ void VrUi::PostBriefToast(std::string text)
 {
   std::lock_guard lock(s_toast_mutex);
   s_toast = PostedToast{std::move(text), 2000, true};
+  s_next_toast_ready = true;
+}
+
+void VrUi::PostAnswer(std::string text)
+{
+  std::lock_guard lock(s_toast_mutex);
+  s_toast = PostedToast{std::move(text), 4000, false, true};
   s_next_toast_ready = true;
 }
 
@@ -2332,6 +2381,12 @@ void VrUi::Activate(const MenuWidget& widget, int option)
     CloseMenu();
     Core::QueueHostJob([](Core::System&) { RequestSwitchToFlat(); });
     break;
+  case MenuItem::ReportProblem:
+    QueueReport();
+    break;
+  case MenuItem::Support:
+    QueueSupportPage();
+    break;
   case MenuItem::Section:
     if (option >= 0)
       m_menu.section = static_cast<MenuSection>(static_cast<int>(MenuSection::General) + option);
@@ -2565,7 +2620,7 @@ void VrUi::UpdateToasts(const Frame& frame)
     if (!posted && s_next_toast_ready && m_toast_until_ns == 0 && !m_menu_open && frame.head_valid)
       posted = std::exchange(s_next_toast, std::nullopt);
   }
-  if (posted && g_ActiveConfig.vr_toasts)
+  if (posted && (posted->always || g_ActiveConfig.vr_toasts))
   {
     const s64 duration = std::clamp<s64>(s64{posted->ms} * 1'000'000, ToastFit::kShortNs,
                                          ToastFit::kLongNs);

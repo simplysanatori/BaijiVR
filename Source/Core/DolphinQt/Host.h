@@ -23,6 +23,8 @@ public:
   static bool IsRenderToMain();
   // True under gamescope (Steam's Game Mode). BAIJI_RENDER_TO_MAIN=0 / 1 overrides it.
   static bool IsGameMode();
+  // In Game Mode with Steam's own browser.
+  static void OpenPage(const QString& url);
 
   bool GetRenderFocus();
   bool GetRenderFullFocus();

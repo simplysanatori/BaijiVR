@@ -27,6 +27,7 @@
 #ifdef USE_DISCORD_PRESENCE
 #include "UICommon/DiscordPresence.h"
 #endif
+#include "UICommon/ProblemReport.h"
 #include "UICommon/UICommon.h"
 
 static std::unique_ptr<Platform> s_platform;
@@ -270,6 +271,8 @@ int main(const int argc, char* argv[])
   const WindowSystemInfo wsi = s_platform->GetWindowSystemInfo();
 
   UICommon::SetUserDirectory(user_directory);
+  ProblemReport::StartRun(false);
+  Common::ScopeGuard run_guard([] { ProblemReport::EndRun(); });
   UICommon::Init();
   UICommon::InitControllers(wsi);
 

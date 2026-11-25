@@ -231,10 +231,16 @@ is Baiji's README as it was at 75d194fd95 and is not edited.
   CTRL turning the reads off while the GPU thread was mid-command (`FlushGpu` in `CommandProcessor`). Stopping the
   race costs a wait at those two places; it was timed in Path of Radiance only.
 - The two screen options of Immersive are defaults, not locks, and bundled game profiles do not replace them.
+- Report a Problem is `UICommon/ProblemReport*` (no Qt; the report, the scrubbing, the zip, the sending),
+  `Common/CrashRecord` (run marker and fatal signals, in `CrashReports/` of the user folder; installed at program
+  start so `MemTools` stays over it) and `DolphinQt/ProblemReportDialog`. The address for **Send Report** is never
+  committed: `Tools/report-dsn.sh`, used only by `scripts/compile-cross-sdk.sh`; a build without one has no **Send
+  Report**. A release is built with `BAIJI_RELEASE_BUILD=ON`, and its version is `BAIJI_VERSION` in `CMakeLists.txt`.
+  `BAIJI_TEST_CRASH=segv|abort|trap|throw` crashes a build with the unit tests (and no release), after `BAIJI_TEST_CRASH_SECONDS`.
 - Licences: Dolphin's files are GPL-2.0-or-later. Files that follow Azahar for Frame's say GPL-3.0-or-later in their
   first lines (`DynamicResolutionController.h`, `WindowFit.h`, `GameModeWindows.*`, `GameMods/Install.cpp`, `VrMenu.*`, `VrUi.cpp`,
   `games_snapshot.*`, `games_tab.*`, `grid_focus.h`, `cover_art.*`, `PadEdit.*`, `GrabHint.h`, `list_scroll.*`, `ipd_smoother.h`, `cylinder_layer.h`, `ListNav.h`, `GamepadNavigation.*`,
-  `TheaterOverlay.h`, `TheaterDock.*`), so a build as a whole is GPL-3.0-or-later. Keep those notices when the files change.
+  `TheaterOverlay.h`, `TheaterDock.*`, `Common/OpenPage.*`), so a build as a whole is GPL-3.0-or-later. Keep those notices when the files change.
 - Testing: unit tests (`VRFrameUITest`, `GameModsTest`, `DynamicResolutionTest`), and games on a desktop with a
   simulated headset. Headset results are the owner's to confirm.
 

@@ -148,13 +148,12 @@ More: [docs/USER_GUIDE.md](docs/USER_GUIDE.md#troubleshooting).
 
 ## Reporting a problem
 
-In Konsole on the Frame, turn on the detailed log, then play until the problem happens:
+1. Choose **Help** > **Report a Problem** > **Save Report** in the window, or **Settings** > **General** > **Report a Problem** in the VR menu. A zip is saved in Downloads.
+2. Attach the zip to an [issue](https://github.com/simplysanatori/BaijiVR/issues).
 
-```sh
-touch ~/.config/baiji/debug-logging
-```
+**See What's Sent** shows all of it. Nothing is sent unless you press **Send Report**.
 
-Logs: `~/.local/share/baiji/Logs`. Check them before sharing, and attach them to an [issue](https://github.com/simplysanatori/BaijiVR/issues). Don't report this fork's problems to Dolphin or Baiji.
+For a more detailed log, run `touch ~/.config/baiji/debug-logging` in Konsole on the Frame and play until the problem happens. Don't report this fork's problems to Dolphin or Baiji.
 
 ## Roadmap (planned)
 

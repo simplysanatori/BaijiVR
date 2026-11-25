@@ -45,6 +45,11 @@ void SetGamesHost(GamesHost host);
 // Host thread. Null: none.
 const GamesHost* GetGamesHost();
 
+// Host thread. Report a Problem (UICommon): saves a report and says what came of it.
+void SetReportSaver(std::function<std::string()> save);
+// Empty: there is no saver.
+std::string SaveReport();
+
 struct PublishedGames
 {
   FrameXr::Menu::GamesList list;  // null: none yet

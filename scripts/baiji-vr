@@ -19,9 +19,27 @@ for auth in /run/user/1000/nested_plasma/xauth_*; do
   fi
 done
 
+# The logs of the last runs are kept for a problem report: .old is the one before this, .old2 the one
+# before that, up to .old8. Nothing here may keep the program from starting.
+LOG_DIR="$HOME/.local/share/baiji/Logs"
+mkdir -p "$LOG_DIR"
+turn_over() {
+  local log="$LOG_DIR/$1" i
+  [[ -s "$log" ]] || return 0
+  for i in 7 6 5 4 3 2; do
+    if [[ -f "$log.old$i" ]]; then
+      mv -f "$log.old$i" "$log.old$((i + 1))" 2>/dev/null || true
+    fi
+  done
+  if [[ -f "$log.old" ]]; then
+    mv -f "$log.old" "$log.old2" 2>/dev/null || true
+  fi
+  mv -f "$log" "$log.old" 2>/dev/null || true
+}
+turn_over baiji-launcher.log
+turn_over dolphin.log
+
 if [[ -f "$HOME/.config/baiji/debug-logging" ]]; then
-  LOG_DIR="$HOME/.local/share/baiji/Logs"
-  mkdir -p "$LOG_DIR"
   exec "$BAIJI_ROOT/bin/baiji" \
     -C Logger.Options.WriteToFile=True \
     -C Logger.Options.Verbosity=5 \
@@ -32,8 +50,6 @@ if [[ -f "$HOME/.config/baiji/debug-logging" ]]; then
 fi
 
 # Errors and warnings of the last run are always kept, so a game that fails leaves a trace.
-LOG_DIR="$HOME/.local/share/baiji/Logs"
-mkdir -p "$LOG_DIR"
 exec "$BAIJI_ROOT/bin/baiji" \
   -C Logger.Options.WriteToConsole=True \
   -C Logger.Options.Verbosity=3 \

@@ -174,6 +174,7 @@ struct BackendInfo
 
   // TODO: merge AdapterName and Adapters array
   std::string AdapterName;  // for OpenGL
+  std::string DriverName;   // Vulkan, for a problem report
 
   u32 MaxTextureSize = 16384;
   bool bUsesLowerLeftOrigin = false;

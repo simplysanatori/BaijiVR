@@ -53,7 +53,7 @@ leaking into the release, while the normal CMake build and ccache remain increme
 ```bash
 VERSION=v0.2-alpha
 STAGE_DIR="$(mktemp -d "$PWD/state/stage-release-$VERSION.XXXXXX")"
-INSTALL_PREFIX=/home/steamos/baiji STAGE_DIR="$STAGE_DIR" \
+BAIJI_RELEASE_BUILD=ON INSTALL_PREFIX=/home/steamos/baiji STAGE_DIR="$STAGE_DIR" \
   ./scripts/compile-cross-sdk.sh
 ARCHIVE="dist/baiji-$VERSION.tar.bz2"
 tar --sort=name -cjf "$ARCHIVE" -C "$STAGE_DIR/home/steamos" baiji

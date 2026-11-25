@@ -44,6 +44,7 @@ public:
     float maxSamplerAnisotropy;
     u32 subgroupSize = 1;
     VkDriverId driverID = static_cast<VkDriverId>(0);
+    std::string driverText;
     bool dualSrcBlend;
     bool independentBlend;
     bool geometryShader;

@@ -37,6 +37,8 @@ add_library(common
   Config/Layer.h
   Contains.h
   CPUDetect.h
+  CrashRecord.cpp
+  CrashRecord.h
   Crypto/AES.cpp
   Crypto/AES.h
   Crypto/bn.cpp
@@ -119,6 +121,8 @@ add_library(common
   Network.cpp
   Network.h
   OneShotEvent.h
+  OpenPage.cpp
+  OpenPage.h
   PcapFile.cpp
   PcapFile.h
   Profiler.cpp
@@ -381,6 +385,11 @@ if(ENABLE_LLVM)
     )
     target_include_directories(common PRIVATE ${LLVM_INCLUDE_DIRS})
   endif()
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # It reads the exception that ends the program.
+  set_source_files_properties(CrashRecord.cpp PROPERTIES COMPILE_OPTIONS -fexceptions)
 endif()
 
 if(UNIX)

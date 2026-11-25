@@ -17,6 +17,7 @@
 
 #include "Core/Boot/Boot.h"
 #include "DolphinQt/FIFO/FIFOPlayerWindow.h"
+#include "UICommon/ProblemReport.h"
 
 class QMenu;
 class QStackedWidget;
@@ -184,6 +185,7 @@ private:
   void ShowVRWindow();
   void ShowFreeLookWindow();
   void ShowAboutDialog();
+  void ShowProblemReport(ProblemReport::Report report);
   void ShowHotkeyDialog();
   void ShowNetPlaySetupDialog();
   void ShowNetPlayBrowser();

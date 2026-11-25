@@ -95,6 +95,7 @@ VulkanContext::PhysicalDeviceInfo::PhysicalDeviceInfo(VkPhysicalDevice device)
     if (apiVersion >= VK_API_VERSION_1_2)
     {
       driverID = properties_vk12.driverID;
+      driverText = fmt::format("{} {}", properties_vk12.driverName, properties_vk12.driverInfo);
     }
 
     subgroupSize = properties_subgroup.subgroupSize;
@@ -570,6 +571,7 @@ void VulkanContext::PopulateBackendInfoAdapters(BackendInfo* backend_info, const
 void VulkanContext::PopulateBackendInfoFeatures(BackendInfo* backend_info, VkPhysicalDevice gpu,
                                                 const PhysicalDeviceInfo& info)
 {
+  backend_info->DriverName = info.driverText;
   backend_info->MaxTextureSize = info.maxImageDimension2D;
   backend_info->bUsesLowerLeftOrigin = false;
   backend_info->bSupportsDualSourceBlend = info.dualSrcBlend;

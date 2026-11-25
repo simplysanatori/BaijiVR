@@ -4,7 +4,7 @@ The short version is in the [README](../Readme.md). This guide has the rest: ins
 
 ## Status and known issues
 
-0.9.0 is a beta. The changes are listed in [CHANGELOG.md](CHANGELOG.md).
+0.9.1 is a beta. The changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 Known issues:
 
@@ -187,11 +187,13 @@ Copy [perf-test.example.txt](perf-test.example.txt) to `~/.config/baiji/perf-tes
 
 ## Reporting a problem
 
-Turn on the detailed log with `touch ~/.config/baiji/debug-logging` in Konsole on the Frame, play until the problem happens, then delete that file. A report holds:
+- In the window: **Help** > **Report a Problem**. Write what happened. **Save Report** saves a zip in Downloads, **Send Report** sends it to the developer, and **See What's Sent** shows all of it.
+- In the VR menu: **Settings** > **General** > **Report a Problem** saves the zip at once.
+- After a crash, the next start of the window offers the same once. Nothing is sent unless you press **Send Report**.
 
-1. The game and its region, and the **Display** you used.
-2. What you did, what happened, and what you expected.
-3. The logs from `~/.local/share/baiji/Logs`. Check them before you share them.
+Attach the zip to an [issue](https://github.com/simplysanatori/BaijiVR/issues). It holds your words, the version, the system, the game, the settings, the mods and the last lines of the logs. The zip says `~` for your home folder and `<user>` for your name.
+
+For a more detailed log, run `touch ~/.config/baiji/debug-logging` in Konsole on the Frame, play until the problem happens, then delete that file. The logs of the last runs are in `~/.local/share/baiji/Logs`.
 
 Please don't report problems of this fork to Dolphin or Baiji.
 

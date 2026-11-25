@@ -99,6 +99,8 @@ enum class MenuItem
   FileRow,  // -1: the folder it is in
   FileAdd,
   GamesKey,          // the index is the letter; '\b', '\n': Backspace, Done
+  ReportProblem,  // in Settings, General
+  Support,
   Scrollbar,
   Popup,
   PopupOption,
@@ -307,6 +309,7 @@ struct MenuWidget
     FilePath,
     FileRow,
     Question,
+    Action,  // a row that does something
   };
 
   Kind kind = Kind::Text;

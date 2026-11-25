@@ -353,6 +353,8 @@ add_executable(dolphin-emu
   VRModeSwitch.h
   NKitWarningDialog.cpp
   NKitWarningDialog.h
+  ProblemReportDialog.cpp
+  ProblemReportDialog.h
   QtUtils/AnalyticsPrompt.cpp
   QtUtils/AnalyticsPrompt.h
   QtUtils/AspectRatioWidget.cpp

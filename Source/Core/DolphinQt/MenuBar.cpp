@@ -674,6 +674,10 @@ void MenuBar::AddHelpMenu()
   help_menu->addSeparator();
 #endif
 
+  help_menu->addAction(tr("&Report a Problem..."), this, &MenuBar::ShowProblemReport);
+  help_menu->addAction(tr("&Support simplysanatori on Ko-fi"), this,
+                       [] { Host::OpenPage(QStringLiteral("https://ko-fi.com/sana748653")); });
+  help_menu->addSeparator();
   help_menu->addAction(tr("&About"), this, &MenuBar::ShowAboutDialog);
 }
 

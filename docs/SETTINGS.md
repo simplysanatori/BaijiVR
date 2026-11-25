@@ -94,6 +94,8 @@ Changes are for the game's next start.
 | **Autosave** | A state while you play and when you close the game. Off by default |
 | **Every** | Minutes of play between two autosaves: 5 by default |
 | **Keep** | How many: 3 by default |
+| **Report a Problem** | Saves a report in Downloads. Nothing is sent |
+| **Support simplysanatori** | Opens ko-fi.com/sana748653 |
 
 ### Graphics
 

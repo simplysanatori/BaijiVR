@@ -6,6 +6,7 @@
 #include <cstdlib>
 
 #include "Common/CommonFuncs.h"
+#include "Common/CrashRecord.h"
 #include "Common/MsgHandler.h"
 
 #include "Core/MachineContext.h"
@@ -263,6 +264,22 @@ static struct sigaction old_sa_segv;
 static struct sigaction old_sa_bus;
 #endif
 
+// A fault that is not the JIT's goes to the crash recorder as it came, where it was installed before
+// this. It makes the next handler the one that was there before both.
+static bool PassToCrashRecord([[maybe_unused]] int sig, [[maybe_unused]] siginfo_t* info,
+                              [[maybe_unused]] void* raw_context)
+{
+#ifdef HAVE_CRASH_RECORD
+  if ((old_sa_segv.sa_flags & SA_SIGINFO) != 0 &&
+      old_sa_segv.sa_sigaction == &CrashRecord::HandleSignal)
+  {
+    CrashRecord::HandleSignal(sig, info, raw_context);
+    return true;
+  }
+#endif
+  return false;
+}
+
 static void sigsegv_handler(int sig, siginfo_t* info, void* raw_context)
 {
   if (sig != SIGSEGV
@@ -278,7 +295,9 @@ static void sigsegv_handler(int sig, siginfo_t* info, void* raw_context)
   const int sicode = info->si_code;
   if (sicode != SEGV_MAPERR && sicode != SEGV_ACCERR)
   {
+    // Sent by a process, or an address that cannot be: without a recorder there is nobody to tell.
     // Huh? Return.
+    PassToCrashRecord(sig, info, raw_context);
     return;
   }
   const auto bad_address = reinterpret_cast<uintptr_t>(info->si_addr);
@@ -293,6 +312,9 @@ static void sigsegv_handler(int sig, siginfo_t* info, void* raw_context)
   SContext* const ctx = &context->uc_mcontext;
 #endif
   if (Core::System::GetInstance().GetJitInterface().HandleFault(bad_address, ctx))
+    return;
+
+  if (PassToCrashRecord(sig, info, raw_context))
     return;
 
   // If JIT didn't handle the signal, restore the original handler and invoke it.

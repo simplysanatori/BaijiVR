@@ -11,6 +11,7 @@
 
 #include "Common/Assert.h"
 #include "Common/Config/Config.h"
+#include "Common/CrashRecord.h"
 #include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
 #include "Common/Thread.h"
@@ -855,6 +856,8 @@ void CommandBufferManager::HandleDeviceLost(std::string_view operation)
                 m_completed_fence_counter, static_cast<int>(m_last_present_result));
   if (g_vulkan_context)
     g_vulkan_context->LogDeviceFaultInfo();
+  CrashRecord::NoteCause(CrashRecord::Cause::DeviceLost,
+                         fmt::format("Device lost in {}", operation));
   Core::QueueHostJob([](Core::System& system) { Core::Stop(system); }, true);
 }
 

@@ -38,6 +38,7 @@
 
 #include "Common/Config/Config.h"
 #include "Common/Config/Layer.h"
+#include "Common/CrashRecord.h"
 #include "Common/FileUtil.h"
 #include "Common/ScopeGuard.h"
 #include "Common/Version.h"
@@ -112,6 +113,7 @@
 #include "DolphinQt/NetPlay/NetPlayBrowser.h"
 #include "DolphinQt/NetPlay/NetPlayDialog.h"
 #include "DolphinQt/NetPlay/NetPlaySetupDialog.h"
+#include "DolphinQt/ProblemReportDialog.h"
 #include "DolphinQt/QtUtils/DolphinFileDialog.h"
 #include "DolphinQt/QtUtils/FileOpenEventFilter.h"
 #include "DolphinQt/QtUtils/ModalMessageBox.h"
@@ -160,6 +162,8 @@
 #if defined(__unix__) || defined(__unix) || defined(__APPLE__)
 void MainWindow::OnSignal()
 {
+  // Asked to end: not a run that ended badly, whatever comes of it.
+  CrashRecord::CleanExit();
   close();
 }
 
@@ -323,6 +327,15 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
 
   InstallSignalHandler();
 #endif
+
+  // Once, and not over a game.
+  if (std::optional<ProblemReport::LastRun> run = ProblemReport::TakePending())
+  {
+    QTimer::singleShot(0, this, [this, run = std::move(*run)] {
+      if (isVisible() && Core::IsUninitialized(m_system))
+        ShowProblemReport(ProblemReport::MakeCrash(run));
+    });
+  }
 
   if (boot_parameters)
   {
@@ -644,6 +657,8 @@ void MainWindow::ConnectMenuBar()
           &GameList::OnGameListVisibilityChanged);
 
   connect(m_menu_bar, &MenuBar::ShowAboutDialog, this, &MainWindow::ShowAboutDialog);
+  connect(m_menu_bar, &MenuBar::ShowProblemReport, this,
+          [this] { ShowProblemReport(ProblemReport::MakeManual()); });
 
   connect(m_game_list, &GameList::SelectionChanged, m_menu_bar, &MenuBar::SelectionChanged);
   connect(this, &MainWindow::ReadOnlyModeChanged, m_menu_bar, &MenuBar::ReadOnlyModeChanged);
@@ -1625,6 +1640,13 @@ void MainWindow::ShowAboutDialog()
 {
   AboutDialog about{this};
   about.exec();
+}
+
+void MainWindow::ShowProblemReport(ProblemReport::Report report)
+{
+  auto* const dialog = new ProblemReportDialog(this, std::move(report));
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->open();
 }
 
 void MainWindow::ShowHotkeyDialog()
