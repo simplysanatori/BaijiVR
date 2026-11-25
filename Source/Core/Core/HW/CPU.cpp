@@ -57,7 +57,8 @@ void CPUManager::FlushStepSyncEventLocked()
 
 void CPUManager::ExecutePendingJobs(std::unique_lock<std::mutex>& state_lock)
 {
-  while (!m_pending_jobs.empty())
+  // Not while another thread has the CPU thread locked: it wakes it up when it unlocks.
+  while (!m_state_paused_and_locked && !m_pending_jobs.empty())
   {
     auto callback = std::move(m_pending_jobs.front());
     m_pending_jobs.pop();
@@ -179,6 +180,9 @@ void CPUManager::Run()
           }
         }
         state_lock.lock();
+        // A job that was added while the lock was not held has notified already, before this
+        // thread waits: nothing would wake it up again.
+        ExecutePendingJobs(state_lock);
         return m_state_cpu_step_instruction || !IsStepping();
       });
       if (!IsStepping())
