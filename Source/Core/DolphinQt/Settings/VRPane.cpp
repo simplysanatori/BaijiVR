@@ -144,7 +144,7 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
 
       // Menu and Pointers
       {Config::GFX_VR_POINTER_BEAMS.GetLocation(),
-       {tr("Pointer Beams"), tr("Shows where the controllers point.")}},
+       {tr("Pointer Beams"), tr("Shows where the controllers point during a game. The VR menu always shows them.")}},
       {Config::GFX_VR_TOASTS.GetLocation(),
        {tr("Messages"), tr("Shows short messages in the headset, for example Quick Saved.")}},
 

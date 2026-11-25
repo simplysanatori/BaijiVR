@@ -10,6 +10,7 @@
 
 #include <curl/curl.h>
 
+#include "Common/FileUtil.h"
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Common/ScopeGuard.h"
@@ -137,6 +138,23 @@ int HttpRequest::Impl::CurlProgressCallback(Impl* impl, curl_off_t dltotal, curl
                            static_cast<s64>(ultotal), static_cast<s64>(ulnow));
 }
 
+#if defined(__linux__) && !defined(ANDROID)
+// A cross-compiled curl has no certificate file of its own (CURL_CA_BUNDLE): the system's.
+static const char* SystemCertificates()
+{
+  static const char* const s_file = []() -> const char* {
+    for (const char* file : {"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt",
+                             "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem"})
+    {
+      if (File::Exists(file))
+        return file;
+    }
+    return nullptr;
+  }();
+  return s_file;
+}
+#endif
+
 HttpRequest::Impl::Impl(std::chrono::milliseconds timeout_ms, ProgressCallback callback)
     : m_callback(std::move(callback))
 {
@@ -145,6 +163,15 @@ HttpRequest::Impl::Impl(std::chrono::milliseconds timeout_ms, ProgressCallback c
   m_curl.reset(curl_easy_init());
   if (!m_curl)
     return;
+
+#if defined(__linux__) && !defined(ANDROID)
+  char* own_file = nullptr;
+  char* own_path = nullptr;
+  curl_easy_getinfo(m_curl.get(), CURLINFO_CAINFO, &own_file);
+  curl_easy_getinfo(m_curl.get(), CURLINFO_CAPATH, &own_path);
+  if (!own_file && !own_path && SystemCertificates())
+    curl_easy_setopt(m_curl.get(), CURLOPT_CAINFO, SystemCertificates());
+#endif
 
   curl_easy_setopt(m_curl.get(), CURLOPT_NOPROGRESS, m_callback == nullptr);
 

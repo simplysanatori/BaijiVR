@@ -35,7 +35,7 @@ These are the **VR** settings. Everything else is Dolphin's own. The VR menu use
 
 ## Menu and Pointers
 
-- **Pointer Beams**: shows where the controllers point.
+- **Pointer Beams**: shows where the controllers point during a game. Off by default.
 - **Messages**: short messages in the headset.
 
 ## Autosave
