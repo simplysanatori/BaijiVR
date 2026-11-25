@@ -286,7 +286,9 @@ public:
 
   void Button(PadControl control, const ControllerEmu::ControlGroup* group, std::string_view name)
   {
-    Set(control, DescribeExpression(GetExpression(group, name)));
+    const std::string expression = GetExpression(group, name);
+    const PadBinding binding = WithoutClicks(ParseBinding(expression));
+    Set(control, DescribeExpression(binding.custom.empty() ? MakeExpression(binding) : expression));
   }
   void Direction(PadControl control, const ControllerEmu::ControlGroup* group)
   {

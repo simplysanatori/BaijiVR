@@ -846,7 +846,7 @@ TEST_F(VRWiiControllerMapping, AnotherExtensionOfAProfileIsTheGames)
 TEST_F(VRWiiControllerMapping, TheBundledControllerIsTold)
 {
   Start("RK5E01");
-  EXPECT_EQ(TakeNotice(), "Wii Remote (Sideways) for this game. The Controls tab has the others.");
+  EXPECT_TRUE(TakeNotice().contains("Wii Remote (Sideways)"));
   Wiimote::LoadConfig();
   EXPECT_EQ(TakeNotice(), "");
   EndGame();

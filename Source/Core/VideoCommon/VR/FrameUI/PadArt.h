@@ -80,6 +80,9 @@ struct PadLink
   PadControl control = PadControl::Count;
   float x = 0.0f;
   float y = 0.0f;
+  // Of the D-Pad: to the arm that way, as it is drawn.
+  float arm_x = 0.0f;
+  float arm_y = 0.0f;
 };
 
 // The drawing alone, with the controls' letters on it.

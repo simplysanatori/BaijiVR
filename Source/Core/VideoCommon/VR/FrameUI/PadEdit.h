@@ -180,6 +180,8 @@ struct PadChip
 
 constexpr float PAD_CHIP_H = 42.0f;
 
+// The line of a control's chip.
+PadLink GetLink(PadTarget target, float x, float y);
 std::vector<PadChip> GetPadChips(PadKind kind, const FrameXr::Menu::Rect& area);
 // Between the chips.
 FrameXr::Menu::Rect GetPadEditArt(PadKind kind, const FrameXr::Menu::Rect& area);

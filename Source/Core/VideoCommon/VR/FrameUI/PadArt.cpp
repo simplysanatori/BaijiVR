@@ -1282,15 +1282,22 @@ std::vector<Anchor> SidewaysAnchors()
   };
 }
 
-void DrawLinks(Kit* kit, const Painter& painter, const std::vector<Anchor>& anchors,
+// The middle of an arm, from the D-Pad's.
+float GetArm(PadKind kind)
+{
+  return kind == PadKind::GameCube ? 6.5f : kind == PadKind::WiiClassic ? 93.0f : 33.0f;
+}
+
+void DrawLinks(Kit* kit, const Painter& painter, PadKind kind, const std::vector<Anchor>& anchors,
                const std::vector<PadLink>& links)
 {
+  const float arm = GetArm(kind) / painter.FromDp(1.0f);
   for (const PadLink& link : links)
   {
     const auto anchor = std::ranges::find(anchors, link.control, &Anchor::control);
     if (anchor == anchors.end())
       continue;
-    const Point at = painter.Dp(anchor->at);
+    const Point at = painter.Dp(anchor->at) + Point{link.arm_x, link.arm_y} * arm;
     Point from = at;
     if (anchor->has_bend)
     {
@@ -1381,7 +1388,7 @@ void DrawPadArt(Kit* kit, Canvas* canvas, const Rect& area, PadKind kind,
                          {area.Cx() - (REMOTE_H - REMOTE_FRONT) * scale * 0.5f, area.Cy()}, scale,
                          true);
     DrawRemote(remote, {});
-    DrawLinks(kit, remote, SidewaysAnchors(), links);
+    DrawLinks(kit, remote, kind, SidewaysAnchors(), links);
     return;
   }
 
@@ -1391,7 +1398,7 @@ void DrawPadArt(Kit* kit, Canvas* canvas, const Rect& area, PadKind kind,
                         {area.Cx() - plan.bounds.Cx() * scale, area.Cy() - plan.bounds.Cy() * scale},
                         scale);
   plan.draw(painter, {});
-  DrawLinks(kit, painter, plan.anchors, links);
+  DrawLinks(kit, painter, kind, plan.anchors, links);
 }
 
 void DrawPad(Kit* kit, Canvas* canvas, const Rect& area, PadKind kind, const PadLabels& labels)

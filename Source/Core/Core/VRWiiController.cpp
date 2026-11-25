@@ -400,7 +400,9 @@ void TellBundled(Choice choice)
   if (std::exchange(s_told, id) == id)
     return;
   s_notice = {id,
-              fmt::format("{} for this game. The Controls tab has the others.", GetName(choice))};
+              fmt::format("This game has the {}. The VR menu's Controls tab has the other "
+                          "controllers.",
+                          GetName(choice))};
   Core::DisplayMessage(s_notice.second, 6000);
 }
 
@@ -728,6 +730,9 @@ std::vector<std::string> GetProfiles(Kind kind)
   const std::string user = GetConfig(kind)->GetUserProfileDirectoryPath();
   for (const std::string& folder : {user, GetConfig(kind)->GetSysProfileDirectoryPath()})
   {
+    // The player's is not there before the first one is saved.
+    if (!File::IsDirectory(folder))
+      continue;
     for (const std::string& path : Common::DoFileSearch(folder, ".ini"))
     {
       std::string name;

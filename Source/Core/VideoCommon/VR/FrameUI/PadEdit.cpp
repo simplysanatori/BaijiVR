@@ -95,7 +95,7 @@ Sides GetSides(PadKind kind)
 }
 
 constexpr float CHIP_W = 160.0f;
-constexpr float ROW_CHIP_W = 128.0f;
+constexpr float ROW_CHIP_W = 148.0f;
 constexpr float CHIP_GAP = 8.0f;
 constexpr float ART_GAP = 20.0f;
 
@@ -442,6 +442,14 @@ PadEdit::Event PadEdit::Push(const std::string& direction)
   }
   Change(target, chosen);
   return Stop(Event::Changed);
+}
+
+PadLink GetLink(PadTarget target, float x, float y)
+{
+  PadLink link{GetTargetControl(target), x, y};
+  link.arm_x = target == PadTarget::DPadLeft ? -1.0f : target == PadTarget::DPadRight ? 1.0f : 0.0f;
+  link.arm_y = target == PadTarget::DPadUp ? -1.0f : target == PadTarget::DPadDown ? 1.0f : 0.0f;
+  return link;
 }
 
 std::vector<PadChip> GetPadChips(PadKind kind, const Rect& area)

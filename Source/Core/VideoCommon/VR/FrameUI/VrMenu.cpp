@@ -524,9 +524,14 @@ void AddEditControls(Builder* builder, const MenuState& state)
     MenuWidget& w = builder->Add(Kind::Chip, MenuItem::EditChip);
     w.index = static_cast<int>(chip.target);
     w.rect = chip.rect;
+    // Where its line ends.
+    w.control = {chip.x, chip.y, chip.x, chip.y};
     w.label = GetTargetName(chip.target);
     w.active = chip.target == state.edit.listening;
     w.value = DescribeBinding(chip.target, state.edit.table[static_cast<std::size_t>(w.index)]);
+    // All of it, where the chip is too small.
+    if (w.value.size() > 18)
+      w.tooltip = w.value;
     w.disabled = listening && !w.active;
   }
 
@@ -571,7 +576,7 @@ void AddEditControls(Builder* builder, const MenuState& state)
         options, state.pad_profile.empty() ? std::string(NO_PAD_PROFILE) : state.pad_profile);
     const int selected =
         chosen != options.end() ? static_cast<int>(chosen - options.begin()) : -1;
-    AddMenu(builder, profile_rect, 340.0f, std::move(options), selected);
+    AddMenu(builder, profile_rect, 400.0f, std::move(options), selected);
   }
 }
 
@@ -1219,13 +1224,8 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
                              chip.item == state.hover && chip.index == state.hover_index;
         if (chip.kind != Kind::Chip || !lit)
           continue;
-        const Rect& r = chip.rect;
-        PadLink link{GetTargetControl(static_cast<PadTarget>(chip.index)), r.Cx(), r.Cy()};
-        if (state.pad == PadKind::WiiRemoteSideways)
-          link.y = r.Cy() < w.rect.Cy() ? r.y1 : r.y0;
-        else
-          link.x = r.Cx() < w.rect.Cx() ? r.x1 : r.x0;
-        links.push_back(link);
+        links.push_back(GetLink(static_cast<PadTarget>(chip.index), chip.control.x0,
+                                chip.control.y0));
       }
       DrawPadArt(kit, canvas, w.rect, state.pad, links);
       break;
