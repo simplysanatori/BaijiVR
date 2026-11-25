@@ -171,8 +171,7 @@ void InterfacePane::CreateUI()
   m_checkbox_use_builtin_title_database = new ConfigBool(tr("Use Built-In Database of Game Names"),
                                                          Config::MAIN_USE_BUILT_IN_TITLE_DATABASE);
   m_checkbox_use_covers =
-      new ConfigBool(tr("Download Game Covers"),
-                     Config::MAIN_USE_GAME_COVERS);
+      new ConfigBool(tr("Download Game Covers"), Config::MAIN_USE_GAME_COVERS);
   m_checkbox_show_debugging_ui = new ToolTipCheckBox(tr("Enable Debugging UI"));
   m_checkbox_focused_hotkeys =
       new ConfigBool(tr("Hotkeys Require Window Focus"), Config::MAIN_FOCUSED_HOTKEYS);
@@ -348,9 +347,11 @@ void InterfacePane::AddDescriptions()
       QT_TR_NOOP("Requires the render window to be focused for hotkeys to take effect."
                  "<br><br><dolphin_emphasis>If unsure, leave this checked.</dolphin_emphasis>");
   static constexpr char TR_USE_COVERS_DESCRIPTION[] =
-      QT_TR_NOOP("Downloads game covers from GameTDB.com, or from libretro-thumbnails on GitHub, for "
-                 "the VR menu. The game's ID or its file name is sent."
-                 "<br><br><dolphin_emphasis>If unsure, leave this checked.</dolphin_emphasis>");
+      QT_TR_NOOP("Downloads game covers for the VR menu from libretro-thumbnails on GitHub, for the "
+                 "games in the list. It sees your IP address and the names of the games. Covers "
+                 "already on your computer are used either way; when this is unchecked, adding a "
+                 "game directory or finding a new game asks whether to download them."
+                 "<br><br><dolphin_emphasis>If unsure, leave this unchecked.</dolphin_emphasis>");
   static constexpr char TR_DISABLE_SCREENSAVER_DESCRIPTION[] =
       QT_TR_NOOP("Disables your screensaver while running a game."
                  "<br><br><dolphin_emphasis>If unsure, leave this checked.</dolphin_emphasis>");

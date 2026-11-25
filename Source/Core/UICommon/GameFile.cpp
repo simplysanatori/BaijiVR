@@ -51,15 +51,21 @@ namespace
 {
 const std::string EMPTY_STRING;
 
-bool UseGameCovers()
+bool HandlesCovers()
 {
 #ifdef ANDROID
   // Android has its own code for handling covers, written completely in Java.
   // It's best if we disable the C++ cover code on Android to avoid duplicated data and such.
   return false;
 #else
-  return Config::Get(Config::MAIN_USE_GAME_COVERS);
+  return true;
 #endif
+}
+
+// Covers on disk are used whatever this says; it is only for downloading them by themselves.
+bool DownloadsCovers()
+{
+  return HandlesCovers() && Config::Get(Config::MAIN_USE_GAME_COVERS);
 }
 }  // Anonymous namespace
 
@@ -198,7 +204,7 @@ bool GameFile::IsValid() const
 
 bool GameFile::CustomCoverChanged()
 {
-  if (!m_custom_cover.buffer.empty() || !UseGameCovers())
+  if (!m_custom_cover.buffer.empty() || !HandlesCovers())
     return false;
 
   std::string path, name;
@@ -223,9 +229,23 @@ bool GameFile::CustomCoverChanged()
   return success;
 }
 
-void GameFile::DownloadDefaultCover()
+CoverState GameFile::GetCoverState() const
 {
-  if (!m_default_cover.buffer.empty() || !UseGameCovers() || m_gametdb_id.empty())
+  std::string path, name;
+  SplitPath(m_file_path, &path, &name, nullptr);
+  CoverState state{.game_id = m_gametdb_id,
+                   .has_custom = !m_custom_cover.buffer.empty() ||
+                                 File::Exists(path + name + ".cover.png") ||
+                                 File::Exists(path + "cover.png")};
+  FillCoverCacheState(&state);
+  return state;
+}
+
+void GameFile::DownloadDefaultCover(bool force)
+{
+  if (!m_default_cover.buffer.empty() || m_gametdb_id.empty())
+    return;
+  if (!HandlesCovers() || !(force || DownloadsCovers()))
     return;
 
   if (File::Exists(GetCoverPath(m_gametdb_id)))
@@ -235,7 +255,6 @@ void GameFile::DownloadDefaultCover()
 
   const bool is_wii = DiscIO::IsWii(GetPlatform());
   EnsureCover({.game_id = m_gametdb_id,
-               .region_code = SConfig::GetInstance().GetGameTDBImageRegionCode(is_wii, m_region),
                .is_wii = is_wii,
                .region = m_region,
                .file_name = m_file_name,
@@ -244,7 +263,7 @@ void GameFile::DownloadDefaultCover()
 
 bool GameFile::DefaultCoverChanged()
 {
-  if (!m_default_cover.buffer.empty() || !UseGameCovers())
+  if (!m_default_cover.buffer.empty() || !HandlesCovers() || m_gametdb_id.empty())
     return false;
 
   std::string contents;

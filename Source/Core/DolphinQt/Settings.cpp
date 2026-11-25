@@ -457,7 +457,7 @@ QStringList Settings::GetPaths() const
   return list;
 }
 
-void Settings::AddPath(const QString& qpath)
+void Settings::AddPath(const QString& qpath, bool by_player)
 {
   std::string path = qpath.toStdString();
   std::vector<std::string> paths = Config::GetIsoPaths();
@@ -468,6 +468,8 @@ void Settings::AddPath(const QString& qpath)
   paths.emplace_back(path);
   Config::SetIsoPaths(paths);
   emit PathAdded(qpath);
+  if (by_player)
+    emit PathAddedByPlayer(qpath);
 }
 
 void Settings::RemovePath(const QString& qpath)

@@ -19,7 +19,6 @@ namespace
 CoverQuery Query(std::string file, std::string title = {})
 {
   return {.game_id = "RSBE01",
-          .region_code = "US",
           .is_wii = true,
           .region = DiscIO::Region::NTSC_U,
           .file_name = std::move(file),
@@ -48,10 +47,25 @@ TEST(GameCovers, NamesFromTitle)
 TEST(GameCovers, Urls)
 {
   const auto urls = CoverUrls(Query("A & B (USA).rvz"));
-  EXPECT_EQ(urls[0], "https://art.gametdb.com/wii/cover/US/RSBE01.png");
-  EXPECT_EQ(std::ranges::count_if(urls, [](const auto& u) { return u.contains("gametdb"); }), 2);
+  ASSERT_EQ(urls.size(), 1u);
+  for (const std::string& url : CoverUrls(Query("brawl.rvz", "Fire Emblem: Radiant Dawn")))
+  {
+    EXPECT_TRUE(url.starts_with("https://raw.githubusercontent.com/libretro-thumbnails/"));
+    EXPECT_FALSE(url.contains("gametdb"));
+  }
   EXPECT_EQ(urls.back(), "https://raw.githubusercontent.com/libretro-thumbnails/Nintendo_-_Wii/"
                          "master/Named_Boxarts/A%20_%20B%20%28USA%29.png");
+}
+
+TEST(GameCovers, NeedsCover)
+{
+  const CoverState bare{.game_id = "RSBE01"};
+  EXPECT_TRUE(NeedsCover(bare));
+  EXPECT_FALSE(NeedsCover({.game_id = "RSBE01", .has_custom = true}));
+  EXPECT_FALSE(NeedsCover({.game_id = "RSBE01", .has_cached = true}));
+  EXPECT_FALSE(NeedsCover({.game_id = "RSBE01", .known_missing = true}));
+  EXPECT_FALSE(NeedsCover({}));
+  EXPECT_FALSE(NeedsCover({.game_id = "../x"}));
 }
 
 TEST(GameCovers, Links)

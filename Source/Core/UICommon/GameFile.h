@@ -12,6 +12,7 @@
 #include "Core/SyncIdentifier.h"
 #include "DiscIO/Blob.h"
 #include "DiscIO/Enums.h"
+#include "UICommon/GameCovers.h"
 
 class PointerWrap;
 
@@ -118,7 +119,9 @@ public:
   void WiiBannerCommit();
   bool CustomBannerChanged();
   void CustomBannerCommit();
-  void DownloadDefaultCover();
+  // The setting for automatic downloads is not looked at when force is set.
+  void DownloadDefaultCover(bool force = false);
+  CoverState GetCoverState() const;
   bool DefaultCoverChanged();
   void DefaultCoverCommit();
   bool CustomCoverChanged();

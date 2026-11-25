@@ -3,21 +3,30 @@
 
 #include "DolphinQt/GameList/GameTracker.h"
 
+#include <algorithm>
+
 #include <QApplication>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QPushButton>
 
 #include "Common/Config/Config.h"
 
 #include "Core/Config/UISettings.h"
+#include "Core/Core.h"
+#include "Core/System.h"
 
 #include "DiscIO/DirectoryBlob.h"
 
+#include "DolphinQt/QtUtils/ModalMessageBox.h"
 #include "DolphinQt/QtUtils/QueueOnObject.h"
 
 #include "DolphinQt/Settings.h"
 
+#include "UICommon/GameCovers.h"
 #include "UICommon/GameFile.h"
 
 // NOTE: Qt likes to be case-sensitive here even though it shouldn't be thus this ugly regex hack
@@ -47,12 +56,22 @@ GameTracker::GameTracker(QObject* parent) : QFileSystemWatcher(parent)
     for (const auto& path : paths)
     {
       Settings::Instance().RemovePath(path);
-      Settings::Instance().AddPath(path);
+      Settings::Instance().AddPath(path, false);
     }
   });
+  connect(&Settings::Instance(), &Settings::PathAddedByPlayer, this,
+          &GameTracker::PlayerAddedDirectory);
 
   connect(&Settings::Instance(), &Settings::MetadataRefreshRequested, this,
           [this] { m_load_thread.EmplaceItem(Command{CommandType::UpdateMetadata, {}}); });
+
+  m_cover_timer = new QTimer(this);
+  m_cover_timer->setSingleShot(true);
+  m_cover_timer->setInterval(3000);
+  connect(m_cover_timer, &QTimer::timeout, this, [this] {
+    if (m_cover_scans_pending == 0 && !m_cover_question_open && !m_cover_games.empty())
+      AskAboutCovers();
+  });
 
   m_load_thread.Reset("GameList Tracker", [this](Command command) {
     switch (command.type)
@@ -99,7 +118,19 @@ GameTracker::GameTracker(QObject* parent) : QFileSystemWatcher(parent)
       m_cache.Save();
       QueueOnObject(this, [] { Settings::Instance().NotifyRefreshGameListComplete(); });
       break;
+    case CommandType::CountCovers:
+      CountCoversInternal(command.path, command.generation);
+      break;
+    case CommandType::DownloadCovers:
+      // Whatever the setting says: the player was asked.
+      if (m_cache.DownloadCovers(command.games, [this](const auto& game) { emit GameUpdated(game); },
+                                 m_processing_halted))
+      {
+        m_cache.Save();
+      }
+      break;
     }
+    FlushNewGames();
   });
 
   m_load_thread.EmplaceItem(Command{CommandType::LoadCache, {}});
@@ -154,8 +185,13 @@ void GameTracker::StartInternal()
 
   m_initial_games_emitted_event.Wait();
 
+  const auto emit_new_game = [this, &emit_game_loaded](
+                                 const std::shared_ptr<const UICommon::GameFile>& game) {
+    m_new_games.push_back(game->GetFilePath());
+    emit_game_loaded(game);
+  };
   bool cache_updated =
-      m_cache.Update(paths, emit_game_loaded, emit_game_removed, m_processing_halted);
+      m_cache.Update(paths, emit_new_game, emit_game_removed, m_processing_halted);
   cache_updated |= m_cache.UpdateAdditionalMetadata(emit_game_updated, m_processing_halted);
   if (cache_updated)
     m_cache.Save();
@@ -201,6 +237,8 @@ void GameTracker::RemoveDirectory(const QString& dir)
 
 void GameTracker::RefreshAll()
 {
+  ++m_cover_generation;
+  m_cover_scans_pending = 0;
   m_processing_halted = true;
   m_load_thread.Cancel();
   m_load_thread.EmplaceItem(Command{CommandType::ResumeProcessing, {}});
@@ -354,7 +392,10 @@ void GameTracker::LoadGame(const QString& path)
   if (!DiscIO::ShouldHideFromGameList(converted_path))
   {
     bool cache_changed = false;
+    const bool known = m_cache.Find(converted_path) != nullptr;
     auto game = m_cache.AddOrGet(converted_path, &cache_changed);
+    if (game && !known)
+      m_new_games.push_back(converted_path);
     if (game)
       emit GameLoaded(std::move(game));
     if (cache_changed && !m_refresh_in_progress)
@@ -366,4 +407,146 @@ void GameTracker::PurgeCache()
 {
   m_needs_purge = true;
   Settings::Instance().RefreshGameList();
+}
+
+// Games without a cover are looked for after the scan of the directory the player added, which is
+// the command before it, and counted on the tracker's thread, which has the games.
+void GameTracker::PlayerAddedDirectory(const QString& dir)
+{
+  // This runs after the connection that tells the tracker to scan the directory.
+  if (Config::Get(Config::MAIN_USE_GAME_COVERS) || Settings::Instance().IsBatchModeEnabled())
+    return;
+  ++m_cover_scans_pending;
+  m_load_thread.EmplaceItem(Command{CommandType::CountCovers, dir, m_cover_generation});
+}
+
+void GameTracker::CountCoversInternal(const QString& dir, u64 generation)
+{
+  std::vector<std::string> games;
+  for (auto it = m_tracked_files.cbegin(); it != m_tracked_files.cend(); ++it)
+  {
+    if (!it->contains(dir))
+      continue;
+    const auto game = m_cache.Find(it.key().toStdString());
+    if (!game)
+      continue;
+    if (UICommon::NeedsCover(game->GetCoverState()))
+      games.push_back(game->GetFilePath());
+  }
+  QueueOnObject(this, [this, generation, games = std::move(games)]() mutable {
+    CoversCounted(generation, std::move(games));
+  });
+}
+
+void GameTracker::CoversCounted(u64 generation, std::vector<std::string> games)
+{
+  if (generation != m_cover_generation)
+    return;
+  --m_cover_scans_pending;
+  for (std::string& game : games)
+  {
+    if (std::ranges::find(m_cover_games, game) == m_cover_games.end())
+      m_cover_games.push_back(std::move(game));
+  }
+  if (m_cover_scans_pending > 0)
+    return;
+  m_cover_scans_pending = 0;
+  if (!m_cover_games.empty() && !m_cover_question_open)
+    AskAboutCovers();
+}
+
+void GameTracker::AskAboutCovers()
+{
+  // Never over a running game or in batch mode; the question is skipped then.
+  if (Config::Get(Config::MAIN_USE_GAME_COVERS) || Settings::Instance().IsBatchModeEnabled() ||
+      Core::GetState(Core::System::GetInstance()) != Core::State::Uninitialized)
+  {
+    m_cover_games.clear();
+    return;
+  }
+
+  // Over the window the player is in (the Settings dialog while its Paths page is used). Not over
+  // a menu or another message box or file dialog that goes away by itself: the question is asked
+  // again a little later.
+  QWidget* parent = QApplication::activeModalWidget();
+  if (!parent)
+    parent = QApplication::activeWindow();
+  if (QApplication::activePopupWidget() || qobject_cast<QMessageBox*>(parent) ||
+      qobject_cast<QFileDialog*>(parent))
+  {
+    if (++m_cover_retries <= 600)
+      QTimer::singleShot(1000, this, [this] {
+        if (m_cover_scans_pending == 0 && !m_cover_question_open && !m_cover_games.empty())
+          AskAboutCovers();
+      });
+    else
+      m_cover_games.clear();
+    return;
+  }
+  m_cover_retries = 0;
+  std::vector<std::string> games = std::move(m_cover_games);
+  m_cover_games.clear();
+
+  // It does not block: the tracker's thread goes on, and so does Qt.
+  auto* box = new ModalMessageBox(parent);
+  box->setAttribute(Qt::WA_DeleteOnClose);
+  box->setIcon(QMessageBox::Question);
+  box->setWindowTitle(tr("Download Thumbnails?"));
+  box->setText(games.size() == 1 ?
+                   tr("Covers for the 1 game found can be downloaded from libretro-thumbnails on "
+                      "GitHub. It sees your IP address and the name of the game.") :
+                   tr("Covers for the %1 games found can be downloaded from libretro-thumbnails on "
+                      "GitHub. It sees your IP address and the names of the games.")
+                       .arg(games.size()));
+  QPushButton* const download = box->addButton(tr("Download"), QMessageBox::AcceptRole);
+  QPushButton* const not_now = box->addButton(tr("Not Now"), QMessageBox::RejectRole);
+  box->setDefaultButton(not_now);
+  box->setEscapeButton(not_now);
+
+  m_cover_question_open = true;
+  const u64 generation = m_cover_generation;
+  connect(box, &QMessageBox::finished, this,
+          [this, box, download, generation, games = std::move(games)]() mutable {
+            if (box->clickedButton() == download)
+            {
+              m_load_thread.EmplaceItem(
+                  Command{CommandType::DownloadCovers, {}, generation, std::move(games)});
+            }
+          });
+  // Also when the window it is over goes away: that is Not Now.
+  connect(box, &QObject::destroyed, this, [this] {
+    m_cover_question_open = false;
+    if (m_cover_scans_pending == 0 && !m_cover_games.empty())
+      QueueOnObject(this, [this] { AskAboutCovers(); });
+  });
+  box->open();
+}
+
+void GameTracker::FlushNewGames()
+{
+  if (m_new_games.empty())
+    return;
+  std::vector<std::string> games;
+  for (std::string& path : m_new_games)
+  {
+    const auto game = m_cache.Find(path);
+    if (game && UICommon::NeedsCover(game->GetCoverState()))
+      games.push_back(std::move(path));
+  }
+  m_new_games.clear();
+  if (!games.empty())
+    QueueOnObject(this, [this, games = std::move(games)]() mutable { NewGamesFound(std::move(games)); });
+}
+
+// A rescan found games the list did not have: the same question, a few seconds after the last find.
+void GameTracker::NewGamesFound(std::vector<std::string> games)
+{
+  if (Config::Get(Config::MAIN_USE_GAME_COVERS) || Settings::Instance().IsBatchModeEnabled())
+    return;
+  for (std::string& game : games)
+  {
+    if (std::ranges::find(m_cover_games, game) == m_cover_games.end())
+      m_cover_games.push_back(std::move(game));
+  }
+  m_cover_timer->start();
 }

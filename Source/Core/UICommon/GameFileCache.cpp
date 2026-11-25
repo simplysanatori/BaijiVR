@@ -164,13 +164,14 @@ bool GameFileCache::UpdateAdditionalMetadata(const GameUpdatedFn& game_updated,
   return cache_changed;
 }
 
-bool GameFileCache::UpdateAdditionalMetadata(std::shared_ptr<GameFile>* game_file)
+bool GameFileCache::UpdateAdditionalMetadata(std::shared_ptr<GameFile>* game_file,
+                                             bool force_covers)
 {
   const bool xml_metadata_changed = (*game_file)->XMLMetadataChanged();
   const bool wii_banner_changed = (*game_file)->WiiBannerChanged();
   const bool custom_banner_changed = (*game_file)->CustomBannerChanged();
 
-  (*game_file)->DownloadDefaultCover();
+  (*game_file)->DownloadDefaultCover(force_covers);
 
   const bool default_cover_changed = (*game_file)->DefaultCoverChanged();
   const bool custom_cover_changed = (*game_file)->CustomCoverChanged();
@@ -199,6 +200,33 @@ bool GameFileCache::UpdateAdditionalMetadata(std::shared_ptr<GameFile>* game_fil
   *game_file = std::move(copy);
 
   return true;
+}
+
+bool GameFileCache::DownloadCovers(std::span<const std::string> game_paths,
+                                   const GameUpdatedFn& game_updated,
+                                   const std::atomic_bool& processing_halted)
+{
+  bool cache_changed = false;
+  for (const std::string& path : game_paths)
+  {
+    if (processing_halted)
+      break;
+
+    const auto it = std::ranges::find(m_cached_files, path, &GameFile::GetFilePath);
+    if (it == m_cached_files.end())
+      continue;
+    const bool updated = UpdateAdditionalMetadata(&*it, true);
+    cache_changed |= updated;
+    if (game_updated && updated)
+      game_updated(*it);
+  }
+  return cache_changed;
+}
+
+std::shared_ptr<const GameFile> GameFileCache::Find(const std::string& path) const
+{
+  const auto it = std::ranges::find(m_cached_files, path, &GameFile::GetFilePath);
+  return it == m_cached_files.end() ? nullptr : *it;
 }
 
 bool GameFileCache::Load()

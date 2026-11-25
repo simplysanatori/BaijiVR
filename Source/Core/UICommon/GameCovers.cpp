@@ -173,18 +173,6 @@ std::vector<std::string> LibretroNames(const CoverQuery& query)
 std::vector<std::string> CoverUrls(const CoverQuery& query)
 {
   std::vector<std::string> urls;
-  std::vector<std::string> regions{query.region_code};
-  for (const char* const other : {"EN", "US"})
-  {
-    if (std::ranges::find(regions, other) == regions.end())
-      regions.emplace_back(other);
-  }
-  for (const std::string& region : regions)
-  {
-    urls.push_back(
-        fmt::format("https://art.gametdb.com/wii/cover/{}/{}.png", region, query.game_id));
-  }
-
   const char* const system = query.is_wii ? "Nintendo_-_Wii" : "Nintendo_-_GameCube";
   for (const std::string& name : LibretroNames(query))
   {
@@ -193,6 +181,18 @@ std::vector<std::string> CoverUrls(const CoverQuery& query)
         system, UrlEncode(name)));
   }
   return urls;
+}
+
+bool NeedsCover(const CoverState& state)
+{
+  return !state.game_id.empty() && std::ranges::all_of(state.game_id, Common::IsAlnum) &&
+         !state.has_custom && !state.has_cached && !state.known_missing;
+}
+
+void FillCoverCacheState(CoverState* state)
+{
+  state->has_cached = !state->game_id.empty() && File::Exists(GetCoverPath(state->game_id));
+  state->known_missing = !state->game_id.empty() && IsKnownMissing(state->game_id);
 }
 
 std::optional<std::string> LinkTarget(const std::string& url, std::string_view body)
@@ -257,7 +257,7 @@ bool StoreCover(std::span<const u8> png, const std::string& path)
 
 bool EnsureCover(const CoverQuery& query)
 {
-  // The ID is part of a file name and of an address.
+  // The ID is part of a file name.
   if (query.game_id.empty() || !std::ranges::all_of(query.game_id, Common::IsAlnum))
     return false;
   const std::string path = GetCoverPath(query.game_id);

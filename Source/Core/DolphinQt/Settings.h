@@ -97,7 +97,8 @@ public:
 
   // GameList
   QStringList GetPaths() const;
-  void AddPath(const QString& path);
+  // By default for a directory the player added; PathAddedByPlayer follows PathAdded for those.
+  void AddPath(const QString& path, bool by_player = true);
   void RemovePath(const QString& path);
   bool GetPreferredView() const;
   void SetPreferredView(bool list);
@@ -194,6 +195,7 @@ signals:
   void EmulationStateChanged(Core::State new_state);
   void ThemeChanged();
   void PathAdded(const QString&);
+  void PathAddedByPlayer(const QString&);
   void PathRemoved(const QString&);
   void DefaultGameChanged(const QString&);
   void GameListRefreshRequested();

@@ -6,13 +6,16 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <QFileSystemWatcher>
 #include <QMap>
 #include <QSet>
 #include <QString>
+#include <QTimer>
 #include <QVector>
 
+#include "Common/CommonTypes.h"
 #include "Common/Event.h"
 #include "Common/WorkQueueThread.h"
 #include "UICommon/GameFileCache.h"
@@ -60,6 +63,15 @@ private:
   QSet<QString> FindMissingFiles(const QString& dir);
   void LoadGame(const QString& path);
 
+  // The question about covers for a directory that the player added.
+  void PlayerAddedDirectory(const QString& dir);
+  void CountCoversInternal(const QString& dir, u64 generation);
+  void CoversCounted(u64 generation, std::vector<std::string> games);
+  void AskAboutCovers();
+  // Games that a scan found and the cache did not know: tracker thread, sent after each command.
+  void FlushNewGames();
+  void NewGamesFound(std::vector<std::string> games);
+
   bool AddPath(const QString& path);
   bool RemovePath(const QString& path);
 
@@ -76,12 +88,16 @@ private:
     PurgeCache,
     BeginRefresh,
     EndRefresh,
+    CountCovers,
+    DownloadCovers,
   };
 
   struct Command
   {
     CommandType type;
     QString path;
+    u64 generation = 0;
+    std::vector<std::string> games;
   };
 
   // game path -> directories that track it
@@ -96,6 +112,18 @@ private:
   bool m_needs_purge = false;
   bool m_refresh_in_progress = false;
   std::atomic_bool m_processing_halted = false;
+
+  // Main thread. Directories the player added whose scans have not been counted yet, and the games
+  // in them that lack a cover, and what rescans found. One question when the last scan is counted. A
+  // refresh drops the counts (the commands waiting for the tracker's thread go with it): the
+  // generation tells its answers.
+  u64 m_cover_generation = 0;
+  int m_cover_scans_pending = 0;
+  std::vector<std::string> m_cover_games;
+  bool m_cover_question_open = false;
+  int m_cover_retries = 0;
+  QTimer* m_cover_timer = nullptr;  // gathers what a scan or the directory watcher finds
+  std::vector<std::string> m_new_games;  // tracker thread
 };
 
 Q_DECLARE_METATYPE(std::shared_ptr<const UICommon::GameFile>)

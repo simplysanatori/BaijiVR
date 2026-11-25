@@ -54,11 +54,17 @@ public:
   bool UpdateAdditionalMetadata(const GameUpdatedFn& game_updated = {},
                                 const std::atomic_bool& processing_halted = false);
 
+  // Fetches the covers of these games whatever the setting is; true if any changed.
+  bool DownloadCovers(std::span<const std::string> game_paths, const GameUpdatedFn& game_updated,
+                      const std::atomic_bool& processing_halted);
+  // Null if it is not in the cache.
+  std::shared_ptr<const GameFile> Find(const std::string& path) const;
+
   bool Load();
   bool Save();
 
 private:
-  bool UpdateAdditionalMetadata(std::shared_ptr<GameFile>* game_file);
+  bool UpdateAdditionalMetadata(std::shared_ptr<GameFile>* game_file, bool force_covers = false);
 
   bool SyncCacheFile(bool save);
   void DoState(PointerWrap* p, u64 size = 0);
