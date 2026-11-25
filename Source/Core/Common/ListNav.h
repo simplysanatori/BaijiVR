@@ -17,9 +17,11 @@ namespace Common
 {
 struct ListNavTiming
 {
-  // A second press of A this soon after the first starts the game (Qt's double-click interval). 0:
-  // one press starts it.
+  // A second press of A this soon after the first starts the game (Qt's double-click interval).
   int64_t double_tap_ns = 400'000'000;
+  // A does not count this soon after the list becomes the window's again: a game or a dialog that
+  // just closed may still be getting presses.
+  int64_t settle_ns = 500'000'000;
   // A direction held: the first step at once, the second after this, then every repeat_ns.
   int64_t repeat_delay_ns = 400'000'000;
   int64_t repeat_ns = 110'000'000;
@@ -34,6 +36,7 @@ public:
   struct Result
   {
     int step = 0;           // -1 one game up, +1 one game down, 0 nothing
+    bool tap = false;       // A pressed: select a game if none is
     bool activate = false;  // A pressed twice quickly: start the highlighted game
   };
 
@@ -60,8 +63,11 @@ public:
       held_dir = dir;  // held from before: nothing until let go
       blocked = true;
       last_tap_ns = NONE;
+      enabled_ns = NONE;
       return r;
     }
+    if (enabled_ns == NONE)
+      enabled_ns = now_ns;
     if (dir != held_dir)
     {
       held_dir = dir;
@@ -78,9 +84,10 @@ public:
       // Never a burst after a long frame.
       next_repeat_ns = std::max(next_repeat_ns + t.repeat_ns, now_ns + t.repeat_ns / 2);
     }
-    if (a_edge)
+    if (a_edge && now_ns - enabled_ns >= t.settle_ns)
     {
-      if (t.double_tap_ns == 0 || (last_tap_ns != NONE && now_ns - last_tap_ns <= t.double_tap_ns))
+      r.tap = true;
+      if (last_tap_ns != NONE && now_ns - last_tap_ns <= t.double_tap_ns)
       {
         r.activate = true;
         last_tap_ns = NONE;  // a third tap starts a new pair
@@ -104,6 +111,7 @@ private:
   bool prev_a = true;   // an A held when the window appears is no press
   int64_t next_repeat_ns = 0;
   int64_t last_tap_ns = NONE;
+  int64_t enabled_ns = NONE;
 };
 
 // A button whose press is a moment late, so that it can be dropped: a controller whose layout makes

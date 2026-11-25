@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The Qt window with the controller in Steam's Game Mode, while no game runs: the left stick or the
-// D-pad moves the game list, A starts the game, B is Escape, and the right stick scrolls. In menus
-// and dialogs the stick and the D-pad are the arrow keys, A presses what has the focus, and the
-// bumpers move the focus. It reads SDL's gamepads, which is what Steam Input gives the app in gamepad
-// mode, and sends keys to Baiji's own widgets. It never moves or clicks the mouse, and it does
-// nothing on a desktop.
+// D-pad moves the game list, A pressed twice starts the game, B is Escape, and the right stick
+// scrolls. In menus and dialogs the stick and the D-pad are the arrow keys, A presses what has the
+// focus, and the bumpers move the focus. It reads SDL's gamepads, which is what Steam Input gives
+// the app in gamepad mode, and sends keys to Baiji's own widgets. It never moves or clicks the
+// mouse, and it does nothing on a desktop.
 
 #pragma once
 
@@ -83,6 +83,8 @@ private:
   QWidget* GetWindow() const;
 
   void StepList(int key);
+  // The first game, if none is selected. True: it was.
+  bool SelectFirst();
   void StartGame();
   void Escape();
   // Menus and dialogs: a key to what has the focus.

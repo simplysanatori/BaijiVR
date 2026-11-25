@@ -23,7 +23,7 @@ struct Runner
 {
   ListNav nav;
   int64_t now = 0;
-  int steps_up = 0, steps_down = 0, starts = 0;
+  int steps_up = 0, steps_down = 0, taps = 0, starts = 0;
 
   void Run(const TestPad& p, int64_t ms, bool enabled = true)
   {
@@ -32,6 +32,7 @@ struct Runner
       const ListNav::Result r = nav.Update(enabled, p.up, p.down, p.stick, p.a, now);
       steps_up += r.step < 0;
       steps_down += r.step > 0;
+      taps += r.tap;
       starts += r.activate;
       now += 8 * MS;
     }
@@ -95,7 +96,7 @@ TEST(ListNav, MainAxis)
 TEST(ListNav, DoubleTapStarts)
 {
   Runner r;
-  r.Run({}, 50);
+  r.Run({}, 600);
   // One tap.
   r.Run({.a = true}, 80);
   r.Run({}, 600);
@@ -122,13 +123,34 @@ TEST(ListNav, DoubleTapStarts)
   EXPECT_EQ(r.starts, 1);
 }
 
-TEST(ListNav, SinglePressStartsWithoutADoubleTap)
+TEST(ListNav, MashedWhenTheListComesBack)
 {
+  // Presses meant for a game or a dialog that just closed, all after it: no start.
   Runner r;
-  r.nav = ListNav{ListNavTiming{.double_tap_ns = 0}};
-  r.Run({}, 50);
-  r.Run({.a = true}, 500);
+  r.Run({.a = true}, 64, false);
+  for (int i = 0; i < 4; i++)
+  {
+    r.Run({}, 56);
+    r.Run({.a = true}, 56);
+  }
+  EXPECT_EQ(r.starts, 0);
+  EXPECT_EQ(r.taps, 0);
+  // The last of them is no first tap, either.
+  r.Run({}, 80);
+  r.Run({.a = true}, 64);
+  EXPECT_EQ(r.taps, 1);
+  EXPECT_EQ(r.starts, 0);
+  r.Run({}, 80);
+  r.Run({.a = true}, 64);
   EXPECT_EQ(r.starts, 1);
+  // A click in between (the list is off for a moment) ends the pair.
+  r.Run({}, 1000);
+  r.starts = 0;
+  r.Run({.a = true}, 64);
+  r.Run({}, 40, false);
+  r.Run({}, 40);
+  r.Run({.a = true}, 64);
+  EXPECT_EQ(r.starts, 0);
 }
 
 TEST(ListNav, DoubleTapLimit)
@@ -136,15 +158,15 @@ TEST(ListNav, DoubleTapLimit)
   ListNav nav;
   const int64_t limit = ListNavTiming{}.double_tap_ns;
   nav.Update(true, false, false, 0.0f, false, 0);
-  nav.Update(true, false, false, 0.0f, true, 1 * MS);
-  nav.Update(true, false, false, 0.0f, false, 2 * MS);
-  EXPECT_TRUE(nav.Update(true, false, false, 0.0f, true, 1 * MS + limit).activate);
+  nav.Update(true, false, false, 0.0f, true, 1001 * MS);
+  nav.Update(true, false, false, 0.0f, false, 1002 * MS);
+  EXPECT_TRUE(nav.Update(true, false, false, 0.0f, true, 1001 * MS + limit).activate);
 
   ListNav late;
   late.Update(true, false, false, 0.0f, false, 0);
-  late.Update(true, false, false, 0.0f, true, 1 * MS);
-  late.Update(true, false, false, 0.0f, false, 2 * MS);
-  EXPECT_FALSE(late.Update(true, false, false, 0.0f, true, 2 * MS + limit).activate);
+  late.Update(true, false, false, 0.0f, true, 1001 * MS);
+  late.Update(true, false, false, 0.0f, false, 1002 * MS);
+  EXPECT_FALSE(late.Update(true, false, false, 0.0f, true, 1002 * MS + limit).activate);
 }
 
 TEST(ListNav, HeldFromBeforeDoesNothing)

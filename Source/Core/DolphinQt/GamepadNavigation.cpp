@@ -314,15 +314,15 @@ void GamepadNavigation::Tick()
   const bool other = now - m_other_input_ns < OTHER_INPUT_NS;
 
   const bool steps = (list || in_window) && !other;
-  const int vertical = m_vertical
-                           .Update(steps, pad.dpad_up, pad.dpad_down,
-                                   Common::MainAxis(pad.left_y, pad.left_x), false, now)
-                           .step;
+  const Common::ListNav::Result result =
+      m_vertical.Update(steps, pad.dpad_up, pad.dpad_down,
+                        Common::MainAxis(pad.left_y, pad.left_x), pad.a, now);
+  const int vertical = result.step;
   const int horizontal = m_horizontal
                              .Update(steps, pad.dpad_left, pad.dpad_right,
                                      -Common::MainAxis(pad.left_x, pad.left_y), false, now)
                              .step;
-  const bool a = m_a.Update(list || in_window, pad.a, m_other_input_ns, now);
+  const bool a = m_a.Update(in_window, pad.a, m_other_input_ns, now);
   const bool b =
       m_b.Update(same && target != Target::None, pad.b, m_other_input_ns, now);
   const bool left_bumper =
@@ -336,8 +336,10 @@ void GamepadNavigation::Tick()
       StepList(vertical < 0 ? Qt::Key_Up : Qt::Key_Down);
     else if (horizontal != 0)
       StepList(horizontal < 0 ? Qt::Key_Left : Qt::Key_Right);
-    else if (a)
+    else if (result.activate)
       StartGame();
+    else if (result.tap)
+      SelectFirst();
   }
   else if (in_window)
   {
@@ -366,17 +368,24 @@ void GamepadNavigation::StepList(int key)
     return;
   if (!view->hasFocus())
     view->setFocus(Qt::OtherFocusReason);
-  if (!view->selectionModel()->hasSelection())
+  if (!SelectFirst())
+    SendKey(view, key);
+}
+
+bool GamepadNavigation::SelectFirst()
+{
+  auto* const view = qobject_cast<QAbstractItemView*>(m_list->currentWidget());
+  if (!view || !view->model() || view->model()->rowCount() == 0 ||
+      view->selectionModel()->hasSelection())
   {
-    // Nothing highlighted yet: the first game shown.
-    const QModelIndex first = view->model()->index(0, 0);
-    view->setCurrentIndex(first);
-    view->selectionModel()->select(first, QItemSelectionModel::ClearAndSelect |
-                                              QItemSelectionModel::Rows);
-    view->scrollTo(first);
-    return;
+    return false;
   }
-  SendKey(view, key);
+  const QModelIndex first = view->model()->index(0, 0);
+  view->setCurrentIndex(first);
+  view->selectionModel()->select(first, QItemSelectionModel::ClearAndSelect |
+                                            QItemSelectionModel::Rows);
+  view->scrollTo(first);
+  return true;
 }
 
 void GamepadNavigation::StartGame()
