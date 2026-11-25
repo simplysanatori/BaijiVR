@@ -829,6 +829,9 @@ private:
   mutable bool m_home_set{false};
   mutable XrVector3f m_home_position{0.f, 0.f, 0.f};
   std::atomic<bool> m_recenter_requested{false};
+  // When the reference space moves (SteamVR's recenter): Immersive's home position is taken again
+  // from the first views at or after it. 0: not pending.
+  std::atomic<XrTime> m_home_reset_time{0};
 
   // Flat panel state. Reference-space events request a video-thread pose refresh; cached pose
   // access is synchronized because OpenXR input sampling runs on the pacing thread. The

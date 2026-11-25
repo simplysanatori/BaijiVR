@@ -1307,6 +1307,7 @@ void OpenXRManager::DestroySession()
   m_home_set = false;
   m_home_position = {0.f, 0.f, 0.f};
   m_recenter_requested.store(false, std::memory_order_release);
+  m_home_reset_time.store(0, std::memory_order_release);
   m_flat_screen_reanchor_pending.store(false, std::memory_order_release);
   {
     std::lock_guard lock(m_flat_screen_pose_mutex);
@@ -2926,6 +2927,10 @@ bool OpenXRManager::PollEvents()
       // in the new reference-space frame; invalidating here lets the XR thread immediately
       // recache a pose from the old video-thread view snapshot.
       m_flat_screen_reanchor_pending.store(true, std::memory_order_release);
+      if (ev.referenceSpaceType == m_reference_space_type)
+      {
+        m_home_reset_time.store(std::max<XrTime>(ev.changeTime, 1), std::memory_order_release);
+      }
       break;
     }
 
@@ -3505,6 +3510,15 @@ bool OpenXRManager::LocateViews()
       m_rendered_eye_views[0].pose.orientation.z == 0.0f)
   {
     RecordRenderedEyeViews();
+  }
+
+  const XrTime home_reset_time = m_home_reset_time.load(std::memory_order_acquire);
+  if (home_reset_time != 0 && display_time >= home_reset_time)
+  {
+    // A newer change that came in meanwhile stays pending.
+    XrTime expected = home_reset_time;
+    m_home_reset_time.compare_exchange_strong(expected, 0, std::memory_order_acq_rel);
+    m_home_set = false;
   }
 
   if (m_recenter_requested.exchange(false, std::memory_order_acq_rel) && view_count >= 2)

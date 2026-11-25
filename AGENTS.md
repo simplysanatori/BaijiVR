@@ -34,9 +34,15 @@
   them on the XR pacing thread. Tests: `GameModsTest` (two need the Sys folder).
 - The controller diagrams (`FrameUI/PadArt.*`) are line drawings in the look of Azahar for Frame's help; the
   Wii Remote's and Nunchuk's places are measured from photos.
+- Immersive draws at the Internal Resolution setting plus two steps, up to the scale that covers the eye image; Dynamic
+  Resolution may lower it to the setting. Its GPU time is a fence-only submit after the last eye, waited on by a thread
+  with no lock held.
+- The VR menu's settings are one table, `FrameUI/MenuSettings.*`; per-game values are written by
+  `Core/GameSettingScope.*` as host jobs, and a Wii game's controller by `Core/VRWiiController.*`.
+- Screen Curve: the video thread publishes quads; they become cylinder layers as they are submitted.
 - Performance switches are `VideoCommon/VR/Perf/` and `GFX_VR_*` keys, all off by default: off must stay exactly
   as it was. `VR::Perf` counts on the pacing and video threads; `Consume` runs once a second as a host job
-  (`Logs/perf.csv`). Dynamic Resolution (Stereoscopic 3D only) keeps the Internal Resolution setting as its floor,
+  (`Logs/perf.csv`). Dynamic Resolution keeps the Internal Resolution setting as its floor,
   up to two steps more; `DynamicResolutionController.h` holds its rules (from Azahar for Frame, GPLv3) and
   `UpdateActiveConfig` applies it. `docs/perf-test.example.txt` is the A/B test a running game goes through. Core pinning
   and the performance hint are read at a game start. The GPU-wait switches only matter in games that copy the
@@ -213,7 +219,8 @@ is Baiji's README as it was at 75d194fd95 and is not edited.
   race costs a wait at those two places; it was timed in Path of Radiance only.
 - The two screen options of Immersive are defaults, not locks, and bundled game profiles do not replace them.
 - Licences: Dolphin's files are GPL-2.0-or-later. Files that follow Azahar for Frame's say GPL-3.0-or-later in their
-  first lines (`DynamicResolutionController.h`, `WindowFit.h`, `GameModeWindows.*`, `GameMods/Install.cpp`), so a
+  first lines (`DynamicResolutionController.h`, `WindowFit.h`, `GameModeWindows.*`, `GameMods/Install.cpp`, `VrMenu.*`, `VrUi.cpp`,
+  `PadEdit.*`, `GrabHint.h`, `list_scroll.*`, `ipd_smoother.h`, `cylinder_layer.h`, `ListNav.h`), so a
   build as a whole is GPL-3.0-or-later. Keep those notices when the files change.
 - Testing: unit tests (`VRFrameUITest`, `GameModsTest`, `DynamicResolutionTest`), and games on a desktop with a
   simulated headset. Headset results are the owner's to confirm.
