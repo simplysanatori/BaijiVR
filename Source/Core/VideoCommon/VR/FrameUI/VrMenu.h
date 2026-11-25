@@ -239,7 +239,7 @@ PadKind GetControllerPad(int controller);
 const char* GetPadName(PadKind kind);
 // What the Profile list offers: no profile first, then the saved ones (the game's is among them).
 // More than that are on several pages, which the last line turns.
-constexpr const char* NO_PAD_PROFILE = "Every Game";
+constexpr const char* NO_PAD_PROFILE = "Default";
 constexpr const char* MORE_PAD_PROFILES = "More Profiles";
 constexpr std::size_t MAX_PAD_PROFILES = 9;
 std::vector<std::string> GetPadProfileOptions(const MenuState& state);

@@ -1113,7 +1113,7 @@ void VrUi::ChoosePadProfile(int option)
     m_menu.open_pad_profile = true;
     return;
   }
-  if (name == NO_PAD_PROFILE)
+  if (option == 0 && name == NO_PAD_PROFILE)
     name.clear();
   if (name == m_menu.pad_profile)
     return;

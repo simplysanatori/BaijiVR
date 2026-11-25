@@ -115,9 +115,9 @@ std::string GetGameMappingLock(Kind kind);
 void MakeGameMapping(Core::System& system, Kind kind);
 void RemoveGameMapping(Core::System& system, Kind kind);
 
-// The profiles a mapping window lists, the one the running game's settings name (or empty), and
-// another one for it (empty: none). Host thread.
-std::vector<std::string> GetProfiles(Kind kind);
+// The profiles a mapping window lists (for a Wii Remote: those of this controller), the one the
+// running game's settings name (or empty), and another one for it (empty: none). Host thread.
+std::vector<std::string> GetProfiles(Kind kind, Choice choice);
 std::string GetProfile(Kind kind);
 void SetProfile(Core::System& system, Kind kind, const std::string& name);
 

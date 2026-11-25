@@ -505,7 +505,13 @@ std::string GetPadScopeLock(PadKind kind)
 
 std::vector<std::string> GetPadProfiles(PadKind kind)
 {
-  return VRWiiController::GetProfiles(GetStoreKind(kind));
+  for (int choice = 0; choice < static_cast<int>(VRWiiController::NAMES.size()); ++choice)
+  {
+    const auto controller = static_cast<VRWiiController::Choice>(choice);
+    if (ToKind(controller) == kind)
+      return VRWiiController::GetProfiles(GetStoreKind(kind), controller);
+  }
+  return {};
 }
 
 std::string GetPadProfile(PadKind kind)

@@ -693,9 +693,22 @@ TEST_F(VRWiiControllerMapping, AProfileIsChosenForTheGame)
         "[Profile]\nDevice = OpenXR/0/OpenXR Controller\nExtension = Classic\n"
         "Classic/Buttons/A = `Left Grip`\n");
   Start("GTST01");
-  const std::vector<std::string> names = GetPadProfiles(PadKind::WiiNunchuk);
-  EXPECT_TRUE(std::ranges::contains(names, "Mine"));
-  EXPECT_TRUE(std::ranges::contains(names, "Steam Frame Classic Controller"));
+  // Each page lists its own controller's.
+  Write(GetGameProfile("Wiimote", "Guitar"),
+        "[Profile]\nDevice = OpenXR/0/OpenXR Controller\nExtension = Guitar\n");
+  Write(GetGameProfile("Wiimote", "On Its Side"),
+        "[Profile]\nOptions/Sideways Wiimote = True\n");
+  Write(GetGameProfile("Wiimote", "VR Wii Remote"), "[Profile]\nExtension = None\n");
+  Write(GetGameProfile("Wiimote", "Plain"), "[Profile]\nButtons/A = `A`\n");
+  Write(GetGameProfile("Wiimote", "Formula"), "[Profile]\nExtension = `Attached Extension`\n");
+  using Names = std::vector<std::string>;
+  EXPECT_EQ(GetPadProfiles(PadKind::WiiNunchuk), Names{"Steam Frame Wii Remote + Nunchuk"});
+  EXPECT_EQ(GetPadProfiles(PadKind::WiiClassic),
+            (Names{"Mine", "Steam Frame Classic Controller"}));
+  EXPECT_EQ(GetPadProfiles(PadKind::WiiRemoteSideways),
+            (Names{"On Its Side", "Steam Frame Wii Remote (Sideways)"}));
+  EXPECT_EQ(GetPadProfiles(PadKind::WiiRemote), (Names{"Plain", "Steam Frame Wii Remote"}));
+  EXPECT_TRUE(std::ranges::contains(GetPadProfiles(PadKind::GameCube), "Steam Frame GameCube"));
   EXPECT_EQ(GetPadProfile(PadKind::WiiNunchuk), "");
 
   SetPadProfile(PadKind::WiiNunchuk, "Mine");

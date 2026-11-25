@@ -1449,6 +1449,7 @@ TEST(VRFrameUI, EveryProfileIsOnAPage)
   }
   EXPECT_EQ(seen.size(), 10u);
   EXPECT_EQ(GetPadProfileOptions(state).front(), NO_PAD_PROFILE);
+  EXPECT_STREQ(NO_PAD_PROFILE, "Default");
 }
 
 // One store, two views: a row is one config key, and what the key has at first is something the

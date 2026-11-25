@@ -7,6 +7,7 @@
 #include <array>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -724,9 +725,32 @@ void RemoveGameMapping(Core::System& system, Kind kind)
   Reload(system, kind);
 }
 
-std::vector<std::string> GetProfiles(Kind kind)
+// The controller a saved profile is of. None: another extension, or one that is chosen by a formula.
+static Choice DescribeProfile(const std::string& path)
+{
+  Common::IniFile ini;
+  if (!ini.Load(path))
+    return Choice::None;
+  const Common::IniFile::Section* const section = ini.GetSection("Profile");
+  if (!section)
+    return Choice::None;
+  std::string extension;
+  section->Get("Extension", &extension, "None");
+  if (extension == "Nunchuk")
+    return Choice::RemoteNunchuk;
+  if (extension == "Classic")
+    return Choice::Classic;
+  if (!extension.empty() && extension != "None")
+    return Choice::None;
+  bool sideways = false;
+  section->Get(std::string("Options/") + WiimoteEmu::Wiimote::SIDEWAYS_OPTION, &sideways, false);
+  return sideways ? Choice::RemoteSideways : Choice::Remote;
+}
+
+std::vector<std::string> GetProfiles(Kind kind, Choice choice)
 {
   std::vector<std::string> names;
+  std::set<std::string> seen;
   const std::string user = GetConfig(kind)->GetUserProfileDirectoryPath();
   for (const std::string& folder : {user, GetConfig(kind)->GetSysProfileDirectoryPath()})
   {
@@ -737,12 +761,19 @@ std::vector<std::string> GetProfiles(Kind kind)
     {
       std::string name;
       SplitPath(path, nullptr, &name, nullptr);
-      // Of those that come with the program, the Frame controllers', as in the mapping window.
-      if (!name.empty() && (folder == user || name.starts_with("Steam Frame")) &&
-          !std::ranges::contains(names, name))
+      // Of those that come with the program, the Frame controllers', as in the mapping window. The
+      // player's are in front of them.
+      if (name.empty() || (folder != user && !name.starts_with("Steam Frame")) ||
+          !seen.insert(name).second)
       {
-        names.push_back(std::move(name));
+        continue;
       }
+      // The mapping of every game is no profile to choose (GetUserProfile).
+      const bool every_game = std::ranges::any_of(
+          NAMES, [&name](const char* controller) { return name == std::string("VR ") + controller; });
+      if (kind == Kind::Remote && (every_game || DescribeProfile(path) != choice))
+        continue;
+      names.push_back(std::move(name));
     }
   }
   return names;

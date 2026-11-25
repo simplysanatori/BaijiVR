@@ -536,7 +536,7 @@ void AddEditControls(Builder* builder, const MenuState& state)
   }
 
   // What to do, and under it whose controls these are.
-  constexpr float PROFILE_W = 260.0f;
+  constexpr float PROFILE_W = 300.0f;
   MenuWidget& guide = builder->Add(Kind::Guide, MenuItem::None);
   guide.rect = {BAR.x0, BAR.y0, BAR.x1 - (listening ? 112.0f : PROFILE_W + 12.0f), BAR.y1};
   guide.active = listening;
@@ -564,7 +564,8 @@ void AddEditControls(Builder* builder, const MenuState& state)
   MenuWidget& profile = builder->Add(Kind::Dropdown, MenuItem::PadProfile);
   profile.rect = profile_rect;
   profile.control = profile_rect;
-  profile.value = state.pad_profile.empty() ? NO_PAD_PROFILE : state.pad_profile;
+  profile.value =
+      fmt::format("Profile: {}", state.pad_profile.empty() ? NO_PAD_PROFILE : state.pad_profile);
   profile.active = state.open_pad_profile;
   profile.disabled = !state.pad_scope_lock.empty();
   profile.tooltip = profile.disabled ? state.pad_scope_lock :
@@ -572,10 +573,15 @@ void AddEditControls(Builder* builder, const MenuState& state)
   if (state.open_pad_profile)
   {
     std::vector<std::string> options = GetPadProfileOptions(state);
-    const auto chosen = std::ranges::find(
-        options, state.pad_profile.empty() ? std::string(NO_PAD_PROFILE) : state.pad_profile);
-    const int selected =
-        chosen != options.end() ? static_cast<int>(chosen - options.begin()) : -1;
+    // Default is the first of all; a profile may be called that, too.
+    const bool has_default = options.front() == NO_PAD_PROFILE;
+    int selected = state.pad_profile.empty() && has_default ? 0 : -1;
+    const auto first = options.begin() + (has_default ? 1 : 0);
+    if (const auto it = std::find(first, options.end(), state.pad_profile);
+        !state.pad_profile.empty() && it != options.end())
+    {
+      selected = static_cast<int>(it - options.begin());
+    }
     AddMenu(builder, profile_rect, 400.0f, std::move(options), selected);
   }
 }
@@ -1333,7 +1339,8 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
   float top = pointed->rect.y0;
   if (pointed->clipped)
     top = std::max(top, pointed->clip.y0);
-  const bool above = top - 40.0f > PANE.y0;
+  // A controller's chip is under Global and Per-Game.
+  const bool above = top - 40.0f > PANE.y0 && pointed->item != MenuItem::Controller;
   const float y = above ? top + (row ? 6.0f : 0.0f) : pointed->rect.y1;
   if (wrap)
     kit->TooltipWrapped(cx, y, text, above, wrap_w);
