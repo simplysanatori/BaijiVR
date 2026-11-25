@@ -55,9 +55,8 @@
 - A dual-core FIFO reset must not run beside the GPU thread: `CommandProcessor` flushes it after reads are turned
   off and before CTRL turns them off, and `ProcessorInterface` waits for the buffer reset. Path of Radiance's own
   GPU watchdog, which halts the game, is patched off in `GFEE01.ini`.
-- `UICommon::COVERS_ARE_SHOWN` (`GameCovers.h`) is false until the VR menu has a Games tab: while it is, no question,
-  no automatic download and no "Download Game Covers" check box. The rest stays built; its text is in
-  `handover/covers.md` of the kit.
+- `UICommon::COVERS_ARE_SHOWN` (`GameCovers.h`) set to false takes away the cover question, the automatic download and
+  the "Download Game Covers" check box.
 - Box art is `UICommon/GameCovers.*`, cached per game ID in `Cache/GameCovers/`, for the VR UI, from
   libretro-thumbnails only. `MAIN_USE_GAME_COVERS` (off) is the automatic download; covers on disk are used either way.
   A directory the player adds (`Settings::AddPath`, `PathAddedByPlayer`) and games a rescan finds that the game

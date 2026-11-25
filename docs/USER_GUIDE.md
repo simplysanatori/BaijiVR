@@ -38,7 +38,7 @@ The README has the steps. The finished files are in `state/stage-frame/home/stea
 
 ### Update
 
-Quit the emulator, then run this in the `baijiSteamVR` folder on your PC:
+Quit the emulator, then run this in the `BaijiVR` folder on your PC:
 
 ```sh
 git pull
