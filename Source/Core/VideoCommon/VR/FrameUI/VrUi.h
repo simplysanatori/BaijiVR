@@ -235,6 +235,9 @@ private:
   bool m_drag_changed = false;
   PadEdit m_edit;
   PadTable m_bindings_table;
+  // Of the mappings they are of.
+  u32 m_mappings_seen = 0;
+  bool m_notice_asked = false;
   s64 m_rest_since_ns = 0;
   // Counts the menu's changes of settings.
   u32 m_settings_serial = 0;

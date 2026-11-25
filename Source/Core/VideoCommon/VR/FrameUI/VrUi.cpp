@@ -28,12 +28,17 @@
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/GameMods/GameMods.h"
+#include "Core/GameSettingScope.h"
+#include "Core/HW/GCPad.h"
 #include "Core/HW/ProcessorInterface.h"
+#include "Core/HW/Wiimote.h"
 #include "Core/ModeSwitch.h"
 #include "Core/NetPlayProto.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "Core/VRWiiController.h"
+
+#include "InputCommon/InputConfig.h"
 
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/VR/FrameUI/GrabHint.h"
@@ -101,6 +106,15 @@ std::optional<std::pair<std::string, u32>> s_toast;
 // After the next toast that is posted.
 std::optional<std::pair<std::string, u32>> s_next_toast;
 bool s_next_toast_ready = false;
+
+// After the one that is shown.
+void PostNextToast(std::string text, u32 ms)
+{
+  std::lock_guard lock(s_toast_mutex);
+  s_next_toast.emplace(std::move(text), ms);
+  s_next_toast_ready = true;
+}
+
 // The save states on disk changed.
 std::atomic<u32> s_saves_changed{0};
 std::atomic<u32> s_mods_changed{0};
@@ -194,11 +208,16 @@ std::string GetQuickSavePath()
                      SConfig::GetInstance().GetGameID(), QUICK_SAVE_SUFFIX);
 }
 
-void QueueConfig(std::function<void()> change)
+// `save`: with what it changed of every game's settings on the disk, too.
+void QueueConfig(std::function<void()> change, bool save = true)
 {
-  Core::QueueHostJob([change = std::move(change)](Core::System&) {
-    Config::ConfigChangeCallbackGuard guard;
-    change();
+  Core::QueueHostJob([change = std::move(change), save](Core::System&) {
+    {
+      Config::ConfigChangeCallbackGuard guard;
+      change();
+    }
+    if (save)
+      GameSettingScope::SaveGlobal();
   });
 }
 
@@ -368,7 +387,10 @@ void QueueSwitchMode(bool to_immersive, std::optional<SettingScope> keep = std::
       VrUi::PostToast(to_immersive ? "Immersive" : "Stereoscopic 3D", 2000);
     }
     if (keep)
+    {
       WriteSetting(SettingId::Display, static_cast<float>(mode), *keep, true);
+      GameSettingScope::SaveGlobal();
+    }
   });
 }
 }  // namespace
@@ -469,6 +491,15 @@ void VrUi::Update(const Frame& frame, Controllers* controllers)
 
   UpdateBeams(frame, raw);
   UpdateToasts(frame);
+  if (!m_notice_asked && frame.head_valid)
+  {
+    // The controller the game has been given is told where it is seen.
+    m_notice_asked = true;
+    Core::QueueHostJob([](Core::System&) {
+      if (std::string notice = VRWiiController::TakeNotice(); !notice.empty())
+        PostNextToast(std::move(notice), 6000);
+    });
+  }
 }
 
 void VrUi::OnFocusLost()
@@ -981,6 +1012,10 @@ void VrUi::RefreshMenuState()
   settings.immersive = !m_frame.has_screen;
   settings.can_switch_mode = s_can_switch_mode;
   settings.can_curve = m_manager->CanCurveScreen();
+  // A mapping window is another place to change them.
+  const u32 mappings = Pad::GetConfig()->GetChanges() + Wiimote::GetConfig()->GetChanges();
+  if (std::exchange(m_mappings_seen, mappings) != mappings)
+    RequestBindings();
   if (m_menu.tab == MenuTab::Stats)
     m_menu.stats = GetStatsGroups(Perf::GetStats());
   SetLiveSettings();
@@ -1008,9 +1043,9 @@ void VrUi::SetLiveSettings()
 void VrUi::ChangeSetting(SettingId id, float value, bool save)
 {
   m_menu.settings.Set(id, value);
-  QueueConfig([id, value, save, scope = m_menu.settings.scope] {
-    WriteSetting(id, value, scope, save);
-  });
+  QueueConfig(
+      [id, value, save, scope = m_menu.settings.scope] { WriteSetting(id, value, scope, save); },
+      save);
   QueueReadSettings(++m_settings_serial);
 }
 
@@ -1058,7 +1093,15 @@ void VrUi::ChoosePadProfile(int option)
   const std::vector<std::string> options = GetPadProfileOptions(m_menu);
   if (option < 0 || option >= static_cast<int>(options.size()))
     return;
-  std::string name = option == 0 ? std::string() : options[static_cast<std::size_t>(option)];
+  std::string name = options[static_cast<std::size_t>(option)];
+  if (name == MORE_PAD_PROFILES)
+  {
+    ++m_menu.pad_profile_page;
+    m_menu.open_pad_profile = true;
+    return;
+  }
+  if (name == NO_PAD_PROFILE)
+    name.clear();
   if (name == m_menu.pad_profile)
     return;
   m_menu.pad_profile = name;
@@ -1581,6 +1624,7 @@ void VrUi::Activate(const MenuWidget& widget, int option)
     break;
   case MenuItem::PadProfile:
     m_menu.open_pad_profile = true;
+    m_menu.pad_profile_page = 0;
     break;
   case MenuItem::ControlsMore:
     m_menu.open_pad_scope = true;
@@ -1812,7 +1856,7 @@ void VrUi::UpdateToasts(const Frame& frame)
   {
     std::lock_guard lock(s_toast_mutex);
     posted = std::exchange(s_toast, std::nullopt);
-    if (!posted && s_next_toast_ready && m_toast_until_ns == 0 && !m_menu_open)
+    if (!posted && s_next_toast_ready && m_toast_until_ns == 0 && !m_menu_open && frame.head_valid)
       posted = std::exchange(s_next_toast, std::nullopt);
   }
   if (posted && g_ActiveConfig.vr_toasts)

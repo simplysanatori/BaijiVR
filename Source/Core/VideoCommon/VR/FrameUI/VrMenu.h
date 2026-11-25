@@ -164,6 +164,7 @@ struct MenuState
   bool open_scope = false;  // the menu of the dots
   bool open_pad_scope = false;  // the same on the Controls tab
   bool open_pad_profile = false;
+  int pad_profile_page = 0;
 
   MenuItem hover = MenuItem::None;
   MenuItem pressed = MenuItem::None;
@@ -237,8 +238,10 @@ std::string GetControllerChipLabel(std::string_view name);
 PadKind GetControllerPad(int controller);
 const char* GetPadName(PadKind kind);
 // What the Profile list offers: no profile first, then the saved ones (the game's is among them).
+// More than that are on several pages, which the last line turns.
 constexpr const char* NO_PAD_PROFILE = "Every Game";
-constexpr std::size_t MAX_PAD_PROFILES = 8;
+constexpr const char* MORE_PAD_PROFILES = "More Profiles";
+constexpr std::size_t MAX_PAD_PROFILES = 9;
 std::vector<std::string> GetPadProfileOptions(const MenuState& state);
 
 // The list of a page that scrolls.

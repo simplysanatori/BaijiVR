@@ -26,6 +26,10 @@ bool HasGameValue(const Config::Location& location, Store store);
 // The player's, for this game. The others are from a bundled profile or a file for several games.
 bool HasOwnValue(const Config::Location& location, Store store);
 
+// Writes the global settings to the disk, and not those of the running game, which can have values
+// that are only until it ends.
+void SaveGlobal();
+
 // Detail of the templates below.
 bool IsGameRunning();
 void SetLocalGame(const Config::Location& location, std::optional<std::string> value, bool save);

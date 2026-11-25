@@ -139,6 +139,12 @@ bool HasOwnValue(const Config::Location& location, Store store)
   return store == Store::LocalGame && layer && layer->Exists(location);
 }
 
+void SaveGlobal()
+{
+  if (const auto layer = Config::GetLayer(Config::LayerType::Base))
+    layer->Save();
+}
+
 void SetLocalGame(const Config::Location& location, std::optional<std::string> value, bool save)
 {
   const auto layer = Config::GetLayer(Config::LayerType::LocalGame);

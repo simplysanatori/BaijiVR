@@ -567,11 +567,10 @@ void AddEditControls(Builder* builder, const MenuState& state)
   if (state.open_pad_profile)
   {
     std::vector<std::string> options = GetPadProfileOptions(state);
-    const auto chosen = std::ranges::find(options, state.pad_profile);
+    const auto chosen = std::ranges::find(
+        options, state.pad_profile.empty() ? std::string(NO_PAD_PROFILE) : state.pad_profile);
     const int selected =
-        state.pad_profile.empty() ? 0 :
-        chosen != options.end()   ? static_cast<int>(chosen - options.begin()) :
-                                    -1;
+        chosen != options.end() ? static_cast<int>(chosen - options.begin()) : -1;
     AddMenu(builder, profile_rect, 340.0f, std::move(options), selected);
   }
 }
@@ -870,16 +869,23 @@ std::string GetControllerChipLabel(std::string_view name)
 std::vector<std::string> GetPadProfileOptions(const MenuState& state)
 {
   std::vector<std::string> options{NO_PAD_PROFILE};
-  for (const std::string& name : state.pad_profiles)
-  {
-    if (options.size() > MAX_PAD_PROFILES)
-      break;
-    options.push_back(name);
-  }
   // The game's is always there.
-  if (!state.pad_profile.empty() && std::ranges::find(options, state.pad_profile) == options.end())
-    options.back() = state.pad_profile;
-  return options;
+  if (!state.pad_profile.empty() &&
+      std::ranges::find(state.pad_profiles, state.pad_profile) == state.pad_profiles.end())
+  {
+    options.push_back(state.pad_profile);
+  }
+  options.insert(options.end(), state.pad_profiles.begin(), state.pad_profiles.end());
+  if (options.size() <= MAX_PAD_PROFILES)
+    return options;
+  constexpr std::size_t PAGE = MAX_PAD_PROFILES - 1;
+  const std::size_t pages = (options.size() + PAGE - 1) / PAGE;
+  const std::size_t first = static_cast<std::size_t>(state.pad_profile_page) % pages * PAGE;
+  const std::size_t last = std::min(first + PAGE, options.size());
+  std::vector<std::string> page(options.begin() + static_cast<std::ptrdiff_t>(first),
+                                options.begin() + static_cast<std::ptrdiff_t>(last));
+  page.push_back(MORE_PAD_PROFILES);
+  return page;
 }
 
 PadKind GetControllerPad(int controller)

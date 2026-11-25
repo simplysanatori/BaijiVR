@@ -1429,6 +1429,28 @@ TEST(VRFrameUI, ControlsHaveGlobalAndPerGame)
   EXPECT_FALSE(find(MenuItem::EditControls));
 }
 
+TEST(VRFrameUI, EveryProfileIsOnAPage)
+{
+  MenuState state;
+  EXPECT_EQ(GetPadProfileOptions(state), std::vector<std::string>{NO_PAD_PROFILE});
+  for (int i = 0; i < 8; ++i)
+    state.pad_profiles.push_back(fmt::format("Profile {}", i));
+  EXPECT_EQ(GetPadProfileOptions(state).size(), 9u);
+  EXPECT_EQ(GetPadProfileOptions(state).back(), "Profile 7");
+  // The game's, which is nowhere else.
+  state.pad_profile = "Gone";
+  std::set<std::string> seen;
+  for (state.pad_profile_page = 0; state.pad_profile_page < 2; ++state.pad_profile_page)
+  {
+    const std::vector<std::string> options = GetPadProfileOptions(state);
+    EXPECT_LE(options.size(), MAX_PAD_PROFILES);
+    EXPECT_EQ(options.back(), MORE_PAD_PROFILES);
+    seen.insert(options.begin(), options.end() - 1);
+  }
+  EXPECT_EQ(seen.size(), 10u);
+  EXPECT_EQ(GetPadProfileOptions(state).front(), NO_PAD_PROFILE);
+}
+
 // One store, two views: a row is one config key, and what the key has at first is something the
 // row can show.
 TEST_F(VRFrameUISettings, EveryRowIsOneConfigKey)
@@ -1459,9 +1481,13 @@ TEST_F(VRFrameUISettings, EveryRowIsOneConfigKey)
     // are in its game settings.
     const bool vr_key = location.system == Config::System::GFX && location.section == "VR";
     if (row.store == SettingStore::VRFile)
+    {
       EXPECT_TRUE(vr_key) << row.label;
+    }
     if (row.store == SettingStore::LocalGame)
+    {
       EXPECT_FALSE(vr_key) << row.label;
+    }
   }
 }
 
