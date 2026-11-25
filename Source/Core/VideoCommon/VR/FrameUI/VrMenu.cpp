@@ -541,6 +541,9 @@ void AddEditControls(Builder* builder, const MenuState& state)
 
 constexpr float CONTROLS_PAGE_W = 248.0f;
 constexpr float EDIT_W = 176.0f;
+// A Wii game's controller, between them.
+constexpr float CONTROLLER_X1 = RIGHT - 112.0f - 12.0f;
+constexpr float CONTROLLER_MENU_W = 284.0f;
 
 void AddControls(Builder* builder, const MenuState& state)
 {
@@ -562,6 +565,21 @@ void AddControls(Builder* builder, const MenuState& state)
     edit.label = "Edit Controls";
     edit.disabled = !state.edit_lock.empty();
     edit.tooltip = state.edit_lock;
+    if (state.wii)
+    {
+      edit.rect.x0 = CONTROLLER_X1 + 12.0f;
+      edit.label = "Edit";
+      MenuWidget& controller = builder->Add(Kind::Dropdown, MenuItem::Controller);
+      controller.rect = {LEFT + CONTROLS_PAGE_W + 12.0f, TOP, CONTROLLER_X1,
+                         TOP + CONTROL_H};
+      controller.control = controller.rect;
+      controller.value =
+          state.controller >= 0 ? CONTROLLERS[static_cast<std::size_t>(state.controller)] : "Other";
+      controller.active = state.open_controller;
+      controller.disabled = !state.can_choose_controller;
+      if (controller.disabled)
+        controller.tooltip = "NetPlay, a movie or the game's own settings have chosen it.";
+    }
   }
   builder->Gap(64.0f);
 
@@ -569,6 +587,11 @@ void AddControls(Builder* builder, const MenuState& state)
   {
     MenuWidget& pad = builder->Add(Kind::Pad, MenuItem::None);
     pad.rect = {LEFT, builder->GetY(), RIGHT, PANE.y1 - 8.0f};
+    if (state.wii && state.open_controller)
+    {
+      AddMenu(builder, {LEFT, TOP, CONTROLLER_X1, TOP + CONTROL_H}, CONTROLLER_MENU_W,
+              {CONTROLLERS.begin(), CONTROLLERS.end()}, state.controller);
+    }
     return;
   }
   builder->Text("VR Menu", "Hold Menu for 1 Second");

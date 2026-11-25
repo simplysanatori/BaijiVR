@@ -575,6 +575,8 @@ add_library(core
   USBUtils.h
   WC24PatchEngine.cpp
   WC24PatchEngine.h
+  VRWiiController.cpp
+  VRWiiController.h
   WiiRoot.cpp
   WiiRoot.h
   WiiUtils.cpp

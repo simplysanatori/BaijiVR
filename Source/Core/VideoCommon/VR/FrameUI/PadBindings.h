@@ -19,7 +19,7 @@ std::pair<PadKind, PadLabels> GetPadBindings(bool wii);
 // Why Edit Controls cannot change them, or empty.
 std::string GetPadEditLock(PadKind kind);
 PadTable GetPadTable(PadKind kind);
-// Into the mapping, which is the same in every game, and saved.
+// Into the mapping, and saved.
 void SetPadBindings(PadKind kind, const std::vector<std::pair<PadTarget, PadBinding>>& bindings);
 // The Steam Frame profile for this controller.
 void ResetPadBindings(PadKind kind);

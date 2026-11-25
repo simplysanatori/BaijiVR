@@ -129,6 +129,7 @@ private:
   // What is on the controller's controls.
   void RequestBindings();
   void OpenEditControls();
+  void ChooseController(int controller);
   // Edit Controls waits for a press: the controllers are its own.
   void UpdateListening(const Controllers& controllers, float dt, bool on_cancel);
   void ChangeMod(const MenuWidget& widget);

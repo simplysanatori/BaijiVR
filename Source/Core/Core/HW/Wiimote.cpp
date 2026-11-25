@@ -29,6 +29,7 @@
 #include "Core/IOS/USB/Bluetooth/WiimoteDevice.h"
 #include "Core/Movie.h"
 #include "Core/System.h"
+#include "Core/VRWiiController.h"
 #include "Core/WiiUtils.h"
 
 #include "InputCommon/ControllerEmu/ControlGroup/ControlGroup.h"
@@ -655,6 +656,7 @@ void ResetAllWiimotes()
 void LoadConfig()
 {
   s_config.LoadConfig();
+  VRWiiController::OnMappingLoaded();
   s_last_connect_request_counter.fill(0);
 }
 

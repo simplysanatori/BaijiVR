@@ -53,6 +53,7 @@ enum class MenuItem
   AutosaveSettings,
   UndoLoad,
   ControlsPage,
+  Controller,  // a Wii game's
   EditControls,
   EditChip,  // the index is its PadTarget
   EditCancel,
@@ -125,6 +126,8 @@ struct MenuState
   PadKind pad = PadKind::GameCube;
   PadLabels pad_labels;
   std::string edit_lock;  // why they cannot be changed
+  int controller = -1;    // a Wii game's, in CONTROLLERS
+  bool can_choose_controller = true;
   PadEditView edit;
 
   int mods_list = 0;  // Mods, Textures
@@ -144,6 +147,7 @@ struct MenuState
   // The row with its drop-down menu open.
   SettingId open_setting = SettingId::None;
   bool open_scope = false;  // the menu of the dots
+  bool open_controller = false;
 
   MenuItem hover = MenuItem::None;
   MenuItem pressed = MenuItem::None;
@@ -205,6 +209,10 @@ struct MenuWidget
   bool clipped = false;
   FrameXr::Menu::Rect clip;
 };
+
+// In the order of VRWiiController::Choice.
+constexpr std::array CONTROLLERS{"GameCube Controller", "Wii Remote", "Wii Remote + Nunchuk",
+                                 "Wii Remote (Sideways)"};
 
 // The list of a page that scrolls.
 struct MenuList

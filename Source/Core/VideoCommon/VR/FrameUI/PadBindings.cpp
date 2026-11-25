@@ -18,6 +18,8 @@
 #include "Core/HW/Wiimote.h"
 #include "Core/HW/WiimoteEmu/Extension/Nunchuk.h"
 #include "Core/HW/WiimoteEmu/WiimoteEmu.h"
+#include "Core/System.h"
+#include "Core/VRWiiController.h"
 
 #include "InputCommon/ControlReference/ControlReference.h"
 #include "InputCommon/ControllerEmu/Control/Control.h"
@@ -160,28 +162,15 @@ void SetExpression(const ControllerEmu::ControlGroup* group, std::string_view co
     (*it)->control_ref->SetExpression(expression);
 }
 
-const char* GetProfileName(PadKind kind)
-{
-  switch (kind)
-  {
-  case PadKind::GameCube:
-    return "Steam Frame GameCube";
-  case PadKind::WiiRemote:
-    return "Steam Frame Wii Remote";
-  case PadKind::WiiRemoteSideways:
-    return "Steam Frame Wii Remote (Sideways)";
-  case PadKind::WiiNunchuk:
-    return "Steam Frame Wii Remote + Nunchuk";
-  }
-  return "";
-}
-
 // Not under the state lock.
 void ApplyAndSave(PadKind kind)
 {
   InputConfig* const config = GetConfig(kind);
   config->GetController(0)->UpdateReferences(g_controller_interface);
-  config->SaveConfig();
+  if (kind == PadKind::GameCube)
+    config->SaveConfig();
+  else
+    VRWiiController::SaveMapping();
   config->GenerateControllerTextures();
 }
 
@@ -228,7 +217,8 @@ std::string DescribeUp(std::string expression)
 std::pair<PadKind, PadLabels> GetPadBindings(bool wii)
 {
   Labels labels;
-  if (!wii)
+  if (!wii || VRWiiController::GetCurrent(Core::System::GetInstance()) ==
+                  VRWiiController::Choice::GameCube)
   {
     const auto lock = ControllerEmu::EmulatedController::GetStateLock();
     const auto* const buttons = Pad::GetGroup(0, PadGroup::Buttons);
@@ -351,8 +341,14 @@ void SetPadBindings(PadKind kind, const std::vector<std::pair<PadTarget, PadBind
 void ResetPadBindings(PadKind kind)
 {
   InputConfig* const config = GetConfig(kind);
+  if (kind != PadKind::GameCube)
+  {
+    VRWiiController::ResetMapping();
+    config->GenerateControllerTextures();
+    return;
+  }
   Common::IniFile ini;
-  if (!ini.Load(config->GetSysProfileDirectoryPath() + GetProfileName(kind) + ".ini"))
+  if (!ini.Load(config->GetSysProfileDirectoryPath() + "Steam Frame GameCube.ini"))
     return;
   config->GetController(0)->LoadConfig(ini.GetOrCreateSection("Profile"));
   ApplyAndSave(kind);

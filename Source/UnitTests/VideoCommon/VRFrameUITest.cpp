@@ -13,9 +13,14 @@
 #include "Common/FileUtil.h"
 #include "Core/Autosave.h"
 #include "Core/Config/GraphicsSettings.h"
+#include "Core/Config/MainSettings.h"
+#include "Core/Config/WiimoteSettings.h"
 #include "Core/ConfigLoaders/BaseConfigLoader.h"
 #include "Core/ConfigManager.h"
 #include "Core/GameSettingScope.h"
+#include "Core/HW/SI/SI_Device.h"
+#include "Core/HW/Wiimote.h"
+#include "Core/VRWiiController.h"
 #include "InputCommon/ControllerInterface/OpenXR/FrameControllerNames.h"
 #include "VideoCommon/VR/FrameUI/MenuSettings.h"
 #include "VideoCommon/VR/FrameUI/PadBindings.h"
@@ -75,12 +80,13 @@ std::vector<MenuState> GetPages(bool immersive)
   base.settings.has_game = true;
   for (const MenuTab tab : {MenuTab::Main, MenuTab::Controls, MenuTab::Mods})
   {
-    for (const int page : {0, 1})
+    for (const int page : {0, 1, 2})
     {
       MenuState s = base;
       s.tab = tab;
-      s.controls_page = page;
-      s.wii = page == 1;
+      s.controls_page = page == 1 ? 1 : 0;
+      s.wii = page == 2;
+      s.controller = 3;
       s.mods.resize(13);
       s.mods_page = page * 2;
       s.mods_changed = true;
@@ -1209,4 +1215,42 @@ TEST(VRFrameUI, EditControlsHasAChipForEveryControl)
     for (const PadTarget target : GetTargets(kind))
       EXPECT_TRUE(chips.contains(static_cast<int>(target)));
   }
+}
+
+TEST(VRFrameUI, OnlyWiiGamesHaveAChoiceOfController)
+{
+  MenuState s;
+  s.tab = MenuTab::Controls;
+  const auto has = [&s] {
+    const auto widgets = VrMenu::Layout(s);
+    return std::ranges::find(widgets, MenuItem::Controller, &MenuWidget::item) != widgets.end();
+  };
+  EXPECT_FALSE(has());
+  s.wii = true;
+  EXPECT_TRUE(has());
+  s.open_controller = true;
+  s.controller = 2;
+  const auto widgets = VrMenu::Layout(s);
+  const auto menu = std::ranges::find(widgets, MenuWidget::Kind::Menu, &MenuWidget::kind);
+  ASSERT_NE(menu, widgets.end());
+  EXPECT_EQ(menu->options[static_cast<std::size_t>(menu->selected)], "Wii Remote + Nunchuk");
+  EXPECT_EQ(static_cast<int>(VRWiiController::Choice::RemoteNunchuk), 2);
+  EXPECT_EQ(static_cast<int>(VRWiiController::Choice::RemoteSideways),
+            static_cast<int>(CONTROLLERS.size()) - 1);
+}
+
+TEST_F(VRFrameUISettings, ControllerIsKeptPerGame)
+{
+  using namespace GameSettingScope;
+  using VRWiiController::Choice;
+  SetForGame(VRWiiController::VR_WII_CONTROLLER, Choice::RemoteSideways, Store::LocalGame);
+  SetForGame(Config::WIIMOTE_1_SOURCE, WiimoteSource::None, Store::LocalGame);
+  SetForGame(Config::GetInfoForSIDevice(0), SerialInterface::SIDEVICE_NONE, Store::LocalGame);
+  EndGame();
+  EXPECT_EQ(Config::Get(VRWiiController::VR_WII_CONTROLLER), Choice::None);
+  EXPECT_NE(Config::Get(Config::WIIMOTE_1_SOURCE), WiimoteSource::None);
+  SConfig::GetInstance().SetRunningGameMetadata("GTST01");
+  EXPECT_EQ(Config::Get(VRWiiController::VR_WII_CONTROLLER), Choice::RemoteSideways);
+  EXPECT_EQ(Config::Get(Config::WIIMOTE_1_SOURCE), WiimoteSource::None);
+  EXPECT_EQ(Config::Get(Config::GetInfoForSIDevice(0)), SerialInterface::SIDEVICE_NONE);
 }

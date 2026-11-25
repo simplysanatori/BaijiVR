@@ -32,6 +32,7 @@
 #include "Core/NetPlayProto.h"
 #include "Core/State.h"
 #include "Core/System.h"
+#include "Core/VRWiiController.h"
 
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/VR/FrameUI/PadBindings.h"
@@ -106,6 +107,8 @@ struct Bindings
   PadLabels labels;
   PadTable table;
   std::string edit_lock;
+  int controller = -1;
+  bool can_choose = true;
 };
 std::atomic<bool> s_bindings_ready{false};
 std::mutex s_bindings_mutex;
@@ -355,6 +358,7 @@ VrUi::VrUi(OpenXRManager* manager, CreateOverlay create_overlay, u32 max_layers)
   m_toast_canvas.Init(static_cast<int>(TOAST_TEX_WIDTH), static_cast<int>(TOAST_TEX_HEIGHT));
   std::fill(m_toast_canvas.px.begin(), m_toast_canvas.px.end(), 0u);
   m_draw_thread = std::thread(&VrUi::DrawThread, this);
+  Core::QueueHostJob([](Core::System& system) { VRWiiController::OnSessionStarted(system); });
 }
 
 VrUi::~VrUi()
@@ -707,11 +711,23 @@ void VrUi::RequestBindings()
     Bindings bindings;
     std::tie(bindings.kind, bindings.labels) = GetPadBindings(system.IsWii());
     bindings.edit_lock = GetPadEditLock(bindings.kind);
+    bindings.controller = static_cast<int>(VRWiiController::GetCurrent(system));
+    bindings.can_choose = VRWiiController::CanChoose(system);
     bindings.table = GetPadTable(bindings.kind);
     std::lock_guard lock(s_bindings_mutex);
     s_bindings = std::move(bindings);
     s_bindings_ready = true;
   });
+}
+
+void VrUi::ChooseController(int controller)
+{
+  if (controller == m_menu.controller)
+    return;
+  m_menu.controller = controller;
+  Core::QueueHostJob([choice = static_cast<VRWiiController::Choice>(controller)](
+                         Core::System& system) { VRWiiController::Choose(system, choice); });
+  RequestBindings();
 }
 
 void VrUi::OpenEditControls()
@@ -862,13 +878,14 @@ void VrUi::UseGlobalValues()
 
 bool VrUi::HasPopup() const
 {
-  return m_menu.open_setting != SettingId::None || m_menu.open_scope;
+  return m_menu.open_setting != SettingId::None || m_menu.open_scope || m_menu.open_controller;
 }
 
 void VrUi::ClosePopup()
 {
   m_menu.open_setting = SettingId::None;
   m_menu.open_scope = false;
+  m_menu.open_controller = false;
 }
 
 void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float dt)
@@ -892,6 +909,8 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
     m_menu.pad = s_bindings.kind;
     m_menu.pad_labels = s_bindings.labels;
     m_menu.edit_lock = s_bindings.edit_lock;
+    m_menu.controller = s_bindings.controller;
+    m_menu.can_choose_controller = s_bindings.can_choose;
     m_bindings_table = s_bindings.table;
     if (m_menu.page == MenuPage::EditControls && !m_edit.IsListening())
       OpenEditControls();
@@ -1342,6 +1361,9 @@ void VrUi::Activate(const MenuWidget& widget, int option)
     if (option >= 0)
       m_menu.controls_page = option;
     break;
+  case MenuItem::Controller:
+    m_menu.open_controller = true;
+    break;
   case MenuItem::EditControls:
     OpenEditControls();
     break;
@@ -1384,6 +1406,8 @@ void VrUi::Activate(const MenuWidget& widget, int option)
   case MenuItem::PopupOption:
     if (std::exchange(m_menu.open_scope, false))
       UseGlobalValues();
+    else if (std::exchange(m_menu.open_controller, false))
+      ChooseController(widget.index);
     else if (const SettingId id = std::exchange(m_menu.open_setting, SettingId::None);
         id != SettingId::None)
     {
