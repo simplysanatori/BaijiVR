@@ -80,6 +80,16 @@ They are in the **Mods** tab of the VR menu, and on the **Mods** page of a game'
 - **Mods**: Mods and Cheats, and Textures
 - **Settings**: Internal Resolution, Frame Pacing, Autosave, Pointer Beams, Messages and more
 
+## VR and Flat
+
+**Switch to Flat** on the **Main** page of the VR menu shows the game in the window. The **VR** button in the menu bar goes back, and so does holding **Menu** for 3 seconds (**A** is Yes, **B** is No). The next start uses the mode you switched to last.
+
+The game starts again in the other mode and goes on where it was, which takes a few seconds. Memory cards and Wii saves stay as they are.
+
+- Flat is for every game, also one with a **Display** of its own. Back in VR each game has its own again.
+- It does not work in RetroAchievements' Hardcore Mode, during NetPlay or with a recording.
+- If the game cannot go on where it was, its state is kept in `StateSaves` as `<game ID>.mode-switch.sav`: **Emulation** > **Load State** > **Load State from File**.
+
 ## Autosave
 
 It saves every few minutes of play, when the VR menu opens and when you close the game. Load one in the VR menu. It is off by default.

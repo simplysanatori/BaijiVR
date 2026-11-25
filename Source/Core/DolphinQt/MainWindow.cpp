@@ -128,6 +128,7 @@
 #include "DolphinQt/TAS/GCTASInputWindow.h"
 #include "DolphinQt/TAS/WiiTASInputWindow.h"
 #include "DolphinQt/ToolBar.h"
+#include "DolphinQt/VRModeSwitch.h"
 #include "DolphinQt/WiiUpdate.h"
 
 #include "UICommon/DiscordPresence.h"
@@ -245,6 +246,11 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
   ConnectRenderWidget();
   ConnectStack();
   ConnectMenuBar();
+
+  m_vr_mode_switch = new VRModeSwitch(
+      m_system, this, m_menu_bar,
+      {.stop = [this] { StopForModeSwitch(); },
+       .boot = [this](std::unique_ptr<BootParameters> boot) { StartGame(std::move(boot)); }});
 
   QSettings& settings = Settings::GetQSettings();
   restoreState(settings.value(QStringLiteral("mainwindow/state")).toByteArray());
@@ -835,6 +841,7 @@ void MainWindow::ChangeDisc()
     return;
 
   m_system.GetDVDInterface().ChangeDisc(Core::CPUThreadGuard{m_system}, paths);
+  m_vr_mode_switch->AddDiscs(paths);
 }
 
 void MainWindow::EjectDisc()
@@ -935,6 +942,10 @@ void MainWindow::OnStopComplete()
 #endif
 
   SetFullScreenResolution(false);
+
+  // The game starts again in the other mode, unless the player closed Baiji or started another one.
+  if (m_vr_mode_switch->OnStopComplete(m_exit_requested || m_pending_boot != nullptr))
+    return;
 
   if (m_exit_requested || Settings::Instance().IsBatchModeEnabled())
   {
@@ -1132,6 +1143,17 @@ void MainWindow::ForceStop()
   Core::Stop(m_system);
 }
 
+// RequestStop without its question and the Wii's power button: the game goes on in the other mode.
+void MainWindow::StopForModeSwitch()
+{
+  if (!m_render_widget->isFullScreen())
+    m_render_widget_geometry = m_render_widget->saveGeometry();
+  else
+    FullScreen();
+  m_render_widget->SetCursorLocked(false);
+  ForceStop();
+}
+
 void MainWindow::Reset()
 {
   auto& movie = m_system.GetMovie();
@@ -1223,7 +1245,9 @@ void MainWindow::StartGame(const std::vector<std::string>& paths,
 
 void MainWindow::StartGame(std::unique_ptr<BootParameters>&& parameters)
 {
-  if (parameters && std::holds_alternative<BootParameters::Disc>(parameters->parameters))
+  // (The player has seen these as the game was started first.)
+  if (parameters && !m_vr_mode_switch->IsSwitching() &&
+      std::holds_alternative<BootParameters::Disc>(parameters->parameters))
   {
     if (std::get<BootParameters::Disc>(parameters->parameters).volume->IsNKit())
     {
@@ -1273,8 +1297,12 @@ void MainWindow::StartGame(std::unique_ptr<BootParameters>&& parameters)
   ShowRenderWidget();
 
   // Boot up, show an error if it fails to load the game.
-  if (!BootManager::BootCore(m_system, std::move(parameters),
-                             ::GetWindowSystemInfo(m_render_widget->windowHandle())))
+  if (parameters)
+    m_vr_mode_switch->BeforeBoot(*parameters);
+  const bool booted = BootManager::BootCore(m_system, std::move(parameters),
+                                            ::GetWindowSystemInfo(m_render_widget->windowHandle()));
+  m_vr_mode_switch->AfterBoot(booted);
+  if (!booted)
   {
     ModalMessageBox::critical(this, tr("Error"), tr("Failed to init core"), QMessageBox::Ok);
     HideRenderWidget();

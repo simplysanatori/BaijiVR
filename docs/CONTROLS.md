@@ -17,6 +17,8 @@
 | Grip and stick | Screen distance and size | |
 | Grip and D-Pad left or right | Nudge the screen | |
 
+In Flat, **Menu** held for 3 seconds asks **Switch to VR?**: **A** is Yes, **B** is No. The game gets **Menu**, too.
+
 The **Controls** tab of the VR menu shows your controller with the game's buttons. Its **Shortcuts** page has the table above.
 
 ## Face Buttons

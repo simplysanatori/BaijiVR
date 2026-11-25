@@ -52,6 +52,7 @@ class SettingsWindow;
 class SkylanderPortalWindow;
 class ThreadWidget;
 class ToolBar;
+class VRModeSwitch;
 class WatchWidget;
 class WiiTASInputWindow;
 class WiiSpeakWindow;
@@ -110,6 +111,7 @@ private:
   bool RequestStopFromEmulation();
   bool RequestStopInternal(bool from_emulation);
   void ForceStop();
+  void StopForModeSwitch();
   void Reset();
   void FrameAdvance();
   void StateLoad();
@@ -265,6 +267,7 @@ private:
   MappingWindow* m_hotkey_window = nullptr;
   FreeLookWindow* m_freelook_window = nullptr;
 
+  VRModeSwitch* m_vr_mode_switch = nullptr;
   HotkeyScheduler* m_hotkey_scheduler;
   NetPlayDialog* m_netplay_dialog;
   DiscordHandler* m_netplay_discord;

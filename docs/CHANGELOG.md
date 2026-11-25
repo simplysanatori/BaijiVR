@@ -11,6 +11,7 @@ Baiji's own changelog is in [its README](../README.upstream.md).
 - The grips move and resize the screen.
 - Quick Save, Quick Load, save states with pictures, and Autosave.
 - Stop the game, Fast Forward, and Stereoscopic 3D or Immersive, from the controllers.
+- Switch between VR and Flat during a game.
 - Line drawings of your controller with the game's buttons.
 - The Steam Frame controllers' own names and layout.
 

@@ -4,6 +4,7 @@ add_dolphin_test(CoreTimingTest CoreTimingTest.cpp)
 add_dolphin_test(PatchAllowlistTest PatchAllowlistTest.cpp)
 add_dolphin_test(GameModsTest GameModsTest.cpp)
 add_dolphin_test(GameCoversTest GameCoversTest.cpp)
+add_dolphin_test(ModeSwitchTest ModeSwitchTest.cpp)
 
 add_dolphin_test(DSPAcceleratorTest DSP/DSPAcceleratorTest.cpp)
 add_dolphin_test(DSPAssemblyTest

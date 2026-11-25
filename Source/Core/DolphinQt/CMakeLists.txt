@@ -349,6 +349,8 @@ add_executable(dolphin-emu
   NANDRepairDialog.h
   FrameFlatModeInputWarningDialog.cpp
   FrameFlatModeInputWarningDialog.h
+  VRModeSwitch.cpp
+  VRModeSwitch.h
   NKitWarningDialog.cpp
   NKitWarningDialog.h
   QtUtils/AnalyticsPrompt.cpp
