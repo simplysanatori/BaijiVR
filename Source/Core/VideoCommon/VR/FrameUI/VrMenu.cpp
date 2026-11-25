@@ -605,6 +605,7 @@ void AddControls(Builder* builder, const MenuState& state)
   builder->Text("Move Screen", "Grip");
   builder->Text("Screen Distance and Size", "Grip and Stick");
   builder->Text("Nudge Screen", "Grip and D-Pad Left or Right");
+  builder->Text("Screen Curve", "Grip and D-Pad Up or Down");
 }
 
 std::string FormatSize(u64 bytes)

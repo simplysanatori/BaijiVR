@@ -4,6 +4,7 @@
 #include "VideoCommon/VR/FrameUI/MenuSettings.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <iterator>
@@ -75,6 +76,11 @@ std::string FormatDegrees(float value)
 std::string FormatWorldScale(float value)
 {
   return fmt::format("{:.4g}", value);
+}
+
+std::string FormatCurve(float value)
+{
+  return value < 0.5f ? "Off" : fmt::format("{:.0f}\u00b0", value);
 }
 
 std::string FormatHudDepth(float value)
@@ -159,10 +165,16 @@ SettingRow With(SettingRow row, SettingStore store, RowDisplay display = RowDisp
   return row;
 }
 
+constexpr std::array SCREEN_CURVES{0, 15, 30, 45, 60, 75, 90};
+
 std::vector<SettingRow> MakeScreenRows()
 {
   using enum SettingId;
   constexpr MenuSection SECTION = MenuSection::Screen;
+  SettingRow curve = MakeSlider(ScreenCurve, SECTION, "Screen Curve",
+                                "Bends the screen around you.", {}, FormatCurve);
+  for (const int degrees : SCREEN_CURVES)
+    curve.options.push_back({fmt::format("{}", degrees), ToNumber(degrees)});
   return {
       With(MakeChoice(Display, SECTION, RowKind::Segmented, "Display", "How the game is shown.",
                       {{"Stereoscopic 3D", ToNumber(OpenXRPresentationMode::StereoScreen)},
@@ -180,6 +192,7 @@ std::vector<SettingRow> MakeScreenRows()
                        Config::GFX_VR_SCREEN_SIZE_STEP},
                       FormatMeters),
            SettingStore::VRFile),
+      With(std::move(curve), SettingStore::VRFile, RowDisplay::Screen),
       With(MakeChoice(AspectRatio, SECTION, RowKind::Segmented, "Aspect Ratio",
                       "The shape of the picture.",
                       {{"Auto", ToNumber(AspectMode::Auto)},
@@ -241,14 +254,17 @@ std::vector<SettingRow> MakeGraphicsRows()
   using enum SettingId;
   constexpr MenuSection SECTION = MenuSection::Graphics;
   return {
+      MakeHeader(SECTION, "Stereoscopic 3D"),
       With(MakeSlider(ScreenDepth, SECTION, "3D Depth",
                       "How deep the picture is. Lower is easier on the eyes.",
                       {0.0f, 100.0f, 5.0f}, FormatDepth),
            SettingStore::VRFile, RowDisplay::Screen),
-      With(MakeSlider(Convergence, SECTION, "Convergence",
-                      "How far things come out of the screen. Lower is easier on the eyes.",
+      With(MakeSlider(ScreenWorldScale, SECTION, "World Scale",
+                      "Higher makes the world smaller, lower makes it bigger, as Immersive's "
+                      "World Scale.",
                       {0.0f, Config::GFX_STEREO_CONVERGENCE_MAXIMUM, 1.0f}, FormatNumber),
            SettingStore::LocalGame, RowDisplay::Screen),
+      MakeHeader(SECTION, "Picture"),
       With(MakeChoice(InternalResolution, SECTION, RowKind::Dropdown, "Internal Resolution",
                       "How sharp the game is drawn. Higher needs more of the GPU.",
                       {{"Auto", 0.0f}, {"1x", 1.0f}, {"2x", 2.0f}, {"3x", 3.0f}, {"4x", 4.0f}}),
@@ -477,6 +493,7 @@ const std::vector<Binding>& GetBindings()
       BindDisplay(),
       Bind(SettingId::Distance, Config::GFX_VR_SCREEN_DISTANCE),
       Bind(SettingId::Size, Config::GFX_VR_SCREEN_SIZE),
+      Bind(SettingId::ScreenCurve, Config::GFX_VR_SCREEN_CURVE),
       Bind(SettingId::AspectRatio, Config::GFX_ASPECT_RATIO),
       Bind(SettingId::LockScreen, Config::GFX_VR_LOCK_SCREEN),
       Bind(SettingId::VirtualScreen, Config::GFX_VR_VIRTUAL_SCREEN),
@@ -489,7 +506,7 @@ const std::vector<Binding>& GetBindings()
       Bind(SettingId::AutosaveEvery, Config::MAIN_AUTOSAVE_MINUTES),
       Bind(SettingId::AutosaveKeep, Config::MAIN_AUTOSAVE_KEEP),
       Bind(SettingId::ScreenDepth, Config::GFX_VR_SCREEN_DEPTH),
-      Bind(SettingId::Convergence, Config::GFX_STEREO_CONVERGENCE),
+      Bind(SettingId::ScreenWorldScale, Config::GFX_STEREO_CONVERGENCE),
       Bind(SettingId::InternalResolution, Config::GFX_EFB_SCALE),
       Bind(SettingId::DynamicResolution, Config::GFX_VR_DYNAMIC_RESOLUTION),
       Bind(SettingId::TextureFiltering, Config::GFX_ENHANCE_FORCE_TEXTURE_FILTERING),
@@ -570,6 +587,28 @@ void SettingState::Set(SettingId id, float value)
     values.global[Index(id)] = value;
   if (!global || !values.game_value[Index(id)])
     values.game[Index(id)] = value;
+}
+
+float StepScreenCurve(float degrees, int steps)
+{
+  // From between two of them, the next one that way.
+  float stepped = degrees;
+  for (; steps > 0; --steps)
+  {
+    const auto it = std::ranges::find_if(SCREEN_CURVES, [&](int c) { return ToNumber(c) > stepped; });
+    stepped = it != SCREEN_CURVES.end() ? ToNumber(*it) : ToNumber(SCREEN_CURVES.back());
+  }
+  for (; steps < 0; ++steps)
+  {
+    float next = ToNumber(SCREEN_CURVES.front());
+    for (const int c : SCREEN_CURVES)
+    {
+      if (ToNumber(c) < stepped)
+        next = ToNumber(c);
+    }
+    stepped = next;
+  }
+  return stepped;
 }
 
 Lock GetLock(const SettingRow& row, const SettingState& state)

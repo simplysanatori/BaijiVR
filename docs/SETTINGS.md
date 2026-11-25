@@ -14,7 +14,7 @@ These are the **VR** settings. Everything else is Dolphin's own. The VR menu use
 
 - **Distance** and **Size**: where the screen is and how tall it is.
 - **3D Depth**: how deep the picture is. Natural follows the distance between your eyes and the screen's size.
-- **Convergence**: how far things come out of the screen. Lower is easier on the eyes.
+- **World Scale**: higher makes the world smaller, as Immersive's does.
 - **Lock Screen**: keeps the grips from moving the screen.
 - **2D Parts on a Screen** and **HUD Depth**: for Immersive.
 

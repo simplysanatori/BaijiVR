@@ -152,6 +152,7 @@ private:
 
   // ---- Layers ----
   void DrawToastRow(int row, const std::string& text);
+  void DrawGrabHint();
   void AddQuad(FrameXr::LayerSlots::Group group, const Overlay& overlay,
                const FrameXr::Input::Posef& pose, float width, float height, XrRect2Di rect);
 
@@ -179,6 +180,8 @@ private:
   int m_grab_hand = -1;
   std::array<bool, 2> m_grip_down{};
   int m_nudge = 0;
+  int m_curve_step = 0;
+  float m_curve = 0.0f;
   s64 m_nudge_at_ns = 0;
   ScreenGrab m_grab;
 

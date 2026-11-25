@@ -26,6 +26,7 @@ enum class SettingId : int
   Display,
   Distance,
   Size,
+  ScreenCurve,
   AspectRatio,
   LockScreen,
   VirtualScreen,
@@ -42,7 +43,7 @@ enum class SettingId : int
 
   // Graphics
   ScreenDepth,
-  Convergence,
+  ScreenWorldScale,
   InternalResolution,
   DynamicResolution,
   TextureFiltering,
@@ -207,6 +208,9 @@ std::string DescribeOwnValues(int count);
 
 Lock GetLock(const SettingRow& row, const SettingState& state);
 std::string ExplainLock(Lock lock, const SettingRow& row);
+
+// The screen's curve with the grip and the D-Pad: one step more or less.
+float StepScreenCurve(float degrees, int steps);
 
 // The options there are to choose from.
 std::vector<SettingOption> GetOptions(const SettingRow& row, const SettingState& state);

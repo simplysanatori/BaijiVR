@@ -81,8 +81,11 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
         tr("How deep the picture is. Natural follows the distance between your eyes and the "
            "screen's size. Lower is easier on the eyes.")}},
       {Config::GFX_STEREO_CONVERGENCE.GetLocation(),
-       {tr("Convergence"),
-        tr("How far things come out of the screen. Lower is easier on the eyes.")}},
+       {tr("World Scale"),
+        tr("Higher makes the world smaller, lower makes it bigger, as Immersive's "
+           "World Scale.")}},
+      {Config::GFX_VR_SCREEN_CURVE.GetLocation(),
+       {tr("Screen Curve"), tr("Bends the screen around you.")}},
       {Config::GFX_VR_LOCK_SCREEN.GetLocation(),
        {tr("Lock Screen"), tr("Keeps the grips from moving the screen.")}},
 
@@ -474,6 +477,14 @@ QGridLayout* VRSettingsPage::AddScreen()
             Config::GFX_VR_SCREEN_DISTANCE_MAX, Config::GFX_VR_SCREEN_DISTANCE_STEP, FormatMeters);
   AddSlider(layout, HEADSET, Config::GFX_VR_SCREEN_SIZE, Config::GFX_VR_SCREEN_SIZE_MIN,
             Config::GFX_VR_SCREEN_SIZE_MAX, Config::GFX_VR_SCREEN_SIZE_STEP, FormatMeters);
+  AddChoice<int>(layout, Screen3D, Config::GFX_VR_SCREEN_CURVE,
+                 {{tr("Off"), 0},
+                  {tr("15°"), 15},
+                  {tr("30°"), 30},
+                  {tr("45°"), 45},
+                  {tr("60°"), 60},
+                  {tr("75°"), 75},
+                  {tr("90°"), 90}});
   AddSlider(layout, Immersive, Config::GFX_VR_HUD_THICKNESS, Config::GFX_VR_HUD_THICKNESS_MIN,
             Config::GFX_VR_HUD_THICKNESS_MAX, Config::GFX_VR_HUD_THICKNESS_STEP, [](float value) {
               return value <= 0.001f ? tr("Off") : QString::asprintf("%.2f m", value);

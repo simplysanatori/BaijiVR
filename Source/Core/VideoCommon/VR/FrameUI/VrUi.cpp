@@ -84,7 +84,7 @@ constexpr s64 AUTOSAVE_PICTURE_NS = 250'000'000;
 
 constexpr float NUDGE_DEG = 0.5f;
 constexpr s64 NUDGE_FIRST_NS = 400'000'000;
-constexpr s64 NUDGE_REPEAT_NS = 80'000'000;
+constexpr s64 NUDGE_REPEAT_NS = 100'000'000;
 
 // Of what Azahar calls turbo speed.
 constexpr float FAST_FORWARD_SPEED = 2.0f;
@@ -599,6 +599,8 @@ void VrUi::UpdateGrab(const Frame& frame, const Controllers& controllers, float 
       {
         m_grab_hand = hand;
         m_nudge = 0;
+        m_curve_step = 0;
+        m_curve = static_cast<float>(g_ActiveConfig.vr_screen_curve);
         m_grab.Begin(m_manager->GetScreenAnchor(), m_manager->GetScreenPlacement(), ray);
         m_manager->PulseHaptics(static_cast<std::size_t>(hand));
       }
@@ -628,6 +630,23 @@ void VrUi::UpdateGrab(const Frame& frame, const Controllers& controllers, float 
     m_nudge = nudge;
   }
   m_manager->SetScreenPlacement(placement);
+
+  // Up or down bends it, a step a press.
+  const int step = controllers[0].dpad_up ? 1 : controllers[0].dpad_down ? -1 : 0;
+  if (step != std::exchange(m_curve_step, step) && step)
+  {
+    const float before = std::exchange(m_curve, StepScreenCurve(m_curve, step));
+    // At the ends, too, so that the press shows.
+    const SettingRow& row = GetSettingRow(SettingId::ScreenCurve);
+    ShowToast(fmt::format("{}: {}", row.label, FormatValue(row, m_curve)), ToastFit::kShortNs);
+    if (m_curve != before)
+    {
+      QueueConfig([curve = static_cast<int>(m_curve)] {
+        GameSettingScope::SetWhereItIs(Config::GFX_VR_SCREEN_CURVE, curve,
+                                       GameSettingScope::Store::VRFile);
+      });
+    }
+  }
 }
 
 // ---- The menu -----------------------------------------------------------------------------------
@@ -1506,6 +1525,85 @@ void VrUi::DrawToastRow(int row, const std::string& text)
   m_toasts_dirty = true;
 }
 
+// Azahar for Frame's hint, with the arrows drawn: the font has none.
+void VrUi::DrawGrabHint()
+{
+  constexpr float ARROW_W = 26.0f;
+  enum class Arrow
+  {
+    None,
+    UpDown,
+    LeftRight,
+  };
+  struct Piece
+  {
+    const char* text;
+    Arrow arrow = Arrow::None;
+  };
+  static constexpr std::array FIRST{Piece{"D-Pad "}, Piece{"", Arrow::UpDown}, Piece{" Curve   "},
+                                    Piece{"", Arrow::LeftRight}, Piece{" Nudge"}};
+  static constexpr const char* SECOND = "Stick: Size, Distance";
+
+  const auto width_of = [](const Piece& piece) {
+    return piece.arrow != Arrow::None ? ARROW_W : ui::TextWidth(ui::kFontSmall, piece.text);
+  };
+  float width = 0.0f;
+  for (const Piece& piece : FIRST)
+    width += width_of(piece);
+
+  // The box of two lines.
+  const float widest = std::max(width, ui::TextWidth(ui::kFontSmall, SECOND));
+  ToastFit::Box box;
+  box.two_lines = true;
+  box.box_px = std::max(ToastFit::kMinBoxPx,
+                        static_cast<int>(std::ceil(widest + 2.0f * ToastFit::kPadPx)));
+  box.width_m = static_cast<float>(box.box_px) * ToastFit::kMetresPerPx;
+  box.height_m = static_cast<float>(ToastFit::kRowPx) * ToastFit::kMetresPerPx;
+
+  constexpr std::size_t first = std::size_t{HINT_ROW} * ToastFit::kRowPx * TOAST_TEX_WIDTH;
+  std::fill_n(m_toast_canvas.px.begin() + static_cast<std::ptrdiff_t>(first),
+              std::size_t{ToastFit::kRowPx} * TOAST_TEX_WIDTH, 0u);
+  const float top = static_cast<float>(HINT_ROW * ToastFit::kRowPx);
+  const float right = static_cast<float>(box.box_px);
+  m_toast_canvas.RoundRect(2, top + 2, right - 2, top + ToastFit::kRowPx - 2, 36,
+                           ui::rgb(28, 28, 34, 0.92f));
+  const ui::Color white = ui::rgb(240, 240, 245);
+  const float baseline = top + 40.0f;
+  float x = right * 0.5f - width * 0.5f;
+  for (const Piece& piece : FIRST)
+  {
+    if (piece.arrow == Arrow::None)
+    {
+      m_toast_canvas.Text(x, baseline, ui::kFontSmall, piece.text, white);
+    }
+    else
+    {
+      // A stem and a head at each end.
+      constexpr float HALF = 10.0f, STEM = 3.0f, HEAD = 6.0f;
+      const bool up = piece.arrow == Arrow::UpDown;
+      const float cx = x + ARROW_W * 0.5f;
+      const float cy = baseline - 10.0f;
+      const auto line = [&](float along0, float across0, float along1, float across1) {
+        if (up)
+          m_toast_canvas.Line(cx + across0, cy + along0, cx + across1, cy + along1, STEM, white);
+        else
+          m_toast_canvas.Line(cx + along0, cy + across0, cx + along1, cy + across1, STEM, white);
+      };
+      line(-HALF, 0.0f, HALF, 0.0f);
+      for (const float end : {-HALF, HALF})
+      {
+        const float back = end < 0.0f ? end + HEAD : end - HEAD;
+        line(end, 0.0f, back, -HEAD);
+        line(end, 0.0f, back, HEAD);
+      }
+    }
+    x += width_of(piece);
+  }
+  m_toast_canvas.Text(right * 0.5f, top + 78.0f, ui::kFontSmall, SECOND, white, 1);
+  m_toast_boxes[HINT_ROW] = box;
+  m_toasts_dirty = true;
+}
+
 void VrUi::ShowToast(std::string text, s64 duration_ns)
 {
   if (!m_frame.head_valid || text.empty())
@@ -1538,8 +1636,10 @@ void VrUi::UpdateToasts(const Frame& frame)
   if (m_hint != m_hint_drawn && m_hint != Hint::None)
   {
     m_hint_drawn = m_hint;
-    DrawToastRow(HINT_ROW,
-                 m_hint == Hint::Grab ? "Stick: Distance, Size   D-Pad: Move" : "Stopping...");
+    if (m_hint == Hint::Grab)
+      DrawGrabHint();
+    else
+      DrawToastRow(HINT_ROW, "Stopping...");
   }
 }
 

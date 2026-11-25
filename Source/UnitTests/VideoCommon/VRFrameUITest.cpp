@@ -1254,3 +1254,32 @@ TEST_F(VRFrameUISettings, ControllerIsKeptPerGame)
   EXPECT_EQ(Config::Get(Config::WIIMOTE_1_SOURCE), WiimoteSource::None);
   EXPECT_EQ(Config::Get(Config::GetInfoForSIDevice(0)), SerialInterface::SIDEVICE_NONE);
 }
+
+TEST(VRFrameUI, ScreenCurveSteps)
+{
+  EXPECT_EQ(StepScreenCurve(0.0f, 1), 15.0f);
+  EXPECT_EQ(StepScreenCurve(15.0f, -1), 0.0f);
+  EXPECT_EQ(StepScreenCurve(0.0f, -1), 0.0f);
+  EXPECT_EQ(StepScreenCurve(90.0f, 1), 90.0f);
+  EXPECT_EQ(StepScreenCurve(20.0f, 1), 30.0f);
+  EXPECT_EQ(StepScreenCurve(20.0f, -1), 15.0f);
+  const SettingRow& row = GetSettingRow(SettingId::ScreenCurve);
+  EXPECT_EQ(FormatValue(row, 45.0f), "45\u00b0");
+  EXPECT_EQ(FormatValue(row, 0.0f), "Off");
+  EXPECT_EQ(SliderValue(row, 1.0f), 90.0f);
+}
+
+TEST(VRFrameUI, OneWorldScaleForEachDisplay)
+{
+  SettingState s;
+  const SettingRow& screen = GetSettingRow(SettingId::ScreenWorldScale);
+  const SettingRow& immersive = GetSettingRow(SettingId::WorldScale);
+  EXPECT_EQ(screen.label, immersive.label);
+  EXPECT_NE(screen.section, immersive.section);
+  for (const bool in : {false, true})
+  {
+    s.immersive = in;
+    EXPECT_EQ(GetLock(screen, s) == Lock::None, !in);
+    EXPECT_EQ(GetLock(immersive, s) == Lock::None, in);
+  }
+}
