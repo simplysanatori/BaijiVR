@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The Qt window with the controller in Steam's Game Mode, while no game runs: the left stick or the
-// D-pad moves the game list, A starts the game, B is Escape, and the right stick scrolls. It reads
-// SDL's gamepads, which is what Steam Input gives the app in gamepad mode, and sends keys to Baiji's
-// own widgets. It never moves or clicks the mouse, and it does nothing on a desktop.
+// D-pad moves the game list, A starts the game, B is Escape, and the right stick scrolls. In menus
+// and dialogs the stick and the D-pad are the arrow keys, A presses what has the focus, and the
+// bumpers move the focus. It reads SDL's gamepads, which is what Steam Input gives the app in gamepad
+// mode, and sends keys to Baiji's own widgets. It never moves or clicks the mouse, and it does
+// nothing on a desktop.
 
 #pragma once
 
@@ -26,6 +28,7 @@ class Device;
 
 class GameList;
 class QAbstractScrollArea;
+class QEvent;
 class QTimer;
 class QWidget;
 
@@ -47,6 +50,8 @@ private:
     bool dpad_down = false;
     bool dpad_left = false;
     bool dpad_right = false;
+    bool left_bumper = false;
+    bool right_bumper = false;
     float left_x = 0;
     float left_y = 0;
     float right_y = 0;
@@ -80,6 +85,11 @@ private:
   void StepList(int key);
   void StartGame();
   void Escape();
+  // Menus and dialogs: a key to what has the focus.
+  void SendToWindow(int key);
+  // A: Space for what Space presses or opens, Return for the rest. (Return on a check box would
+  // press the dialog's default button, and eventFilter keeps the rest of them from it.)
+  void PressInWindow();
   void Scroll(float stick, float seconds);
   QAbstractScrollArea* GetScrollArea(Target target) const;
 
@@ -95,6 +105,8 @@ private:
   Common::ListNav m_horizontal;
   Common::ButtonPress m_a;
   Common::ButtonPress m_b;
+  Common::ButtonPress m_left_bumper;
+  Common::ButtonPress m_right_bumper;
 
   Pad m_pad;
   Target m_target = Target::None;
@@ -102,6 +114,7 @@ private:
   s64 m_last_tick_ns = 0;
   s64 m_refocus_ns = 0;
   s64 m_other_input_ns;  // a click, wheel or key that came from the window system
+  const QEvent* m_return = nullptr;  // the Return being sent
   float m_scroll_rest = 0;
   std::string m_device;
   std::map<std::string, Pad> m_seen;  // by device, as it was when it last moved

@@ -12,14 +12,20 @@
 #include <string>
 #include <string_view>
 
+#include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QAbstractScrollArea>
 #include <QApplication>
+#include <QComboBox>
 #include <QDialog>
 #include <QDockWidget>
 #include <QEvent>
+#include <QFileDialog>
+#include <QGroupBox>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QMessageBox>
 #include <QScrollBar>
 #include <QTimer>
 
@@ -119,8 +125,15 @@ void GamepadNavigation::SetRunning(bool running)
     m_timer->stop();
 }
 
-bool GamepadNavigation::eventFilter(QObject*, QEvent* event)
+bool GamepadNavigation::eventFilter(QObject* object, QEvent* event)
 {
+  // A Return that the widget has no use for goes on to the dialog, whose default button may be Close:
+  // only a dialog that asks one thing gets it.
+  if (event == m_return && qobject_cast<QDialog*>(object) && !qobject_cast<QMessageBox*>(object) &&
+      !qobject_cast<QInputDialog*>(object) && !qobject_cast<QFileDialog*>(object))
+  {
+    return true;
+  }
   switch (event->type())
   {
   case QEvent::MouseButtonPress:
@@ -143,6 +156,7 @@ bool GamepadNavigation::Pad::Moved(const Pad& from) const
   const auto differ = [](float x, float y) { return std::abs(x - y) > 0.1f; };
   return a != from.a || b != from.b || dpad_up != from.dpad_up || dpad_down != from.dpad_down ||
          dpad_left != from.dpad_left || dpad_right != from.dpad_right ||
+         left_bumper != from.left_bumper || right_bumper != from.right_bumper ||
          differ(left_x, from.left_x) || differ(left_y, from.left_y) ||
          differ(right_y, from.right_y);
 }
@@ -156,6 +170,8 @@ GamepadNavigation::Pad GamepadNavigation::ReadDevice(const ciface::Core::Device&
   pad.dpad_down = State(device, "Pad S") > 0.5f;
   pad.dpad_left = State(device, "Pad W") > 0.5f;
   pad.dpad_right = State(device, "Pad E") > 0.5f;
+  pad.left_bumper = State(device, "Shoulder L") > 0.5f;
+  pad.right_bumper = State(device, "Shoulder R") > 0.5f;
   pad.left_x = Axis(device, "Left X+", "Left X-");
   pad.left_y = Axis(device, "Left Y+", "Left Y-");
   pad.right_y = Axis(device, "Right Y+", "Right Y-");
@@ -294,9 +310,10 @@ void GamepadNavigation::Tick()
   m_window = window;
 
   const bool list = same && target == Target::List;
+  const bool in_window = same && target == Target::Window;
   const bool other = now - m_other_input_ns < OTHER_INPUT_NS;
 
-  const bool steps = list && !other;
+  const bool steps = (list || in_window) && !other;
   const int vertical = m_vertical
                            .Update(steps, pad.dpad_up, pad.dpad_down,
                                    Common::MainAxis(pad.left_y, pad.left_x), false, now)
@@ -305,9 +322,13 @@ void GamepadNavigation::Tick()
                              .Update(steps, pad.dpad_left, pad.dpad_right,
                                      -Common::MainAxis(pad.left_x, pad.left_y), false, now)
                              .step;
-  const bool a = m_a.Update(list, pad.a, m_other_input_ns, now);
+  const bool a = m_a.Update(list || in_window, pad.a, m_other_input_ns, now);
   const bool b =
       m_b.Update(same && target != Target::None, pad.b, m_other_input_ns, now);
+  const bool left_bumper =
+      m_left_bumper.Update(in_window, pad.left_bumper, m_other_input_ns, now);
+  const bool right_bumper =
+      m_right_bumper.Update(in_window, pad.right_bumper, m_other_input_ns, now);
 
   if (list)
   {
@@ -317,6 +338,17 @@ void GamepadNavigation::Tick()
       StepList(horizontal < 0 ? Qt::Key_Left : Qt::Key_Right);
     else if (a)
       StartGame();
+  }
+  else if (in_window)
+  {
+    if (vertical != 0)
+      SendToWindow(vertical < 0 ? Qt::Key_Up : Qt::Key_Down);
+    else if (horizontal != 0)
+      SendToWindow(horizontal < 0 ? Qt::Key_Left : Qt::Key_Right);
+    else if (left_bumper || right_bumper)
+      SendToWindow(left_bumper ? Qt::Key_Backtab : Qt::Key_Tab);
+    else if (a)
+      PressInWindow();
   }
   if (b)
     Escape();
@@ -365,6 +397,41 @@ void GamepadNavigation::Escape()
   // Escape closes menus and dialogs. Game Mode gives the other windows no close button.
   if (window != m_main && window->windowType() != Qt::Popup && !qobject_cast<QDialog*>(window))
     QMetaObject::invokeMethod(window, &QWidget::close, Qt::QueuedConnection);
+}
+
+void GamepadNavigation::SendToWindow(int key)
+{
+  QWidget* const window = GetWindow();
+  if (!window)
+    return;
+  QWidget* const focus = window->focusWidget();
+  // Nothing has the focus yet: the first widget gets it.
+  if (!focus && window->windowType() != Qt::Popup)
+    key = key == Qt::Key_Up || key == Qt::Key_Backtab ? Qt::Key_Backtab : Qt::Key_Tab;
+  SendKey(focus ? focus : window, key);
+}
+
+void GamepadNavigation::PressInWindow()
+{
+  QWidget* const window = GetWindow();
+  if (!window)
+    return;
+  QWidget* const focus = window->focusWidget();
+  const auto* const combo = qobject_cast<QComboBox*>(focus);
+  const auto* const group = qobject_cast<QGroupBox*>(focus);
+  if (qobject_cast<QAbstractButton*>(focus) || (combo && !combo->isEditable()) ||
+      (group && group->isCheckable()))
+  {
+    SendKey(focus, Qt::Key_Space, QStringLiteral(" "));
+  }
+  else if (focus || window->windowType() == Qt::Popup)
+  {
+    SendKey(focus ? focus : window, Qt::Key_Return, QStringLiteral("\r"));
+  }
+  else
+  {
+    SendToWindow(Qt::Key_Tab);
+  }
 }
 
 QAbstractScrollArea* GamepadNavigation::GetScrollArea(Target target) const
@@ -424,13 +491,17 @@ void GamepadNavigation::SendKey(QWidget* widget, int key, const QString& text)
                QKeySequence(key).toString().toStdString(), widget->metaObject()->className());
   QMetaObject::invokeMethod(
       this,
-      [target = QPointer<QWidget>(widget), key, text] {
+      [this, target = QPointer<QWidget>(widget), key, text] {
         for (const QEvent::Type type : {QEvent::KeyPress, QEvent::KeyRelease})
         {
           if (!target)
             return;
           QKeyEvent event(type, key, Qt::NoModifier, text);
+          // What the key opens may be modal, and then more keys are sent before this returns.
+          const QEvent* const outer = m_return;
+          m_return = key == Qt::Key_Return ? &event : nullptr;
           QCoreApplication::sendEvent(target, &event);
+          m_return = outer;
         }
       },
       Qt::QueuedConnection);
