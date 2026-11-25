@@ -3,6 +3,7 @@
 
 #include "DolphinQt/GameList/GridProxyModel.h"
 
+#include <QGuiApplication>
 #include <QImage>
 #include <QPainter>
 #include <QPixmap>
@@ -35,7 +36,9 @@ QVariant GridProxyModel::data(const QModelIndex& i, int role) const
     const auto& buffer = model->GetGameFile(source_index.row())->GetCoverImage().buffer;
 
     QSize size = Config::Get(Config::MAIN_USE_GAME_COVERS) ? GRID_COVER_SIZE : GRID_BANNER_SIZE;
-    QPixmap pixmap(size * model->GetScale() * QPixmap().devicePixelRatio());
+    // In the screen's own pixels: GridDelegate draws it at the size of the tile.
+    const qreal ratio = qGuiApp->devicePixelRatio();
+    QPixmap pixmap(size * model->GetScale() * ratio);
 
     if (buffer.empty() || !Config::Get(Config::MAIN_USE_GAME_COVERS))
     {
@@ -61,8 +64,8 @@ QVariant GridProxyModel::data(const QModelIndex& i, int role) const
       pixmap = QPixmap::fromImage(QImage::fromData(
           reinterpret_cast<const unsigned char*>(&buffer[0]), static_cast<int>(buffer.size())));
 
-      return pixmap.scaled(GRID_COVER_SIZE * model->GetScale() * pixmap.devicePixelRatio(),
-                           Qt::KeepAspectRatio, Qt::SmoothTransformation);
+      return pixmap.scaled(GRID_COVER_SIZE * model->GetScale() * ratio, Qt::KeepAspectRatio,
+                           Qt::SmoothTransformation);
     }
   }
   return QVariant();

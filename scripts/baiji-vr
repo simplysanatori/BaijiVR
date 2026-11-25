@@ -9,7 +9,8 @@ export LD_LIBRARY_PATH="$BAIJI_ROOT/lib/baiji"
 export QT_PLUGIN_PATH="$BAIJI_ROOT/lib/baiji/plugins"
 export QT_QPA_PLATFORM_PLUGIN_PATH="$BAIJI_ROOT/lib/baiji/plugins/platforms"
 export QT_QPA_PLATFORM=xcb
-# QT_SCALE_FACTOR (for example 1.25) scales every Qt window, if the text is too small on the theater screen.
+# Window Scale (VR settings) sizes the Qt windows in Game Mode. A QT_SCALE_FACTOR set here (for example
+# export QT_SCALE_FACTOR=1.25) is used instead of it.
 unset WAYLAND_DISPLAY
 
 for auth in /run/user/1000/nested_plasma/xauth_*; do

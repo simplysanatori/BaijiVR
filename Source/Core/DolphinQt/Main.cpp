@@ -13,14 +13,22 @@
 #include <cstdlib>
 #endif
 
+#include <algorithm>
+#include <string>
+#include <string_view>
+
 #include <OptionParser.h>
 #include <QAbstractEventDispatcher>
 #include <QApplication>
 #include <QObject>
 #include <QPushButton>
+#include <QScreen>
 #include <QWidget>
 
 #include "Common/Config/Config.h"
+#include "Common/FileUtil.h"
+#include "Common/IniFile.h"
+#include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
 #include "Common/ScopeGuard.h"
 #include "Common/StringUtil.h"
@@ -131,6 +139,65 @@ static bool QtMsgAlertHandler(const char* caption, const char* text, bool yes_no
   return false;
 }
 
+#ifdef __linux__
+// The last -u or --user. The real parser runs only once QApplication has taken out its own arguments.
+static std::string FindUserArgument(int argc, char* argv[])
+{
+  std::string user;
+  for (int i = 1; i < argc; ++i)
+  {
+    const std::string_view arg = argv[i];
+    if (arg == "--")
+      break;
+    if (arg == "-u" || arg == "--user")
+    {
+      if (i + 1 < argc)
+        user = argv[++i];
+    }
+    else if (arg.starts_with("--user="))
+      user = arg.substr(7);
+    else if (arg.starts_with("-u"))
+      user = arg.substr(2);
+  }
+  return user;
+}
+
+// Window Scale, for Game Mode, where the main window is the whole panel and its text as small as the
+// panel is large. Qt reads its scale factor while QApplication is made, before the configuration is
+// loaded, so the one setting is read here. A QT_SCALE_FACTOR from outside wins.
+static void ApplyWindowScale(int argc, char* argv[])
+{
+  if (!Host::IsGameMode() || getenv("QT_SCALE_FACTOR") != nullptr)
+    return;
+
+  UICommon::SetUserDirectory(FindUserArgument(argc, argv));
+  Common::IniFile ini;
+  ini.Load(File::GetUserPath(F_DOLPHINCONFIG_IDX));
+  const auto& setting = Config::MAIN_INTERFACE_WINDOW_SCALE;
+  const Config::Location& location = setting.GetLocation();
+  int percent = setting.GetDefaultValue();
+  ini.GetOrCreateSection(location.section)->Get(location.key, &percent, percent);
+  percent = std::clamp(percent, 100, 200);
+  if (percent != 100)
+    setenv("QT_SCALE_FACTOR", std::to_string(percent / 100.0).c_str(), true);
+}
+
+static void LogWindowScale(bool scale_from_outside)
+{
+  if (!Host::IsGameMode())
+    return;
+  const QScreen* const screen = QGuiApplication::primaryScreen();
+  if (!screen)
+    return;
+  const qreal ratio = screen->devicePixelRatio();
+  const QSize size = screen->size();
+  NOTICE_LOG_FMT(CORE, "Game Mode screen {}x{}, windows scaled {}% ({}): {}x{}",
+                 qRound(size.width() * ratio), qRound(size.height() * ratio), qRound(ratio * 100),
+                 scale_from_outside ? "QT_SCALE_FACTOR" : "Window Scale", size.width(),
+                 size.height());
+}
+#endif
+
 #ifdef _WIN32
 #define main app_main
 #endif
@@ -175,6 +242,9 @@ int main(int argc, char* argv[])
   const bool replace_qt_platform = current_qt_platform != nullptr &&
                                    Common::CaseInsensitiveContains(current_qt_platform, "wayland");
   setenv("QT_QPA_PLATFORM", "xcb", replace_qt_platform);
+
+  const bool scale_from_outside = getenv("QT_SCALE_FACTOR") != nullptr;
+  ApplyWindowScale(argc, argv);
 #endif
 
   QCoreApplication::setOrganizationName(QStringLiteral("BaijiSteamVR"));
@@ -197,6 +267,9 @@ int main(int argc, char* argv[])
   UICommon::SetUserDirectory(static_cast<const char*>(options.get("user")));
   UICommon::CreateDirectories();
   UICommon::Init();
+#ifdef __linux__
+  LogWindowScale(scale_from_outside);
+#endif
   Resources::Init();
   Settings::Instance().SetBatchModeEnabled(options.is_set("batch"));
 

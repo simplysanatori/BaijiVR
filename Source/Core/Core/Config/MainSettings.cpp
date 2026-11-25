@@ -434,6 +434,9 @@ const Info<ShowCursor> MAIN_SHOW_CURSOR{{System::Main, "Interface", "CursorVisib
                                         ShowCursor::OnMovement};
 const Info<bool> MAIN_LOCK_CURSOR{{System::Main, "Interface", "LockCursor"}, false};
 const Info<std::string> MAIN_INTERFACE_LANGUAGE{{System::Main, "Interface", "LanguageCode"}, ""};
+// Window Scale: how large the Qt windows are in Game Mode, in percent (100, 150 or 200). Read once,
+// before Qt starts (DolphinQt/Main.cpp).
+const Info<int> MAIN_INTERFACE_WINDOW_SCALE{{System::Main, "Interface", "WindowScale"}, 150};
 const Info<bool> MAIN_SHOW_ACTIVE_TITLE{{System::Main, "Interface", "ShowActiveTitle"}, true};
 const Info<bool> MAIN_USE_BUILT_IN_TITLE_DATABASE{
     {System::Main, "Interface", "UseBuiltinTitleDatabase"}, true};
