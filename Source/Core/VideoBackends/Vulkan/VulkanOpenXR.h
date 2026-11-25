@@ -8,6 +8,7 @@
 #include <atomic>
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -31,6 +32,7 @@ namespace Vulkan
 class VKTexture;
 class VKFramebuffer;
 class VulkanOpenXRConfirmationOverlay;
+class VulkanGpuTimer;
 
 // Holds the swapchain images for one eye.
 // The VkImage objects are owned by the OpenXR runtime; VKTexture wraps them
@@ -193,6 +195,10 @@ private:
       const std::vector<XrSwapchainImageFoveationVulkanFB>& fdm_images,
       std::vector<VkImageView>* out_views);
 
+  // Immersive's GPU time, when anything wants it: what to do right after the queue submit of a frame's
+  // eye image (the first one starts the time, the last one's end ends it). Empty otherwise.
+  std::function<void(VkResult)> TimeGpuFrame(bool first, bool last);
+
   void DestroySwapchains();
   void FinalizePendingXRFrame(PendingXRFrame frame, VkResult submit_result);
   void FinalizeStereoFlatFrameAfterGPU(VkFence fence, bool have_pair, VkResult submit_result);
@@ -200,6 +206,10 @@ private:
   std::array<XRVkEyeSwapchain, 2> m_eye_swapchains{};
   XRVkLayeredSwapchain m_layered_swapchain{};
   std::unique_ptr<VulkanOpenXRConfirmationOverlay> m_stop_confirmation_overlay;
+
+  // Made when it is first wanted. The video thread's, as the time of the frame's first eye submit (0: none).
+  std::unique_ptr<VulkanGpuTimer> m_gpu_timer;
+  u64 m_eye_submit_us = 0;
 
   // Image index selected by xrAcquireSwapchainImage for the current frame.
   std::array<uint32_t, 2> m_acquired_image_index{0, 0};

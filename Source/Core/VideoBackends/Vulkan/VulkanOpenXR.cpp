@@ -12,10 +12,12 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cfloat>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -25,9 +27,11 @@
 
 #include "Common/Assert.h"
 #include "Common/CommonPaths.h"
+#include "Common/Event.h"
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/ScopeGuard.h"
+#include "Common/Thread.h"
 #include "Common/Timer.h"
 #include "Common/VR/OpenXRInputState.h"
 
@@ -120,6 +124,112 @@ static void AppendOptionalOpenXRExtensions(std::vector<const char*>* extensions)
   }
 }
 }  // namespace
+
+// Immersive submits its eye images without waiting for them. This says when the GPU is done: a batch with
+// nothing in it but a fence goes into the queue after them (a fence of vkQueueSubmit signals once all the
+// work before it in the queue has completed), and a thread of its own waits for that with no lock held.
+class VulkanGpuTimer
+{
+public:
+  VulkanGpuTimer()
+  {
+    const VkFenceCreateInfo info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    const VkResult res =
+        vkCreateFence(g_vulkan_context->GetDevice(), &info, nullptr, &m_fence);
+    if (res != VK_SUCCESS)
+    {
+      LOG_VULKAN_ERROR(res, "vkCreateFence failed (GPU time): ");
+      m_fence = VK_NULL_HANDLE;
+      return;
+    }
+    m_thread = std::thread(&VulkanGpuTimer::Run, this);
+  }
+
+  // After the GPU is idle (the fence may have been left in the queue).
+  ~VulkanGpuTimer()
+  {
+    Stop();
+    if (m_fence != VK_NULL_HANDLE)
+      vkDestroyFence(g_vulkan_context->GetDevice(), m_fence, nullptr);
+  }
+
+  // Video thread, right after the submit of the frame's last eye image.
+  void EndFrame(u64 submit_us)
+  {
+    if (!m_thread.joinable())
+      return;
+    if (m_busy.load(std::memory_order_acquire))
+    {
+      VR::Perf::CountSkippedPair();
+      return;
+    }
+
+    VkResult res;
+    {
+      auto queue_lock = g_command_buffer_mgr->AcquireQueueLock();
+      res = vkQueueSubmit(g_vulkan_context->GetGraphicsQueue(), 0, nullptr, m_fence);
+    }
+    if (res != VK_SUCCESS)
+    {
+      // A lost device is found by the next submit of the game's own work.
+      LOG_VULKAN_ERROR(res, "vkQueueSubmit failed (GPU time): ");
+      return;
+    }
+    m_submit_us = submit_us;
+    m_busy.store(true, std::memory_order_release);
+    m_wake.Set();
+  }
+
+  void Stop()
+  {
+    if (!m_thread.joinable())
+      return;
+    m_stop.store(true, std::memory_order_release);
+    m_wake.Set();
+    m_thread.join();
+  }
+
+private:
+  static constexpr u64 STOP_POLL_NS = 100'000'000;
+
+  void Run()
+  {
+    Common::SetCurrentThreadName("VR GPU time");
+    const VkDevice device = g_vulkan_context->GetDevice();
+    for (;;)
+    {
+      m_wake.Wait();
+      if (m_stop.load(std::memory_order_acquire))
+        return;
+
+      VkResult res;
+      do
+      {
+        res = vkWaitForFences(device, 1, &m_fence, VK_TRUE, STOP_POLL_NS);
+      } while (res == VK_TIMEOUT && !m_stop.load(std::memory_order_acquire));
+      if (res == VK_SUCCESS)
+      {
+        VR::Perf::AddGpuFrame(Common::Timer::NowUs() - m_submit_us);
+        res = vkResetFences(device, 1, &m_fence);
+      }
+      if (res != VK_SUCCESS)
+      {
+        if (res != VK_TIMEOUT)
+          LOG_VULKAN_ERROR(res, "Waiting for the GPU time's fence failed: ");
+        return;
+      }
+      m_busy.store(false, std::memory_order_release);
+    }
+  }
+
+  VkFence m_fence = VK_NULL_HANDLE;
+  std::thread m_thread;
+  Common::Event m_wake;
+  std::atomic<bool> m_stop{false};
+  // From the submit until the fence is reset: the thread's. Otherwise the video thread's.
+  std::atomic<bool> m_busy{false};
+  u64 m_submit_us = 0;
+};
 
 class VulkanOpenXRConfirmationOverlay
 {
@@ -1175,6 +1285,8 @@ bool VulkanOpenXR::Initialize()
 void VulkanOpenXR::Shutdown()
 {
   WaitForPendingFrameFinalization("during shutdown");
+  if (m_gpu_timer)
+    m_gpu_timer->Stop();
 
   // Clear swapchain pointer before destroying swapchains so no dangling use occurs.
   if (VR::g_openxr)
@@ -1191,6 +1303,7 @@ void VulkanOpenXR::Shutdown()
   // already been lost, another wait only re-enters the failing driver path.
   if (g_vulkan_context && (!g_command_buffer_mgr || !g_command_buffer_mgr->IsDeviceLost()))
     vkDeviceWaitIdle(g_vulkan_context->GetDevice());
+  m_gpu_timer.reset();
 
   INFO_LOG_FMT(VIDEO, "OpenXR Vulkan: Shut down.");
 }
@@ -2005,6 +2118,25 @@ AbstractFramebuffer* VulkanOpenXR::AcquireLayeredFramebuffer()
   return sc.framebuffers[idx].get();
 }
 
+std::function<void(VkResult)> VulkanOpenXR::TimeGpuFrame(bool first, bool last)
+{
+  if (first)
+    m_eye_submit_us = 0;
+  if (g_ActiveConfig.stereo_mode != StereoMode::OpenXR || !VR::Perf::WantsGpuTime())
+    return {};
+
+  return [this, first, last](VkResult submit_result) {
+    if (first)
+      m_eye_submit_us = Common::Timer::NowUs();
+    if (!last || submit_result != VK_SUCCESS || m_eye_submit_us == 0)
+      return;
+    if (!m_gpu_timer)
+      m_gpu_timer = std::make_unique<VulkanGpuTimer>();
+    m_gpu_timer->EndFrame(m_eye_submit_us);
+    m_eye_submit_us = 0;
+  };
+}
+
 void VulkanOpenXR::ReleaseEyeTexture(uint32_t eye_index)
 {
   ASSERT(eye_index < 2);
@@ -2044,7 +2176,8 @@ void VulkanOpenXR::ReleaseEyeTexture(uint32_t eye_index)
   const bool wait_for_completion =
       !g_vulkan_context->SupportsTimelineSemaphores() && VR::g_openxr &&
       VR::g_openxr->IsQuestOrVirtualDesktopRuntime();
-  g_command_buffer_mgr->SubmitCommandBuffer(false, wait_for_completion);
+  g_command_buffer_mgr->SubmitCommandBuffer(false, wait_for_completion, false, VK_NULL_HANDLE,
+                                            0xFFFFFFFF, TimeGpuFrame(eye_index == 0, eye_index == 1));
   StateTracker::GetInstance()->InvalidateCachedState();
 
   XrSwapchainImageReleaseInfo release_info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -2085,7 +2218,8 @@ void VulkanOpenXR::ReleaseLayeredTexture()
   const bool wait_for_completion =
       !g_vulkan_context->SupportsTimelineSemaphores() && VR::g_openxr &&
       VR::g_openxr->IsQuestOrVirtualDesktopRuntime();
-  g_command_buffer_mgr->SubmitCommandBuffer(false, wait_for_completion);
+  g_command_buffer_mgr->SubmitCommandBuffer(false, wait_for_completion, false, VK_NULL_HANDLE,
+                                            0xFFFFFFFF, TimeGpuFrame(true, true));
   StateTracker::GetInstance()->InvalidateCachedState();
 
   XrSwapchainImageReleaseInfo release_info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};

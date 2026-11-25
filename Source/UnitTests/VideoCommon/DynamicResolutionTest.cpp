@@ -424,3 +424,60 @@ TEST(DynamicResolution, TheCeilingIsHeld)
   EXPECT_EQ(ceiling.Next(0.0), 4);
   EXPECT_EQ(ceiling.Next(0.0), 0);
 }
+
+TEST(DynamicResolution, ImmersiveIsDrawnUpToTheEyeImage)
+{
+  EXPECT_EQ(EyeCeiling(1680, 1760), 4);
+  EXPECT_EQ(EyeCeiling(2160, 2160), 5);
+  // Both sides are covered, and no more than that.
+  EXPECT_EQ(EyeCeiling(1920, 1584), 3);
+  EXPECT_EQ(EyeCeiling(1921, 1584), 4);
+  EXPECT_EQ(EyeCeiling(1920, 1585), 4);
+  EXPECT_EQ(EyeCeiling(0, 0), 0);
+
+  // Two steps up, no more than the ceiling, never under the floor.
+  EXPECT_EQ(ImmersiveUp(1, 4, 2), 2);
+  EXPECT_EQ(ImmersiveUp(2, 4, 2), 2);
+  EXPECT_EQ(ImmersiveUp(3, 4, 2), 1);
+  EXPECT_EQ(ImmersiveUp(4, 4, 2), 0);
+  EXPECT_EQ(ImmersiveUp(6, 4, 2), 0);
+  // What the GPU and the shaders allow.
+  EXPECT_EQ(ImmersiveUp(1, 4, 0), 0);
+  EXPECT_EQ(ImmersiveUp(2, 4, 1), 1);
+  // Not known.
+  EXPECT_EQ(ImmersiveUp(2, 0, 2), 0);
+}
+
+TEST(DynamicResolution, ImmersiveStartsAtTheTop)
+{
+  EXPECT_EQ(ImmersiveStartUp(2, 0, 2), 2);
+  EXPECT_EQ(ImmersiveStartUp(2, 3, 2), 1);
+  EXPECT_EQ(ImmersiveStartUp(2, 2, 2), 0);
+  EXPECT_EQ(ImmersiveStartUp(2, 4, 1), 1);
+  EXPECT_EQ(ImmersiveStartUp(2, 0, 0), 0);
+
+  // Down to the floor with the GPU the limit, and back when there is room.
+  Game game;
+  game.scale = FLOOR + 2;
+  game.controller.Start(ImmersiveStartUp(FLOOR, 0, game.max_up));
+  game.Run(Controller::SETTLE + Controller::DOWN_AFTER - 1, 16.0);
+  EXPECT_EQ(game.scale, 4);
+  EXPECT_EQ(game.Second(16.0), Controller::Step::Down);
+  EXPECT_EQ(game.scale, 3);
+  game.Run(Controller::SETTLE + Controller::DOWN_AFTER, 16.0);
+  EXPECT_EQ(game.scale, 2);
+  game.Run(100, 16.0);
+  EXPECT_EQ(game.scale, 2);
+  game.Run(100, [](int scale) { return 0.4 * scale * scale; });
+  EXPECT_EQ(game.scale, 4);
+}
+
+TEST(DynamicResolution, ImmersiveHasItsOwnPlaceInTheStore)
+{
+  EXPECT_EQ(StoreKey("GM4E01", false), "GM4E01");
+  EXPECT_EQ(StoreKey("GM4E01", true), "GM4E01-immersive");
+  EXPECT_EQ(StoreKey("00000000", true), "");
+  EXPECT_EQ(StoreKey("", true), "");
+  const ScaleStore store{{StoreKey("GM4E01", true), 4}, {StoreKey("GM4E01", false), 3}};
+  EXPECT_EQ(ParseStore(FormatStore(store)), store);
+}

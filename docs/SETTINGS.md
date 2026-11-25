@@ -52,7 +52,7 @@ Under **Advanced**. All are off by default.
 
 | Setting | What it does | Where |
 |---|---|---|
-| **Dynamic Resolution** | Up to two steps over **Internal Resolution** while the GPU has room | Stereoscopic 3D |
+| **Dynamic Resolution** | Stereoscopic 3D: up to two steps over **Internal Resolution** while the GPU has room. Immersive is drawn two steps over it (no more than fills the eye image); this steps it down, to the setting at the least, while the GPU is the limit | both |
 | **Pin Emulation Threads** | Keeps the main emulation threads on the fastest CPU cores. From the next game start | both |
 | **Performance Hint** | Asks the VR runtime for high CPU and GPU speed. From the next game start | both |
 | **Non-Blocking EFB Copies** | Does not wait for the GPU when the game copies the picture to memory | both |

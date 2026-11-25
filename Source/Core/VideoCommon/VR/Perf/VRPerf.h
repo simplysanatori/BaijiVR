@@ -24,8 +24,9 @@ struct Second
   double period_ms = 0.0;
   double wait_frame_ms = 0.0;  // average xrWaitFrame
   double end_frame_ms = 0.0;   // average xrEndFrame
-  // The eye pairs (Stereoscopic 3D only): from the submit to the GPU's end of it, and pairs left out
-  // because the GPU was still on the one before. The time includes any earlier work in the queue.
+  // The eye pairs: from the submit to the GPU's end of it, and pairs left out because the GPU was still on
+  // the one before. The time includes any earlier work in the queue. In Immersive a pair left out is only
+  // one that was not timed: it was shown, and is in `fresh`.
   u32 gpu_frames = 0;
   double gpu_ms = 0.0;
   double gpu_max_ms = 0.0;
@@ -41,6 +42,9 @@ struct Second
   // The game ran (not paused, no VR menu) for all of it.
   bool running = false;
 };
+
+// Whether anything wants Immersive's GPU time (Stereoscopic 3D's is always there). Video thread.
+bool WantsGpuTime();
 
 void AddGpuFrame(u64 us);
 void CountSkippedPair();

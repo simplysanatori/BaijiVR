@@ -475,6 +475,34 @@ constexpr int StartUp(int floor, int remembered, int max_up)
   return std::clamp(remembered - floor, 0, std::max(0, max_up));
 }
 
+// Immersive (from Azahar for Frame, which draws its immersive modes two steps higher): the game's picture
+// fills the eye image, so the EFB is drawn MAX_UP steps above the floor, up to the first scale where it
+// covers the eye image. With Dynamic Resolution on a game starts up there, and the rules above take it
+// down to the floor and back.
+constexpr int EFB_PIXELS_W = 640;
+constexpr int EFB_PIXELS_H = 528;
+
+// The first scale where the EFB covers the eye image. 0: not known.
+constexpr int EyeCeiling(int eye_w, int eye_h)
+{
+  if (eye_w <= 0 || eye_h <= 0)
+    return 0;
+  return std::max((eye_w + EFB_PIXELS_W - 1) / EFB_PIXELS_W,
+                  (eye_h + EFB_PIXELS_H - 1) / EFB_PIXELS_H);
+}
+
+// How far above the floor Immersive goes, of the `max_up` the GPU and the shaders allow.
+constexpr int ImmersiveUp(int floor, int eye_ceiling, int max_up)
+{
+  return std::clamp(eye_ceiling - floor, 0, std::max(0, max_up));
+}
+
+// Immersive's StartUp: a game with no scale remembered starts at the top.
+constexpr int ImmersiveStartUp(int floor, int remembered, int max_up)
+{
+  return remembered > 0 ? StartUp(floor, remembered, max_up) : std::max(0, max_up);
+}
+
 // The remembered scales, a line per game: "<game ID> <scale>". Other lines are left out.
 using ScaleStore = std::map<std::string, int>;
 
@@ -483,6 +511,15 @@ inline bool IsStoredGame(const std::string& game)
   return game.size() <= 32 && game.find_first_not_of('0') != std::string::npos &&
          std::all_of(game.begin(), game.end(),
                      [](unsigned char c) { return std::isalnum(c) || c == '-' || c == '_'; });
+}
+
+// The store's name for a game: Immersive has its own (its cost and its start are other ones). Empty for
+// one that is not stored.
+inline std::string StoreKey(const std::string& game, bool immersive)
+{
+  if (!IsStoredGame(game))
+    return {};
+  return immersive ? game + "-immersive" : game;
 }
 
 inline std::string FormatStore(const ScaleStore& store)

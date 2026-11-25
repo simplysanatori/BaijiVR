@@ -33,6 +33,8 @@ std::atomic<u64> s_gpu_max_us{0};
 std::atomic<u32> s_skipped_pairs{0};
 std::atomic<u32> s_gpu_waits{0};
 std::atomic<u64> s_gpu_wait_us{0};
+// A performance test is waiting or running (it writes the log's lines too).
+std::atomic<bool> s_test{false};
 
 constexpr u64 SECOND_US = 1'000'000;
 
@@ -72,6 +74,12 @@ void WriteLine(const Second& s)
       s.efb_scale, s.running ? 1 : 0, Test::GetStepName(), DescribeSwitches()));
 }
 }  // namespace
+
+bool WantsGpuTime()
+{
+  return g_ActiveConfig.vr_dynamic_resolution || g_ActiveConfig.vr_perf_log ||
+         s_test.load(std::memory_order_relaxed);
+}
 
 void AddGpuFrame(u64 us)
 {
@@ -130,6 +138,7 @@ void Tick(bool fresh, bool empty, bool running, s64 period_ns, u64 wait_frame_us
 
   // First: it is what looks for a test.
   const bool test = Test::IsRequested();
+  s_test.store(test, std::memory_order_relaxed);
   if (!test && !g_ActiveConfig.vr_perf_log && !g_ActiveConfig.vr_dynamic_resolution)
     return;
 

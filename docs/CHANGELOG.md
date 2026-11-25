@@ -20,6 +20,7 @@ Baiji's own changelog is in [its README](../README.upstream.md).
 - Natural 3D: **3D Depth** follows your IPD and the screen's size.
 - The screen keeps one shape when a game changes video modes.
 - The two screen options of Immersive are defaults and no longer locked.
+- Immersive is sharper: drawn two steps over **Internal Resolution**, up to the eye image. **Dynamic Resolution** steps it down while the GPU is the limit.
 
 ### Mods and games
 
