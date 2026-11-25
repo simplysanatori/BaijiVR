@@ -1,6 +1,6 @@
 # Settings
 
-These are the **VR** settings. Everything else is Dolphin's own. The VR menu uses the same names.
+These are the **VR** settings. Everything else is Dolphin's own. The VR menu uses the same names: its **Position** tab has Display and Screen, its **Settings** tab has **General**, **Graphics** and **Immersive**, each for every game (**Global**) or for the running one (**Per-Game**).
 
 ## Display
 
@@ -13,6 +13,8 @@ These are the **VR** settings. Everything else is Dolphin's own. The VR menu use
 ## Screen
 
 - **Distance** and **Size**: where the screen is and how tall it is.
+- **Screen Curve**: bends the screen around you, from Off to 90° in steps of 15°. Greyed where the VR runtime cannot curve a screen.
+- **Aspect Ratio**: Auto, 16:9 or 4:3.
 - **3D Depth**: how deep the picture is. Natural follows the distance between your eyes and the screen's size.
 - **World Scale**: higher makes the world smaller, as Immersive's does.
 - **Lock Screen**: keeps the grips from moving the screen.
@@ -37,6 +39,24 @@ These are the **VR** settings. Everything else is Dolphin's own. The VR menu use
 
 - **Pointer Beams**: shows where the controllers point during a game. Off by default.
 - **Messages**: short messages in the headset.
+- **Show Stats**: the frame rate, the resolution in use and the headset's numbers while you play. Off by default.
+- **Stats Position**: **In Front**, a window in the room that a grip moves, or **On Wrist**, on the left controller.
+
+## Stats
+
+| Number | What it is |
+|---|---|
+| **Frame Rate**, **Speed** | The game's frames a second, and its speed against full speed |
+| **Frame Time**, **Peak Frame Time**, **Slow Frames** | Between two frames of the game: the average, the longest, and how many took half as long again as usual. Only with **Show Stats** on |
+| **Internal Resolution** | The one in use, and the setting when that is another |
+| **Picture** | The size the game is drawn at |
+| **Dynamic Resolution** | Off, or On with the range it moves in |
+| **Last Change** | From what to what the resolution in use changed, and how long ago |
+| **Headset Frame Rate**, **Late Frames** | Pictures shown a second, and refreshes that got none in time (**Every Refresh** only) |
+| **GPU Time** | What a frame takes on the GPU |
+| **GPU**, **CPU** | Their load, where the system says it. Only with **Show Stats** on |
+
+The **Stats** tab of the VR menu shows the last second the game ran, with **Show Stats** off too.
 
 ## Autosave
 
