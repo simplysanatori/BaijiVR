@@ -414,7 +414,8 @@ void GameTracker::PurgeCache()
 void GameTracker::PlayerAddedDirectory(const QString& dir)
 {
   // This runs after the connection that tells the tracker to scan the directory.
-  if (Config::Get(Config::MAIN_USE_GAME_COVERS) || Settings::Instance().IsBatchModeEnabled())
+  if (!UICommon::COVERS_ARE_SHOWN || Config::Get(Config::MAIN_USE_GAME_COVERS) ||
+      Settings::Instance().IsBatchModeEnabled())
     return;
   ++m_cover_scans_pending;
   m_load_thread.EmplaceItem(Command{CommandType::CountCovers, dir, m_cover_generation});
@@ -458,7 +459,7 @@ void GameTracker::CoversCounted(u64 generation, std::vector<std::string> games)
 void GameTracker::AskAboutCovers()
 {
   // Never over a running game or in batch mode; the question is skipped then.
-  if (Config::Get(Config::MAIN_USE_GAME_COVERS) || Settings::Instance().IsBatchModeEnabled() ||
+  if (!UICommon::COVERS_ARE_SHOWN || Config::Get(Config::MAIN_USE_GAME_COVERS) || Settings::Instance().IsBatchModeEnabled() ||
       Core::GetState(Core::System::GetInstance()) != Core::State::Uninitialized)
   {
     m_cover_games.clear();
@@ -541,7 +542,7 @@ void GameTracker::FlushNewGames()
 // A rescan found games the list did not have: the same question, a few seconds after the last find.
 void GameTracker::NewGamesFound(std::vector<std::string> games)
 {
-  if (Config::Get(Config::MAIN_USE_GAME_COVERS) || Settings::Instance().IsBatchModeEnabled())
+  if (!UICommon::COVERS_ARE_SHOWN || Config::Get(Config::MAIN_USE_GAME_COVERS) || Settings::Instance().IsBatchModeEnabled())
     return;
   for (std::string& game : games)
   {

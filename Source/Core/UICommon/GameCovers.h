@@ -17,6 +17,10 @@
 // the game list's own thread.
 namespace UICommon
 {
+// While false there is no question, no automatic download whatever UseGameCovers says, and no
+// check box: nothing shows covers yet.
+constexpr bool COVERS_ARE_SHOWN = false;  // until the VR menu has a Games tab
+
 struct CoverQuery
 {
   std::string game_id;  // the cache file's name

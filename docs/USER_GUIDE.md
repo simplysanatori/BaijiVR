@@ -64,9 +64,7 @@ Remove the `baiji-vr` shortcut from your Steam library by hand.
 2. Choose **Display** in the settings, under **VR**: **Stereoscopic 3D**, **Immersive** or **Flat**.
 3. Double-click a game.
 
-### Box art
-
-The covers in the VR menu come from libretro-thumbnails on GitHub. Nothing is downloaded until you say so: when you add a directory under **Paths**, or a refresh finds a new game, and the games lack covers, a question offers **Download Thumbnails?** (**Download** or **Not Now**). It is not asked during a game. The request sees your IP address and the names of the games. To fetch covers for every game in the list by itself, turn on **Download Game Covers** under **Interface** in the settings. A cover you put beside a game (`Game.cover.png` or `cover.png`) and covers already downloaded are used either way.
+### Banners
 
 The list and **View** > **Grid View** show the games' own banners. A Wii game has one once it has a save.
 

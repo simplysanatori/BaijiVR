@@ -245,7 +245,7 @@ void GameFile::DownloadDefaultCover(bool force)
 {
   if (!m_default_cover.buffer.empty() || m_gametdb_id.empty())
     return;
-  if (!HandlesCovers() || !(force || DownloadsCovers()))
+  if (!COVERS_ARE_SHOWN || !HandlesCovers() || !(force || DownloadsCovers()))
     return;
 
   if (File::Exists(GetCoverPath(m_gametdb_id)))

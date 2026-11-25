@@ -33,6 +33,8 @@
 #include "DolphinQt/QtUtils/SignalBlocking.h"
 #include "DolphinQt/Settings.h"
 
+#include "UICommon/GameCovers.h"
+
 static ConfigStringChoice* MakeLanguageComboBox()
 {
   using QPair = std::pair<QString, QString>;
@@ -181,7 +183,10 @@ void InterfacePane::CreateUI()
       new ConfigBool(tr("Enable Play Time Tracking"), Config::MAIN_TIME_TRACKING);
 
   groupbox_layout->addWidget(m_checkbox_use_builtin_title_database);
-  groupbox_layout->addWidget(m_checkbox_use_covers);
+  if (UICommon::COVERS_ARE_SHOWN)
+    groupbox_layout->addWidget(m_checkbox_use_covers);
+  else
+    m_checkbox_use_covers->hide();
   groupbox_layout->addWidget(m_checkbox_show_debugging_ui);
   groupbox_layout->addWidget(m_checkbox_focused_hotkeys);
   groupbox_layout->addWidget(m_checkbox_disable_screensaver);
