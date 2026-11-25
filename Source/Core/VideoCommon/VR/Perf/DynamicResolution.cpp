@@ -306,11 +306,8 @@ void OnSecond(const Perf::Second& second)
   sample.period_ms = second.period_ms;
   sample.refreshes = second.refreshes;
   sample.every_refresh = config.vr_eager_heartbeat;
-  // Every pair of Immersive is shown, the ones that were not timed too: they count once.
-  sample.fresh = immersive ? second.gpu_frames : second.fresh;
-  sample.gpu_frames = second.gpu_frames;
+  CountPairs(&sample, immersive, second.fresh, second.gpu_frames, second.skipped_pairs);
   sample.gpu_ms = second.gpu_ms;
-  sample.skipped = second.skipped_pairs;
   sample.gpu_wait_ms = second.gpu_wait_ms;
   sample.scale = second.efb_scale;
 
@@ -329,14 +326,14 @@ void OnSecond(const Perf::Second& second)
                                 EyeCeiling(eye_w, eye_h)) :
                     fmt::format("the screen shows {}x", ceiling);
     INFO_LOG_FMT(VIDEO,
-                 "Dynamic Resolution: {}x (was {}x, {}; GPU {:.1f} ms of {:.1f}, {} pairs and {} left "
-                 "out, waits {:.1f} ms, speed {:.2f}, {:.1f} ms predicted a scale up, {})",
+                 "Dynamic Resolution: {}x (was {}x, {}; GPU {:.1f} ms of {:.1f}, {} pairs and {} {}, "
+                 "waits {:.1f} ms, speed {:.2f}, {:.1f} ms predicted a scale up, {})",
                  floor + up, floor + before,
                  step == Controller::Step::Up   ? "room" :
                  step == Controller::Step::Down ? "the GPU is the limit" :
                                                   "the game, the setting or the screen",
-                 sample.gpu_ms, Controller::Interval(sample), sample.gpu_frames, sample.skipped,
-                 sample.gpu_wait_ms, sample.speed, predicted, limit);
+                 sample.gpu_ms, Controller::Interval(sample), sample.gpu_frames,
+                 second.skipped_pairs, immersive ? "not timed" : "left out", sample.gpu_wait_ms, sample.speed, predicted, limit);
   }
   if (max_up > 0 && mode->controller.IsSettled())
     Remember(key, floor + mode->controller.Level());

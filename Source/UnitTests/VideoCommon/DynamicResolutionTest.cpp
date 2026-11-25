@@ -483,6 +483,53 @@ TEST(DynamicResolution, ImmersiveHasItsOwnPlaceInTheStore)
   EXPECT_EQ(ParseStore(FormatStore(store)), store);
 }
 
+TEST(DynamicResolution, ImmersivePairsNotTimedAreNotLeftOut)
+{
+  // 60 pairs, 4 of them not timed, close behind another one.
+  Sample immersive = At(3.0, 3);
+  CountPairs(&immersive, true, 55, 56, 4);
+  EXPECT_NEAR(Controller::Interval(immersive), 1000.0 / 60.0, 1e-9);
+  EXPECT_TRUE(Controller{}.Good(immersive));
+  // In Stereoscopic 3D they are pictures that were lost.
+  Sample screen = At(3.0, 3);
+  CountPairs(&screen, false, 56, 56, 4);
+  EXPECT_NEAR(Controller::Interval(screen), 1000.0 / 60.0, 1e-9);
+  EXPECT_FALSE(Controller{}.Good(screen));
+
+  // A GPU that is the limit is seen in its time, with most pairs not timed too.
+  CountPairs(&immersive, true, 60, 30, 30);
+  immersive.gpu_ms = 16.0;
+  EXPECT_TRUE(Controller::Bad(immersive));
+  EXPECT_FALSE(Controller{}.Good(immersive));
+  // A busy one is not.
+  CountPairs(&immersive, true, 60, 56, 4);
+  immersive.gpu_ms = 11.0;
+  EXPECT_FALSE(Controller::Bad(immersive));
+}
+
+TEST(DynamicResolution, ImmersiveComesBackUpWithPairsNotTimed)
+{
+  for (const bool immersive : {true, false})
+  {
+    Controller controller;
+    controller.Start(2);
+    int scale = FLOOR + 2;
+    // Each second has some that are not timed.
+    const auto run = [&](int seconds, double gpu_ms) {
+      for (int i = 0; i < seconds; ++i)
+      {
+        Sample s = At(gpu_ms, scale);
+        CountPairs(&s, immersive, 58, 58, 2);
+        scale = FLOOR + controller.Judge(s, FLOOR, 2);
+      }
+    };
+    run(Controller::SETTLE + Controller::DOWN_AFTER, 15.0);
+    EXPECT_EQ(scale, 3);
+    run(60, 3.0);
+    EXPECT_EQ(scale, immersive ? 4 : 3);
+  }
+}
+
 TEST(DynamicResolution, ImmersiveGpuTimeLeavesOutTheWaitBetweenTheEyes)
 {
   using VR::Perf::GpuBusyUs;

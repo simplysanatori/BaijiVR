@@ -77,6 +77,17 @@ struct Sample
   int scale = 0;
 };
 
+// The pairs of a second. In Stereoscopic 3D `untimed` is the ones left out. Immersive shows those too, only
+// their GPU time is not known (they came close behind another): they are fresh, and the GPU's time alone
+// says whether it is the limit.
+constexpr void CountPairs(Sample* s, bool immersive, std::uint32_t fresh, std::uint32_t timed,
+                          std::uint32_t untimed)
+{
+  s->fresh = immersive ? timed + untimed : fresh;
+  s->gpu_frames = timed;
+  s->skipped = immersive ? 0 : untimed;
+}
+
 class Controller
 {
 public:
