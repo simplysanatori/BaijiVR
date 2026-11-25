@@ -312,6 +312,7 @@ endif()
 
 if(ENABLE_VR)
   target_sources(videocommon PRIVATE
+    VR/FrameUI/GrabHint.h
     VR/FrameUI/MenuSettings.cpp
     VR/FrameUI/MenuSettings.h
     VR/FrameUI/Overlay.h

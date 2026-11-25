@@ -7,6 +7,7 @@
 #include <cmath>
 #include <utility>
 
+#include "Common/Contains.h"
 #include "Common/StringUtil.h"
 
 namespace VR::UI
@@ -269,7 +270,7 @@ void PadEdit::Choose(PadTarget target)
 {
   const PadTarget before = m_view.listening;
   Stop(Event::None);
-  if (target == before || !std::ranges::contains(GetTargets(m_kind), target))
+  if (target == before || !Common::Contains(GetTargets(m_kind), target))
     return;
   m_view.listening = target;
 }
@@ -388,7 +389,7 @@ PadEdit::Event PadEdit::Press(PadInput input)
     {
       binding = old;
     }
-    else if (old.names.size() == 1 && !std::ranges::contains(binding.names, old.names.front()))
+    else if (old.names.size() == 1 && !Common::Contains(binding.names, old.names.front()))
     {
       *it = old.names.front();
     }

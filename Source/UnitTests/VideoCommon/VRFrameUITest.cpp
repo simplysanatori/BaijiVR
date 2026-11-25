@@ -22,6 +22,7 @@
 #include "Core/HW/Wiimote.h"
 #include "Core/VRWiiController.h"
 #include "InputCommon/ControllerInterface/OpenXR/FrameControllerNames.h"
+#include "VideoCommon/VR/FrameUI/GrabHint.h"
 #include "VideoCommon/VR/FrameUI/MenuSettings.h"
 #include "VideoCommon/VR/FrameUI/PadBindings.h"
 #include "VideoCommon/VR/FrameUI/PadFilter.h"
@@ -1267,6 +1268,21 @@ TEST(VRFrameUI, ScreenCurveSteps)
   EXPECT_EQ(FormatValue(row, 45.0f), "45\u00b0");
   EXPECT_EQ(FormatValue(row, 0.0f), "Off");
   EXPECT_EQ(SliderValue(row, 1.0f), 90.0f);
+}
+
+TEST(VRFrameUI, GrabHintIsInItsRow)
+{
+  namespace ToastFit = FrameXr::ToastFit;
+  frame_xr::ui::InitFonts();
+  frame_xr::ui::Canvas canvas;
+  canvas.Init(ToastFit::kAtlasW, ToastFit::kRowPx * 2);
+  std::ranges::fill(canvas.px, 0u);
+  const ToastFit::Box box = DrawGrabHint(&canvas, 1);
+  EXPECT_LE(box.box_px, ToastFit::kAtlasW);
+  const auto is_drawn = [](u32 pixel) { return pixel != 0; };
+  const auto row = canvas.px.begin() + ToastFit::kAtlasW * ToastFit::kRowPx;
+  EXPECT_TRUE(std::none_of(canvas.px.begin(), row, is_drawn));
+  EXPECT_TRUE(std::any_of(row, canvas.px.end(), is_drawn));
 }
 
 TEST(VRFrameUI, OneWorldScaleForEachDisplay)

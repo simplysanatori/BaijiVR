@@ -14,6 +14,7 @@
 #include <fmt/format.h>
 
 #include "Common/Config/Config.h"
+#include "Common/Contains.h"
 
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
@@ -669,7 +670,7 @@ std::vector<SettingOption> GetOptions(const SettingRow& row, const SettingState&
   for (const SettingOption& option : row.options)
   {
     if (option.value <= 1.0f ||
-        std::ranges::contains(state.values.aa_modes, static_cast<u32>(option.value)))
+        Common::Contains(state.values.aa_modes, static_cast<u32>(option.value)))
     {
       options.push_back(option);
     }
