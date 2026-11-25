@@ -231,7 +231,7 @@ static std::vector<std::string> StringListToStdVector(QStringList list)
 
 static QString GetMainWindowTitle()
 {
-  return QStringLiteral("BaijiSteamVR");
+  return QStringLiteral("Baiji VR");
 }
 
 MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boot_parameters,

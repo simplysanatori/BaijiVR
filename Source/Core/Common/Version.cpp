@@ -10,9 +10,11 @@
 namespace Common
 {
 #ifdef BAIJI_STEAMVR
-#define EMULATOR_NAME "BaijiSteamVR"
+#define EMULATOR_NAME "Baiji VR"
+#define USER_AGENT_NAME "BaijiVR"
 #else
 #define EMULATOR_NAME "Dolphin"
+#define USER_AGENT_NAME "Dolphin"
 #endif
 
 #ifdef _DEBUG
@@ -59,7 +61,7 @@ const std::string& GetScmBranchStr()
 
 const std::string& GetUserAgentStr()
 {
-  static const std::string user_agent_str = EMULATOR_NAME "/" SCM_DESC_STR;
+  static const std::string user_agent_str = USER_AGENT_NAME "/" SCM_DESC_STR;
   return user_agent_str;
 }
 

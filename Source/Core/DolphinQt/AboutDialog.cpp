@@ -14,24 +14,24 @@
 
 AboutDialog::AboutDialog(QWidget* parent) : QDialog(parent)
 {
-  setWindowTitle(tr("About BaijiSteamVR"));
+  setWindowTitle(tr("About Baiji VR"));
 
   const QString text =
       QStringLiteral(R"(
-<p style='font-size:38pt; font-weight:400;'>BaijiSteamVR</p>
+<p style='font-size:38pt; font-weight:400;'>Baiji VR</p>
 
 <p style='font-size:18pt;'>%VERSION%</p>
 
 <p>
-BaijiSteamVR is a free and open-source GameCube and Wii emulator.
+Baiji VR is a free and open-source GameCube and Wii emulator, an unofficial fork of Baiji.
 </p>
 
 <p>
-<a href='https://github.com/thejerf/baijiSteamVR'>BaijiSteamVR project page</a>
+<a href='https://github.com/thejerf/baijiSteamVR'>Baiji's project page</a>
 </p>
 
 <p>
-Licensed under GPL-2.0-or-later. See COPYING and LICENSES in the installation for license texts.
+Licensed under GPL-3.0-or-later; Dolphin's own files are GPL-2.0-or-later. See COPYING and LICENSES in the installation for license texts.
 )")
           .replace(QStringLiteral("%VERSION%"),
                    QString::fromUtf8(Common::GetScmDescStr().c_str()));
@@ -48,7 +48,7 @@ Licensed under GPL-2.0-or-later. See COPYING and LICENSES in the installation fo
               // your language. If you aren't sure which type is appropriate, see
               // https://en.wikipedia.org/wiki/Quotation_mark#Specific_language_features
                tr("\u00A9 2003-2024+ Dolphin Team. \u201cGameCube\u201d and \u201cWii\u201d are "
-                  "trademarks of Nintendo. BaijiSteamVR is not affiliated with Nintendo.")));
+                  "trademarks of Nintendo. Baiji VR is not affiliated with Nintendo.")));
 
   QLabel* logo = new QLabel();
   logo->setPixmap(Resources::GetAppIcon().pixmap(200, 200));
