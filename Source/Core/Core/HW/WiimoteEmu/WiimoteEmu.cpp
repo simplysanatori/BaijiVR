@@ -699,10 +699,11 @@ void Wiimote::LoadDefaults(const ControllerInterface& ciface)
 #ifdef ENABLE_VR
   SetDefaultDevice("OpenXR/0/OpenXR Controller");
 
-  m_buttons->SetControlExpression(0, "`A`");
-  m_buttons->SetControlExpression(1, "`Right Trigger`");
-  m_buttons->SetControlExpression(2, "`X`");
-  m_buttons->SetControlExpression(3, "`Y`");
+  // By position, as the GameCube pad's. B is under the index finger, too.
+  m_buttons->SetControlExpression(0, "`B`");
+  m_buttons->SetControlExpression(1, "`Right Trigger` | `A`");
+  m_buttons->SetControlExpression(2, "`Y`");
+  m_buttons->SetControlExpression(3, "`X`");
   m_buttons->SetControlExpression(4, "`View`");
   m_buttons->SetControlExpression(5, "`Menu`");
   // Home is in the VR menu: no button on the Frame is free for it.

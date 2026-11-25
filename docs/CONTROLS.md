@@ -19,6 +19,19 @@
 
 The **Controls** tab of the VR menu shows your controller with the game's buttons. Its **Shortcuts** page has the table above.
 
+## Face Buttons
+
+They are by position, as on Nintendo's controllers.
+
+| Steam Frame | GameCube | Wii Remote |
+|---|---|---|
+| **A** (bottom) | B | B |
+| **B** (right) | A | A |
+| **X** (left) | Y | 2 |
+| **Y** (top) | X | 1 |
+
+The right trigger is the Wii Remote's B, too. The sideways Wii Remote has its own layout.
+
 ## Wii Remote
 
 The Wii Remote's extension can be chosen in the Controllers settings without opening the mapping window.

@@ -195,10 +195,11 @@ void GCPad::LoadDefaults(const ControllerInterface& ciface)
   SetDefaultDevice("OpenXR/0/OpenXR Controller");
 
   // Baiji's default pad is the Steam Frame controller, not a keyboard.
-  m_buttons->SetControlExpression(0, "`A`");
-  m_buttons->SetControlExpression(1, "`B`");
-  m_buttons->SetControlExpression(2, "`X`");
-  m_buttons->SetControlExpression(3, "`Y`");
+  // By position: A is the right button, as on Nintendo's own controllers.
+  m_buttons->SetControlExpression(0, "`B`");
+  m_buttons->SetControlExpression(1, "`A`");
+  m_buttons->SetControlExpression(2, "`Y`");
+  m_buttons->SetControlExpression(3, "`X`");
   m_buttons->SetControlExpression(4, "`Right Bumper`");
   m_buttons->SetControlExpression(5, "`Menu`");
 
