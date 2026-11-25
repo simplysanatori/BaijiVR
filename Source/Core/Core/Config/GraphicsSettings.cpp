@@ -219,6 +219,8 @@ const Info<int> GFX_VR_SCREEN_CURVE{{System::GFX, "VR", "ScreenCurve"}, 0};
 const Info<float> GFX_VR_SCREEN_DEPTH{{System::GFX, "VR", "ScreenDepth"}, 100.0f};
 const Info<bool> GFX_VR_POINTER_BEAMS{{System::GFX, "VR", "PointerBeams"}, false};
 const Info<bool> GFX_VR_TOASTS{{System::GFX, "VR", "Toasts"}, true};
+const Info<bool> GFX_VR_SHOW_STATS{{System::GFX, "VR", "ShowStats"}, false};
+const Info<int> GFX_VR_STATS_POSITION{{System::GFX, "VR", "StatsPosition"}, 0};
 const Info<float> GFX_VR_HEAD_LOCKED_CURVATURE{{System::GFX, "VR", "HeadLockedCurvature"}, 0.0f};
 const Info<bool> GFX_VR_DONT_CLEAR_SCREEN{{System::GFX, "VR", "DontClearScreen"}, false};
 const Info<bool> GFX_VR_LOAD_CUSTOM_SHADERS{{System::GFX, "VR", "LoadCustomShaders"}, false};

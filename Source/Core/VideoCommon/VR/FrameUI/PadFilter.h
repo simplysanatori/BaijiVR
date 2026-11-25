@@ -57,7 +57,9 @@ public:
   // One frame. `controllers` comes in as read and goes out as the game may see it. `blocked`: the
   // VR menu has the controllers and the game gets nothing. `grab_hand`: that hand holds the
   // screen (-1: neither), and its grip and stick, and the D-Pad, stay away from the game.
-  PadEvents Update(Controllers* controllers, s64 now_ns, bool blocked, int grab_hand);
+  // `stats_hand`: that hand holds the stats, and its grip and stick do.
+  PadEvents Update(Controllers* controllers, s64 now_ns, bool blocked, int grab_hand,
+                   int stats_hand = -1);
 
   // The session lost focus: nothing held counts any more.
   void Reset();

@@ -21,6 +21,7 @@
 #include "VideoCommon/PerformanceMetrics.h"
 #include "VideoCommon/VR/Perf/DynamicResolution.h"
 #include "VideoCommon/VR/Perf/PerfTest.h"
+#include "VideoCommon/VR/Perf/Stats.h"
 #include "VideoCommon/VideoConfig.h"
 
 namespace VR::Perf
@@ -50,6 +51,16 @@ struct Window
   bool running = true;
 };
 Window s_window;
+Second s_last;
+
+// What is read on the host thread.
+void ReadEmulation(Second* s)
+{
+  s->fps = g_perf_metrics.GetFPS();
+  s->vps = g_perf_metrics.GetVPS();
+  s->speed = g_perf_metrics.GetSpeed();
+  s->efb_scale = g_framebuffer_manager ? static_cast<int>(g_framebuffer_manager->GetEFBScale()) : 0;
+}
 
 void WriteLine(const Second& s)
 {
@@ -78,7 +89,7 @@ void WriteLine(const Second& s)
 bool WantsGpuTime()
 {
   return g_ActiveConfig.vr_dynamic_resolution || g_ActiveConfig.vr_perf_log ||
-         s_test.load(std::memory_order_relaxed);
+         g_ActiveConfig.vr_show_stats || s_test.load(std::memory_order_relaxed);
 }
 
 void AddGpuFrame(u64 us)
@@ -135,18 +146,21 @@ void Tick(bool fresh, bool empty, bool running, s64 period_ns, u64 wait_frame_us
   s.gpu_waits = s_gpu_waits.exchange(0, std::memory_order_relaxed);
   s.gpu_wait_ms = s_gpu_wait_us.exchange(0, std::memory_order_relaxed) * 1e-3;
   s.running = w.running;
+  if (s.running)
+    s_last = s;
+
+  const bool stats = g_ActiveConfig.vr_show_stats;
+  if (!stats && IsMeasuring())
+    Core::QueueHostJob([](Core::System&) { SetMeasuring(false); });
 
   // First: it is what looks for a test.
   const bool test = Test::IsRequested();
   s_test.store(test, std::memory_order_relaxed);
-  if (!test && !g_ActiveConfig.vr_perf_log && !g_ActiveConfig.vr_dynamic_resolution)
+  if (!test && !stats && !g_ActiveConfig.vr_perf_log && !g_ActiveConfig.vr_dynamic_resolution)
     return;
 
   Core::QueueHostJob([s](Core::System&) mutable {
-    s.fps = g_perf_metrics.GetFPS();
-    s.vps = g_perf_metrics.GetVPS();
-    s.speed = g_perf_metrics.GetSpeed();
-    s.efb_scale = g_framebuffer_manager ? static_cast<int>(g_framebuffer_manager->GetEFBScale()) : 0;
+    ReadEmulation(&s);
     Consume(s);
   });
 }
@@ -156,7 +170,30 @@ void Consume(const Second& second)
   if (Test::IsRequested() || g_ActiveConfig.vr_perf_log)
     WriteLine(second);
   DynamicResolution::OnSecond(second);
+  if (g_ActiveConfig.vr_show_stats)
+  {
+    SetMeasuring(true);
+    if (second.running)
+      Publish(second);
+  }
   Test::OnSecond(second);
+}
+
+void PublishLastSecond()
+{
+  // With the stats on they have it.
+  if (g_ActiveConfig.vr_show_stats || s_last.refreshes == 0)
+    return;
+  Core::QueueHostJob([s = s_last](Core::System&) mutable {
+    ReadEmulation(&s);
+    Publish(s);
+  });
+}
+
+void ForgetLastSecond()
+{
+  s_last = {};
+  ResetStats();
 }
 
 std::string DescribeSwitches()

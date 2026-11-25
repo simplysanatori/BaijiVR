@@ -22,6 +22,7 @@
 #include "VideoCommon/VR/FrameUI/Overlay.h"
 #include "VideoCommon/VR/FrameUI/PadFilter.h"
 #include "VideoCommon/VR/FrameUI/ScreenPlacement.h"
+#include "VideoCommon/VR/FrameUI/Stats.h"
 #include "VideoCommon/VR/FrameUI/VrMenu.h"
 #include "VideoCommon/VR/FrameUI/beam.h"
 #include "VideoCommon/VR/FrameUI/layer_slots.h"
@@ -40,8 +41,8 @@ namespace VR::UI
 void RequestSwitchToFlat();
 
 // What is drawn over the game in the headset, and the controls that are the same in every game:
-// the VR menu, the toasts, the pointer beams, moving the screen with a grip (PadFilter.h has the
-// buttons). It lives on the XR pacing thread and keeps going when the game is paused or has drawn
+// the VR menu, the toasts, the stats, the pointer beams, moving the screen with a grip (PadFilter.h
+// has the buttons). It lives on the XR pacing thread and keeps going when the game is paused or has drawn
 // nothing yet. It never waits for another thread: what the rest of the emulator has to do is
 // queued as host jobs.
 class VrUi
@@ -106,6 +107,8 @@ private:
   };
 
   // ---- Update ----
+  void UpdateGrips(const Controllers& controllers);
+  void UpdateStats(const Frame& frame, const Controllers& controllers, float dt);
   void UpdateGrab(const Frame& frame, const Controllers& controllers, float dt);
   void UpdateMenu(const Frame& frame, const Controllers& controllers, float dt);
   void UpdateBeams(const Frame& frame, const Controllers& controllers);
@@ -153,6 +156,7 @@ private:
   // ---- Layers ----
   void DrawToastRow(int row, const std::string& text);
   void DrawGrabHint();
+  void UploadStats();
   void AddQuad(FrameXr::LayerSlots::Group group, const Overlay& overlay,
                const FrameXr::Input::Posef& pose, float width, float height, XrRect2Di rect);
 
@@ -167,8 +171,10 @@ private:
   std::unique_ptr<Overlay> m_art;
   std::unique_ptr<Overlay> m_toasts;
   std::unique_ptr<Overlay> m_menu_overlay;
+  std::unique_ptr<Overlay> m_stats_overlay;  // from when they are first shown
   bool m_overlays_failed = false;
   bool m_menu_overlay_failed = false;
+  bool m_stats_overlay_failed = false;
 
   Frame m_frame;
   s64 m_last_time_ns = 0;
@@ -179,11 +185,36 @@ private:
   // Moving the screen.
   int m_grab_hand = -1;
   std::array<bool, 2> m_grip_down{};
+  std::array<bool, 2> m_grip_pressed{};  // since the last frame
   int m_nudge = 0;
   int m_curve_step = 0;
   float m_curve = 0.0f;
   s64 m_nudge_at_ns = 0;
   ScreenGrab m_grab;
+
+  // The stats.
+  enum class StatsPicture
+  {
+    None,
+    Front,
+    Wrist,
+  };
+  bool m_stats_on = false;
+  bool m_stats_on_wrist = false;
+  bool m_stats_to_place = true;
+  bool m_stats_front = false;  // In Front, to be shown now
+  bool m_stats_wrist = false;  // the wrist is turned to the face
+  bool m_stats_shown = false;  // In Front, as drawn last
+  int m_stats_hand = -1;
+  s64 m_recenter_seen = 0;
+  StatsWindow m_stats_window;
+  FrameXr::Input::Posef m_wrist_pose;
+  // What was asked to be drawn, what is on its way to the overlay, and what that shows.
+  u32 m_stats_serial = 0;
+  StatsPicture m_stats_asked = StatsPicture::None;
+  StatsPicture m_stats_queued = StatsPicture::None;
+  StatsPicture m_stats_image = StatsPicture::None;
+  bool m_stats_waiting = false;
 
   // The menu.
   bool m_menu_open = false;
@@ -239,6 +270,10 @@ private:
   std::optional<GameMods::List> m_mods_request;
   std::optional<std::pair<GameMods::List, std::vector<GameMods::Item>>> m_mods;
   std::optional<MenuSaves> m_saves;
+  std::optional<std::pair<Perf::Stats, StatsPicture>> m_stats_request;
+  std::vector<u32> m_stats_drawn;
+  StatsPicture m_stats_drawn_picture = StatsPicture::None;  // None: taken
+  u32 m_stats_drawn_serial = 0;
   std::vector<u32> m_drawn;
   bool m_drawn_ready = false;
   std::optional<MenuState> m_last_drawn;

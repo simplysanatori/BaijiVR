@@ -153,6 +153,11 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
        {tr("Pointer Beams"), tr("Shows where the controllers point during a game. The VR menu always shows them.")}},
       {Config::GFX_VR_TOASTS.GetLocation(),
        {tr("Messages"), tr("Shows short messages in the headset, for example Quick Saved.")}},
+      {Config::GFX_VR_SHOW_STATS.GetLocation(),
+       {tr("Show Stats"), tr("Shows the stats while you play.")}},
+      {Config::GFX_VR_STATS_POSITION.GetLocation(),
+       {tr("Stats Position"),
+        tr("Where the stats show: in front of you, or on your left wrist.")}},
 
       // Autosave
       {Config::MAIN_AUTOSAVE_ENABLED.GetLocation(),
@@ -756,6 +761,9 @@ void VRPane::AddMenuAndPointers()
                          {{tr("100%"), 100}, {tr("150%"), 150}, {tr("200%"), 200}});
   m_page->AddBool(layout, VRSettingsPage::ALL, Config::GFX_VR_POINTER_BEAMS);
   m_page->AddBool(layout, VRSettingsPage::ALL, Config::GFX_VR_TOASTS);
+  m_page->AddBool(layout, VRSettingsPage::ALL, Config::GFX_VR_SHOW_STATS);
+  m_page->AddChoice<int>(layout, VRSettingsPage::ALL, Config::GFX_VR_STATS_POSITION,
+                         {{tr("In Front"), 0}, {tr("On Wrist"), 1}});
 }
 
 void VRPane::AddAutosave()
@@ -951,7 +959,8 @@ void VRPane::ResetSettings()
         Config::GFX_VR_FOVEATION_DYNAMIC, Config::GFX_VR_PASSTHROUGH);
 
   // Menu and Pointers
-  reset(Config::GFX_VR_POINTER_BEAMS, Config::GFX_VR_TOASTS);
+  reset(Config::GFX_VR_POINTER_BEAMS, Config::GFX_VR_TOASTS, Config::GFX_VR_SHOW_STATS,
+        Config::GFX_VR_STATS_POSITION);
 
   // Advanced
   reset(Config::GFX_VR_REFERENCE_SPACE_MODE, Config::GFX_VR_TRACKING_MODE,

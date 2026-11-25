@@ -432,6 +432,18 @@ std::vector<SettingRow> MakeImmersiveRows()
   return rows;
 }
 
+std::vector<SettingRow> MakeStatsRows()
+{
+  using enum SettingId;
+  constexpr MenuSection SECTION = MenuSection::Stats;
+  return {
+      MakeRow(ShowStats, SECTION, RowKind::Switch, "Show Stats", "Shows the stats while you play."),
+      MakeChoice(StatsPosition, SECTION, RowKind::Segmented, "Stats Position",
+                 "Where the stats show: in front of you, or on your left wrist.",
+                 {{"In Front", 0.0f}, {"On Wrist", 1.0f}}),
+  };
+}
+
 // ---- The config behind them ----
 
 struct Binding
@@ -542,6 +554,8 @@ const std::vector<Binding>& GetBindings()
       Bind(SettingId::HeadTracking, Config::GFX_VR_TRACKING_MODE),
       Bind(SettingId::HudDepth, Config::GFX_VR_HUD_THICKNESS),
       Bind(SettingId::RemoveBars, Config::GFX_VR_REMOVE_BARS),
+      Bind(SettingId::ShowStats, Config::GFX_VR_SHOW_STATS),
+      Bind(SettingId::StatsPosition, Config::GFX_VR_STATS_POSITION),
   };
   return bindings;
 }
@@ -551,8 +565,8 @@ const std::vector<SettingRow>& GetSettingRows()
 {
   static const std::vector<SettingRow> rows = [] {
     std::vector<SettingRow> all;
-    for (const auto& part :
-         {MakeScreenRows(), MakeGeneralRows(), MakeGraphicsRows(), MakeImmersiveRows()})
+    for (const auto& part : {MakeScreenRows(), MakeGeneralRows(), MakeGraphicsRows(),
+                             MakeImmersiveRows(), MakeStatsRows()})
       all.insert(all.end(), part.begin(), part.end());
     return all;
   }();
@@ -625,6 +639,8 @@ Lock GetLock(const SettingRow& row, const SettingState& state)
     return Lock::ImmersiveOnly;
   if (row.id == SettingId::Display && !state.can_switch_mode)
     return Lock::DisplayFixed;
+  if (row.id == SettingId::ScreenCurve && !state.can_curve)
+    return Lock::CannotCurve;
   if ((row.id == SettingId::AutosaveEvery || row.id == SettingId::AutosaveKeep) &&
       !state.IsOn(SettingId::Autosave))
   {
@@ -656,6 +672,8 @@ std::string ExplainLock(Lock lock, const SettingRow& row)
     return "Turn on Autosave to change it.";
   case Lock::SwitchedOff:
     return fmt::format("Turn on {} to change it.", row.label);
+  case Lock::CannotCurve:
+    return "This VR runtime cannot curve the screen.";
   case Lock::None:
     break;
   }

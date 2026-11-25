@@ -114,7 +114,8 @@ void PadFilter::Swallow(Controllers* controllers, const Controllers& raw)
   }
 }
 
-PadEvents PadFilter::Update(Controllers* controllers, s64 now_ns, bool blocked, int grab_hand)
+PadEvents PadFilter::Update(Controllers* controllers, s64 now_ns, bool blocked, int grab_hand,
+                            int stats_hand)
 {
   PadEvents events;
   State& left = (*controllers)[LEFT];
@@ -325,6 +326,15 @@ PadEvents PadFilter::Update(Controllers* controllers, s64 now_ns, bool blocked, 
       m_swallowed[LEFT][button] |= IsDown(left, button);
     for (State& state : *controllers)
       state.screen_hit = {};
+    ClearStick(&(*controllers)[hand]);
+  }
+
+  if (stats_hand >= 0)
+  {
+    const auto hand = static_cast<std::size_t>(stats_hand);
+    m_swallowed[hand][GRIP] = true;
+    m_stick_swallowed[hand] = true;
+    (*controllers)[hand].screen_hit = {};
     ClearStick(&(*controllers)[hand]);
   }
 

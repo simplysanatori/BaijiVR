@@ -53,8 +53,13 @@ void AddGpuWait(u64 us);
 // Every refresh. About once a second the numbers go to a host job, which does Consume.
 void Tick(bool fresh, bool empty, bool running, s64 period_ns, u64 wait_frame_us, u64 end_frame_us);
 
-// On the host thread: the log line, then DynamicResolution::OnSecond and Test::OnSecond.
+// On the host thread: the log line, then DynamicResolution::OnSecond, the stats and Test::OnSecond.
 void Consume(const Second& second);
+
+// The pacing thread's: the last second the game ran for all of goes to the stats (Stats.h).
+void PublishLastSecond();
+// While the pacing thread does not run: it has not been in this session.
+void ForgetLastSecond();
 
 // The performance switches that are not at their defaults ("DynamicResolution=True"), for the log.
 std::string DescribeSwitches();

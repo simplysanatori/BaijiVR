@@ -39,6 +39,7 @@
 #include "VideoCommon/VR/FrameUI/GrabHint.h"
 #include "VideoCommon/VR/FrameUI/PadBindings.h"
 #include "VideoCommon/VR/OpenXRManager.h"
+#include "VideoCommon/VR/Perf/VRPerf.h"
 #include "VideoCommon/VideoConfig.h"
 
 namespace VR::UI
@@ -77,6 +78,9 @@ constexpr float TRIGGER_ON = 0.55f;
 constexpr float TRIGGER_OFF = 0.40f;
 
 constexpr s64 REFRESH_NS = 250'000'000;
+constexpr u32 STATS_TEX_WIDTH = static_cast<u32>(STATS_WIDTH * MENU_PX_PER_DP);
+constexpr u32 STATS_TEX_HEIGHT = static_cast<u32>(STATS_HEIGHT * MENU_PX_PER_DP);
+constexpr s32 STATS_TEX_WRIST_HEIGHT = static_cast<s32>(STATS_WRIST_HEIGHT * MENU_PX_PER_DP);
 // What the menu opens on while a game runs.
 constexpr SettingScope DEFAULT_SCOPE = SettingScope::PerGame;
 // How long the pointer rests before it says what it is on.
@@ -360,6 +364,7 @@ VrUi::VrUi(OpenXRManager* manager, CreateOverlay create_overlay, u32 max_layers)
   ui::InitFonts();
   m_toast_canvas.Init(static_cast<int>(TOAST_TEX_WIDTH), static_cast<int>(TOAST_TEX_HEIGHT));
   std::fill(m_toast_canvas.px.begin(), m_toast_canvas.px.end(), 0u);
+  Perf::ForgetLastSecond();
   m_draw_thread = std::thread(&VrUi::DrawThread, this);
   Core::QueueHostJob([](Core::System& system) { VRWiiController::OnSessionStarted(system); });
 }
@@ -410,7 +415,7 @@ void VrUi::PostEmulatorMessage(std::string_view message, u32 ms)
 
 bool VrUi::IsActive() const
 {
-  return m_menu_open || m_grab_hand >= 0 || m_hint != Hint::None || m_toast_until_ns != 0 ||
+  return m_menu_open || m_grab_hand >= 0 || m_stats_hand >= 0 || m_stats_wrist || m_hint != Hint::None || m_toast_until_ns != 0 ||
          m_beams[0].visible || m_beams[1].visible;
 }
 
@@ -426,11 +431,13 @@ void VrUi::Update(const Frame& frame, Controllers* controllers)
   const Controllers raw = *controllers;
   WatchInstall();
   UpdateMenu(frame, raw, dt);
+  UpdateGrips(raw);
+  UpdateStats(frame, raw, dt);
   UpdateGrab(frame, raw, dt);
 
   // With the menu on its Position tab the game runs, but it does not get the controllers.
   const PadEvents events =
-      m_filter.Update(controllers, frame.time_ns, m_menu_open, m_grab_hand);
+      m_filter.Update(controllers, frame.time_ns, m_menu_open, m_grab_hand, m_stats_hand);
   HandleEvents(events);
 
   UpdateBeams(frame, raw);
@@ -447,6 +454,8 @@ void VrUi::OnFocusLost()
     SaveScreenPlacement();
   }
   m_grip_down = {};
+  m_stats_hand = -1;
+  m_stats_wrist = false;
   EndDrag();
   m_press_down = false;
   m_press_item = MenuItem::None;
@@ -471,6 +480,7 @@ void VrUi::HandleEvents(const PadEvents& events)
     SetFastForward(!m_fast_forward);
   if (events.switch_mode)
     SwitchMode();
+  m_stats_to_place |= events.reset_screen;
   if (events.reset_screen && !m_frame.has_screen)
   {
     m_manager->RequestRecenter();
@@ -578,23 +588,33 @@ void VrUi::SaveScreenPlacement()
 
 // ---- Moving the screen --------------------------------------------------------------------------
 
+void VrUi::UpdateGrips(const Controllers& controllers)
+{
+  for (std::size_t hand = 0; hand < 2; ++hand)
+  {
+    const auto& c = controllers[hand];
+    const bool was_down = m_grip_down[hand];
+    m_grip_down[hand] = c.connected && (c.squeeze_value > (was_down ? GRIP_OFF : GRIP_ON) ||
+                                        (c.squeeze_button && c.squeeze_value <= 0.0f));
+    m_grip_pressed[hand] = m_grip_down[hand] && !was_down;
+  }
+}
+
 void VrUi::UpdateGrab(const Frame& frame, const Controllers& controllers, float dt)
 {
   for (int hand = 0; hand < 2; ++hand)
   {
     const auto& c = controllers[static_cast<std::size_t>(hand)];
-    bool& down = m_grip_down[static_cast<std::size_t>(hand)];
-    const bool was_down = down;
-    down = c.connected && (c.squeeze_value > (was_down ? GRIP_OFF : GRIP_ON) ||
-                            (c.squeeze_button && c.squeeze_value <= 0.0f));
+    const bool down = m_grip_down[static_cast<std::size_t>(hand)];
+    const bool pressed = m_grip_pressed[static_cast<std::size_t>(hand)];
 
     if (m_grab_hand == hand && (!down || !frame.has_screen || !c.aim_pose.valid || m_menu_open))
     {
       m_grab_hand = -1;
       SaveScreenPlacement();
     }
-    if (m_grab_hand < 0 && down && !was_down && frame.has_screen && c.aim_pose.valid &&
-        !m_menu_open && !g_ActiveConfig.vr_lock_screen)
+    if (m_grab_hand < 0 && pressed && m_stats_hand != hand && frame.has_screen &&
+        c.aim_pose.valid && !m_menu_open && !g_ActiveConfig.vr_lock_screen)
     {
       const PanelQuad screen = m_manager->GetScreenQuad();
       const Ray ray = RayFromPose(ToPose(c.aim_pose));
@@ -638,6 +658,11 @@ void VrUi::UpdateGrab(const Frame& frame, const Controllers& controllers, float 
   const int step = controllers[0].dpad_up ? 1 : controllers[0].dpad_down ? -1 : 0;
   if (step != std::exchange(m_curve_step, step) && step)
   {
+    if (!m_manager->CanCurveScreen())
+    {
+      ShowToast("This VR Runtime Cannot Curve the Screen", ToastFit::kShortNs);
+      return;
+    }
     const float before = std::exchange(m_curve, StepScreenCurve(m_curve, step));
     // At the ends, too, so that the press shows.
     const SettingRow& row = GetSettingRow(SettingId::ScreenCurve);
@@ -650,6 +675,78 @@ void VrUi::UpdateGrab(const Frame& frame, const Controllers& controllers, float 
       });
     }
   }
+}
+
+// ---- The stats ----------------------------------------------------------------------------------
+
+void VrUi::UpdateStats(const Frame& frame, const Controllers& controllers, float dt)
+{
+  const bool on = g_ActiveConfig.vr_show_stats;
+  const bool on_wrist = g_ActiveConfig.vr_stats_position == 1;
+  if (!on && !m_stats_on)
+    return;
+  if (on != std::exchange(m_stats_on, on) || on_wrist != std::exchange(m_stats_on_wrist, on_wrist))
+    m_stats_to_place = true;
+  if (const s64 time = m_manager->GetRecenterTime();
+      time != m_recenter_seen && frame.time_ns >= time)
+  {
+    m_recenter_seen = time;
+    m_stats_to_place = true;
+  }
+
+  const bool live = on && frame.head_valid && !m_menu_open;
+  const auto& left = controllers[0];
+  m_stats_front = live && !on_wrist;
+  if (live && on_wrist && left.connected && left.aim_pose.valid)
+  {
+    m_wrist_pose = Vis::WristStatsPose(ToPose(left.aim_pose));
+    m_stats_wrist = Vis::WristShown(Vis::WristFacingDeg(m_wrist_pose, frame.head.position),
+                                    m_stats_wrist);
+  }
+  else
+  {
+    m_stats_wrist = false;
+  }
+  if (!m_stats_front)
+  {
+    m_stats_hand = -1;
+    return;
+  }
+
+  std::array<PanelQuad, 1> screens;
+  if (frame.has_screen)
+    screens[0] = m_manager->GetScreenQuad();
+  const Vec3f eye = frame.head.position;
+  if (std::exchange(m_stats_to_place, false))
+  {
+    m_stats_hand = -1;
+    m_stats_window.Place(frame.head, screens);
+  }
+  for (int hand = 0; hand < 2; ++hand)
+  {
+    const auto i = static_cast<std::size_t>(hand);
+    const auto& c = controllers[i];
+    if (m_stats_hand == hand && (!m_grip_down[i] || !c.aim_pose.valid))
+      m_stats_hand = -1;
+    if (m_stats_hand < 0 && m_stats_shown && m_grip_pressed[i] && c.aim_pose.valid)
+    {
+      const QuadHit hit = IntersectQuad(RayFromPose(ToPose(c.aim_pose)), m_stats_window.GetQuad());
+      if (hit.in_bounds)
+      {
+        m_stats_hand = hand;
+        m_stats_window.BeginGrab(eye, hit.point_world);
+        m_manager->PulseHaptics(i);
+      }
+    }
+  }
+  if (m_stats_hand < 0)
+  {
+    m_stats_window.Keep(eye, screens);
+    return;
+  }
+  const auto& c = controllers[static_cast<std::size_t>(m_stats_hand)];
+  m_stats_window.Move(eye, RayFromPose(ToPose(c.aim_pose)), c.thumbstick_x, c.thumbstick_y, dt,
+                      screens);
 }
 
 // ---- The menu -----------------------------------------------------------------------------------
@@ -723,6 +820,7 @@ void VrUi::OpenMenu(const Frame& frame)
   }
   RequestBindings();
   RequestSaves();
+  Perf::PublishLastSecond();
   RefreshMenuState();
   UpdatePause();
 }
@@ -840,6 +938,9 @@ void VrUi::RefreshMenuState()
   settings.immersive = !m_frame.has_screen;
   settings.can_switch_mode =
       mode == OpenXRPresentationMode::Immersive || mode == OpenXRPresentationMode::StereoScreen;
+  settings.can_curve = m_manager->CanCurveScreen();
+  if (m_menu.tab == MenuTab::Stats)
+    m_menu.stats = GetStatsGroups(Perf::GetStats());
   SetLiveSettings();
   QueueReadSettings(m_settings_serial);
 }
@@ -1261,6 +1362,11 @@ void VrUi::Activate(const MenuWidget& widget, int option)
     m_menu.tab = MenuTab::Position;
     m_menu.page = MenuPage::Main;
     break;
+  case MenuItem::TabStats:
+    m_menu.tab = MenuTab::Stats;
+    m_menu.page = MenuPage::Main;
+    m_menu.stats = GetStatsGroups(Perf::GetStats());
+    break;
   case MenuItem::TabControls:
     m_menu.tab = MenuTab::Controls;
     m_menu.page = MenuPage::Main;
@@ -1473,6 +1579,19 @@ void VrUi::UpdateBeams(const Frame& frame, const Controllers& controllers)
       continue;
     }
 
+    // The stats are in front of the screen.
+    if (m_stats_shown && (g_ActiveConfig.vr_pointer_beams || m_stats_hand == static_cast<int>(hand)))
+    {
+      const QuadHit hit = IntersectQuad(ray, m_stats_window.GetQuad());
+      if (hit.in_bounds)
+      {
+        beam.visible = true;
+        beam.dot = true;
+        beam.end = hit.point_world;
+        continue;
+      }
+    }
+
     const bool grabbing = m_grab_hand == static_cast<int>(hand);
     if (!screen.visible || (!g_ActiveConfig.vr_pointer_beams && !grabbing))
       continue;
@@ -1530,6 +1649,47 @@ void VrUi::DrawGrabHint()
 {
   m_toast_boxes[HINT_ROW] = UI::DrawGrabHint(&m_toast_canvas, HINT_ROW);
   m_toasts_dirty = true;
+}
+
+void VrUi::UploadStats()
+{
+  const StatsPicture picture = m_stats_front ? StatsPicture::Front :
+                               m_stats_wrist ? StatsPicture::Wrist :
+                                               StatsPicture::None;
+  const u32 serial = picture == StatsPicture::None ? 0 : Perf::GetStatsSerial();
+  if (serial != 0 && !m_stats_overlay && !m_stats_overlay_failed)
+  {
+    m_stats_overlay = m_create_overlay(STATS_TEX_WIDTH, STATS_TEX_HEIGHT);
+    m_stats_overlay_failed = !m_stats_overlay;
+  }
+  if (!m_stats_overlay)
+    return;
+  if (serial != 0 && (serial != m_stats_serial || picture != m_stats_asked))
+  {
+    Perf::Stats stats = Perf::GetStats();
+    m_stats_serial = stats.serial;
+    m_stats_asked = picture;
+    m_stats_waiting = true;
+    {
+      std::lock_guard lock(m_draw_mutex);
+      m_stats_request.emplace(std::move(stats), picture);
+    }
+    m_draw_cv.notify_one();
+  }
+  if (m_stats_waiting)
+  {
+    std::lock_guard lock(m_draw_mutex);
+    if (m_stats_drawn_picture != StatsPicture::None)
+    {
+      m_stats_overlay->Upload(reinterpret_cast<const u8*>(m_stats_drawn.data()));
+      m_stats_queued = std::exchange(m_stats_drawn_picture, StatsPicture::None);
+      m_stats_waiting =
+          m_stats_drawn_serial != m_stats_serial || m_stats_queued != m_stats_asked;
+    }
+  }
+  m_stats_overlay->Poll();
+  if (m_stats_overlay->HasImage() && !m_stats_overlay->IsBusy())
+    m_stats_image = m_stats_queued;
 }
 
 void VrUi::ShowToast(std::string text, s64 duration_ns)
@@ -1628,6 +1788,7 @@ void VrUi::BuildLayers(XrSpace space, std::size_t game_layers,
   m_toasts->Poll();
   if (m_menu_overlay)
     m_menu_overlay->Poll();
+  UploadStats();
 
   // ---- Quads, in drawing order ----
   m_slots.Begin(static_cast<u32>(game_layers) * 2 + (m_menu_open ? 1 : 0));
@@ -1637,6 +1798,20 @@ void VrUi::BuildLayers(XrSpace space, std::size_t game_layers,
     const PanelQuad quad = GetMenuQuad();
     AddQuad(Group::Ui, *m_menu_overlay, quad.pose, quad.width_m, quad.height_m,
             {{0, 0}, {static_cast<s32>(MENU_TEX_WIDTH), static_cast<s32>(MENU_TEX_HEIGHT)}});
+  }
+
+  m_stats_shown = m_stats_front && m_stats_image == StatsPicture::Front;
+  if (m_stats_shown)
+  {
+    const PanelQuad quad = m_stats_window.GetQuad();
+    AddQuad(Group::Ui, *m_stats_overlay, quad.pose, quad.width_m, quad.height_m,
+            {{0, 0}, {static_cast<s32>(STATS_TEX_WIDTH), static_cast<s32>(STATS_TEX_HEIGHT)}});
+  }
+  else if (m_stats_wrist && m_stats_image == StatsPicture::Wrist)
+  {
+    constexpr float height = Vis::kWristWidth * STATS_WRIST_HEIGHT / STATS_WIDTH;
+    AddQuad(Group::Ui, *m_stats_overlay, m_wrist_pose, Vis::kWristWidth, height,
+            {{0, 0}, {static_cast<s32>(STATS_TEX_WIDTH), STATS_TEX_WRIST_HEIGHT}});
   }
 
   if (m_toasts->HasImage() && !m_toasts->IsBusy())
@@ -1738,13 +1913,15 @@ void VrUi::DrawThread()
   FrameXr::Menu::Kit kit(MENU_PX_PER_DP);
   FrameXr::Menu::Canvas canvas;
   canvas.Init(static_cast<int>(MENU_TEX_WIDTH), static_cast<int>(MENU_TEX_HEIGHT));
+  FrameXr::Menu::Canvas stats_canvas;
   std::map<std::string, std::optional<MenuPicture>> pictures;
 
   std::unique_lock lock(m_draw_mutex);
   while (true)
   {
     m_draw_cv.wait(lock, [this] {
-      return m_draw_exit || m_saves_request || m_mods_request || m_draw_request.has_value();
+      return m_draw_exit || m_saves_request || m_mods_request || m_stats_request ||
+             m_draw_request.has_value();
     });
     if (m_draw_exit)
       return;
@@ -1767,6 +1944,22 @@ void VrUi::DrawThread()
           GameMods::GetItems(list, config.GetGameID(), config.GetRevision());
       lock.lock();
       m_mods.emplace(list, std::move(items));
+      continue;
+    }
+    if (const auto request = std::exchange(m_stats_request, std::nullopt))
+    {
+      lock.unlock();
+      const auto& [stats, picture] = *request;
+      if (stats_canvas.px.empty())
+        stats_canvas.Init(static_cast<int>(STATS_TEX_WIDTH), static_cast<int>(STATS_TEX_HEIGHT));
+      if (picture == StatsPicture::Front)
+        DrawStats(&kit, &stats_canvas, stats);
+      else
+        DrawWristStats(&kit, &stats_canvas, stats);
+      lock.lock();
+      m_stats_drawn = stats_canvas.px;
+      m_stats_drawn_picture = picture;
+      m_stats_drawn_serial = stats.serial;
       continue;
     }
     const MenuState state = std::move(*m_draw_request);

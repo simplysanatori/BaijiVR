@@ -14,6 +14,7 @@
 #include "VideoCommon/VR/FrameUI/MenuSettings.h"
 #include "VideoCommon/VR/FrameUI/PadArt.h"
 #include "VideoCommon/VR/FrameUI/PadEdit.h"
+#include "VideoCommon/VR/FrameUI/Stats.h"
 #include "VideoCommon/VR/FrameUI/list_scroll.h"
 #include "VideoCommon/VR/FrameUI/md3.h"
 
@@ -26,6 +27,7 @@ enum class MenuTab
 {
   Main,
   Position,
+  Stats,
   Controls,
   Mods,
   Settings,
@@ -36,6 +38,7 @@ enum class MenuItem
   None,
   TabMain,
   TabPosition,
+  TabStats,
   TabControls,
   TabMods,
   TabSettings,
@@ -137,6 +140,8 @@ struct MenuState
   std::vector<GameMods::Item> mods;
   GameMods::Progress mods_progress;
 
+  std::vector<StatsGroup> stats;
+
   std::string title;
   bool wii = false;
   bool fast_forward = false;
@@ -187,6 +192,8 @@ struct MenuWidget
     More,  // three dots
     EditPad,
     Chip,
+    StatsTitle,
+    Stat,
   };
 
   Kind kind = Kind::Text;

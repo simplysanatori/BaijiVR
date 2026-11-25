@@ -321,6 +321,10 @@ public:
   // Applied on the OpenXR render thread during LocateViews.
   void RequestRecenter();
 
+  // When the view was last re-centred, by the runtime or by RequestRecenter (it may be a little
+  // ahead). 0: not yet. Any thread.
+  s64 GetRecenterTime() const { return m_recenter_time.load(std::memory_order_acquire); }
+
   // Places the flat screen in front of the view again on the next LocateViews, without moving
   // the VR home position (used when switching into the stereo screen mid-game).
   void RequestFlatScreenReanchor() { m_flat_screen_reanchor_pending.store(true); }
@@ -832,6 +836,7 @@ private:
   // When the reference space moves (SteamVR's recenter): Immersive's home position is taken again
   // from the first views at or after it. 0: not pending.
   std::atomic<XrTime> m_home_reset_time{0};
+  std::atomic<XrTime> m_recenter_time{0};
 
   // Flat panel state. Reference-space events request a video-thread pose refresh; cached pose
   // access is synchronized because OpenXR input sampling runs on the pacing thread. The

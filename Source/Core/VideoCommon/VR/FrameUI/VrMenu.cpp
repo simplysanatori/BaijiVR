@@ -121,6 +121,7 @@ void AddRail(Builder* builder, const MenuState& state)
   static constexpr RailItem ITEMS[] = {
       {MenuTab::Main, MenuItem::TabMain, Icon::kHome, "Main"},
       {MenuTab::Position, MenuItem::TabPosition, Icon::kOpenWith, "Position"},
+      {MenuTab::Stats, MenuItem::TabStats, Icon::kMonitoring, "Stats"},
       {MenuTab::Controls, MenuItem::TabControls, Icon::kStadiaController, "Controls"},
       {MenuTab::Mods, MenuItem::TabMods, Icon::kExtension, "Mods"},
       {MenuTab::Settings, MenuItem::TabSettings, Icon::kSettings, "Settings"},
@@ -726,6 +727,51 @@ void AddMods(Builder* builder, const MenuState& state)
   }
 }
 
+// Azahar for Frame's page: the settings, and under them the numbers in two columns.
+void AddStats(Builder* builder, const MenuState& state)
+{
+  constexpr float COLUMN_GAP = 40.0f;
+  constexpr float COLUMN_W = (RIGHT - LEFT - COLUMN_GAP) * 0.5f;
+  constexpr float TITLE_H = 30.0f;
+  constexpr float STAT_H = 28.0f;
+  constexpr float GROUP_GAP = 12.0f;
+  float top = TOP - 8.0f;
+  for (const SettingRow* const row : GetRows(MenuSection::Stats))
+  {
+    AddRow(builder, state, *row, top);
+    top += ROW_H;
+  }
+  top += 12.0f;
+  if (state.stats.empty())
+  {
+    MenuWidget& none = builder->Add(Kind::Text, MenuItem::None);
+    none.rect = {LEFT, top, RIGHT, top + 34.0f};
+    none.label = "No Stats Yet";
+    return;
+  }
+  // The first group is alone on the left.
+  std::array<float, 2> y{top, top};
+  for (std::size_t i = 0; i < state.stats.size(); ++i)
+  {
+    const std::size_t column = i == 0 ? 0 : 1;
+    const float x = LEFT + (COLUMN_W + COLUMN_GAP) * static_cast<float>(column);
+    MenuWidget& title = builder->Add(Kind::StatsTitle, MenuItem::None);
+    title.rect = {x, y[column], x + COLUMN_W, y[column] + TITLE_H};
+    title.label = state.stats[i].title;
+    y[column] += TITLE_H;
+    for (const StatsRow& row : state.stats[i].rows)
+    {
+      MenuWidget& w = builder->Add(Kind::Stat, MenuItem::None);
+      w.rect = {x, y[column], x + COLUMN_W, y[column] + STAT_H};
+      w.label = row.label;
+      w.value = row.value;
+      w.active = row.changed;
+      y[column] += STAT_H;
+    }
+    y[column] += GROUP_GAP;
+  }
+}
+
 void AddSettings(Builder* builder, const MenuState& state)
 {
   MenuWidget& section = builder->Add(Kind::Segmented, MenuItem::Section);
@@ -748,6 +794,7 @@ bool ShowsGame(MenuTab tab, MenuSection section)
   case MenuTab::Settings:
     return section != MenuSection::General;
   case MenuTab::Main:
+  case MenuTab::Stats:
   case MenuTab::Controls:
   case MenuTab::Mods:
     break;
@@ -769,6 +816,9 @@ std::vector<MenuWidget> VrMenu::Layout(const MenuState& state)
     break;
   case MenuTab::Position:
     AddScreen(&builder, state);
+    break;
+  case MenuTab::Stats:
+    AddStats(&builder, state);
     break;
   case MenuTab::Controls:
     AddControls(&builder, state);
@@ -1074,6 +1124,17 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
                 Tok::kOutlineVariant);
       kit->TextMid(w.rect.x0, w.rect.y0 + 44.0f, Type::RailLabel, Tok::kPrimary, w.label);
       break;
+    case Kind::StatsTitle:
+      kit->TextMid(w.rect.x0, w.rect.Cy(), Type::RailLabel, Tok::kPrimary, w.label);
+      break;
+    case Kind::Stat:
+    {
+      const float room = w.rect.W() - kit->TextWidth(Type::Body, w.label) - 12.0f;
+      kit->TextMid(w.rect.x0, w.rect.Cy(), Type::Body, Tok::kOnSurfaceVariant, w.label);
+      kit->TextMid(w.rect.x1, w.rect.Cy(), Type::Value, w.active ? Tok::kPrimary : Tok::kOnSurface,
+                   kit->Fit(Type::Value, w.value, room), 2);
+      break;
+    }
     case Kind::Dropdown:
       kit->MenuButton(w.control, w.value, w.active, look);
       break;

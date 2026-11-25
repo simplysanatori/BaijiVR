@@ -405,6 +405,8 @@ struct VideoConfig final
   float vr_screen_depth = 100.0f;
   bool vr_pointer_beams = true;
   bool vr_toasts = true;
+  bool vr_show_stats = false;
+  int vr_stats_position = 0;
   float vr_hud_thickness = 0.0f;  // World-space depth (m) spread across a 2D layer's ortho-Z (0 = flat)
   float vr_head_locked_curvature = 0.0f;
   bool vr_dont_clear_screen = false;

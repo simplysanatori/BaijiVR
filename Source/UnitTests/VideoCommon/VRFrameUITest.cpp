@@ -45,6 +45,7 @@ struct Pad
   s64 now = 1'000 * MS;
   bool blocked = false;
   int grab = -1;
+  int stats = -1;
   int menus = 0, stops = 0, saves = 0, loads = 0, resets = 0, fasts = 0, switches = 0;
   bool game_menu = false, game_view = false, game_bumper = false, game_trigger = false;
   bool stopping = false;
@@ -54,7 +55,7 @@ struct Pad
     for (const s64 end = now + ms * MS; now < end; now += 11 * MS)
     {
       seen = raw;
-      const PadEvents e = filter.Update(&seen, now, blocked, grab);
+      const PadEvents e = filter.Update(&seen, now, blocked, grab, stats);
       menus += e.open_menu;
       stops += e.stop;
       saves += e.quick_save;
@@ -79,7 +80,7 @@ std::vector<MenuState> GetPages(bool immersive)
   MenuState base;
   base.settings.immersive = immersive;
   base.settings.has_game = true;
-  for (const MenuTab tab : {MenuTab::Main, MenuTab::Controls, MenuTab::Mods})
+  for (const MenuTab tab : {MenuTab::Main, MenuTab::Stats, MenuTab::Controls, MenuTab::Mods})
   {
     for (const int page : {0, 1, 2})
     {
@@ -108,7 +109,7 @@ std::vector<MenuState> GetPages(bool immersive)
       pages.push_back(s);
     }
   }
-  for (std::size_t i = 0; i < NUM_SECTIONS; ++i)
+  for (std::size_t i = 0; i < static_cast<std::size_t>(MenuSection::Stats); ++i)
   {
     MenuState s = base;
     s.section = static_cast<MenuSection>(i);
@@ -331,6 +332,47 @@ TEST(VRFrameUI, GrabKeepsTheStickFromTheGame)
   EXPECT_EQ(pad.seen[1].thumbstick_y, 1.0f);
 }
 
+TEST(VRFrameUI, StatsKeepTheGripAndTheStickFromTheGame)
+{
+  Pad p;
+  p.raw[0].connected = p.raw[1].connected = true;
+  p.Run(50);
+  for (auto& c : p.raw)
+  {
+    c.squeeze_value = 1.0f;
+    c.thumbstick_x = 0.7f;
+    c.thumbstick_y = -0.9f;
+  }
+  p.raw[0].dpad_up = true;
+  p.raw[1].trigger_value = 0.8f;
+  p.raw[1].screen_hit.valid = true;
+  p.stats = 1;
+  p.Run(50);
+  EXPECT_EQ(p.seen[1].squeeze_value, 0.0f);
+  EXPECT_EQ(p.seen[1].thumbstick_x, 0.0f);
+  EXPECT_EQ(p.seen[1].thumbstick_y, 0.0f);
+  EXPECT_FALSE(p.seen[1].screen_hit.valid);
+  // The other hand, the D-Pad and the rest are the game's.
+  EXPECT_EQ(p.seen[0].squeeze_value, 1.0f);
+  EXPECT_EQ(p.seen[0].thumbstick_x, 0.7f);
+  EXPECT_TRUE(p.seen[0].dpad_up);
+  EXPECT_EQ(p.seen[1].trigger_value, 0.8f);
+
+  // Let go of, what is still held is not for the game.
+  p.stats = -1;
+  p.Run(50);
+  EXPECT_EQ(p.seen[1].squeeze_value, 0.0f);
+  EXPECT_EQ(p.seen[1].thumbstick_y, 0.0f);
+  p.raw[1].squeeze_value = 0.0f;
+  p.raw[1].thumbstick_x = p.raw[1].thumbstick_y = 0.0f;
+  p.Run(50);
+  p.raw[1].squeeze_value = 1.0f;
+  p.raw[1].thumbstick_y = -0.9f;
+  p.Run(50);
+  EXPECT_EQ(p.seen[1].squeeze_value, 1.0f);
+  EXPECT_EQ(p.seen[1].thumbstick_y, -0.9f);
+}
+
 TEST(VRFrameUI, ResetIsAHold)
 {
   Pad pad;
@@ -397,12 +439,13 @@ TEST(VRFrameUI, Rail)
     EXPECT_GE(w.rect.y0, 0.0f);
     EXPECT_LE(w.rect.y1, VrMenu::HEIGHT);
   }
-  EXPECT_EQ(labels, (std::vector<std::string>{"Main", "Position", "Controls", "Mods", "Settings"}));
+  EXPECT_EQ(labels, (std::vector<std::string>{"Main", "Position", "Stats", "Controls", "Mods",
+                                              "Settings"}));
 }
 
 TEST(VRFrameUI, TheGameGoesOnWhereItsSettingsShow)
 {
-  for (const MenuTab tab : {MenuTab::Main, MenuTab::Controls, MenuTab::Mods})
+  for (const MenuTab tab : {MenuTab::Main, MenuTab::Stats, MenuTab::Controls, MenuTab::Mods})
   {
     for (const MenuSection section : {MenuSection::General, MenuSection::Graphics,
                                       MenuSection::Immersive})
@@ -531,7 +574,7 @@ TEST(VRFrameUI, MenuTextFits)
 
 TEST(VRFrameUI, EveryRowCanBeScrolledTo)
 {
-  for (std::size_t i = 0; i < NUM_SECTIONS; ++i)
+  for (std::size_t i = 0; i < static_cast<std::size_t>(MenuSection::Stats); ++i)
   {
     MenuState s;
     s.section = static_cast<MenuSection>(i);
@@ -676,6 +719,15 @@ TEST(VRFrameUI, GreyedRowsSayWhy)
   EXPECT_EQ(lock->tooltip, "Only in Stereoscopic 3D.");
   EXPECT_EQ(VrMenu::At(widgets, 400.0f, lock->rect.Cy()), nullptr);
   EXPECT_EQ(VrMenu::At(widgets, 400.0f, lock->rect.Cy(), true), lock);
+
+  const SettingRow& curve = GetSettingRow(SettingId::ScreenCurve);
+  EXPECT_EQ(GetLock(curve, s.settings), Lock::ScreenOnly);
+  s.settings.immersive = false;
+  EXPECT_EQ(GetLock(curve, s.settings), Lock::None);
+  s.settings.can_curve = false;
+  EXPECT_EQ(GetLock(curve, s.settings), Lock::CannotCurve);
+  EXPECT_EQ(ExplainLock(Lock::CannotCurve, curve), "This VR runtime cannot curve the screen.");
+  EXPECT_EQ(GetLock(GetSettingRow(SettingId::Size), s.settings), Lock::None);
 
   s.settings.Set(SettingId::Autosave, 0.0f);
   EXPECT_EQ(GetLock(GetSettingRow(SettingId::AutosaveKeep), s.settings), Lock::AutosaveOff);

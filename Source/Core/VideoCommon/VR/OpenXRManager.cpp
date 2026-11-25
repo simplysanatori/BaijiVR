@@ -2930,6 +2930,7 @@ bool OpenXRManager::PollEvents()
       if (ev.referenceSpaceType == m_reference_space_type)
       {
         m_home_reset_time.store(std::max<XrTime>(ev.changeTime, 1), std::memory_order_release);
+        m_recenter_time.store(std::max<XrTime>(ev.changeTime, 1), std::memory_order_release);
       }
       break;
     }
@@ -3545,6 +3546,8 @@ bool OpenXRManager::LocateViews()
 void OpenXRManager::RequestRecenter()
 {
   m_recenter_requested.store(true, std::memory_order_release);
+  m_recenter_time.store(m_predicted_display_time_snapshot.load(std::memory_order_acquire),
+                        std::memory_order_release);
 }
 
 void OpenXRManager::RefreshFlatScreenPose()

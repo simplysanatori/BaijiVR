@@ -77,18 +77,23 @@ enum class SettingId : int
   HudDepth,
   RemoveBars,
 
+  // Stats
+  ShowStats,
+  StatsPosition,
+
   Count,
 };
 
 constexpr std::size_t NUM_SETTINGS = static_cast<std::size_t>(SettingId::Count);
 
-// Where the rows are: the Position tab, or a section of the Settings tab.
+// Where the rows are: the Position tab, a section of the Settings tab, or the Stats tab.
 enum class MenuSection
 {
   Screen,
   General,
   Graphics,
   Immersive,
+  Stats,
   Count,
 };
 
@@ -178,6 +183,7 @@ struct SettingState
   bool has_game = false;
   bool immersive = false;
   bool can_switch_mode = true;
+  bool can_curve = true;  // the VR runtime
 
   // The running game's, or the global one, as chosen.
   float Get(SettingId id) const;
@@ -198,6 +204,7 @@ enum class Lock
   DisplayFixed,
   AutosaveOff,
   SwitchedOff,
+  CannotCurve,
 };
 
 const std::vector<SettingRow>& GetSettingRows();

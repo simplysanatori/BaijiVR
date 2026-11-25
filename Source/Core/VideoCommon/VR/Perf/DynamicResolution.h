@@ -5,6 +5,8 @@
 
 #ifdef ENABLE_VR
 
+#include <optional>
+
 #include "VideoCommon/VR/Perf/VRPerf.h"
 
 struct VideoConfig;
@@ -21,6 +23,29 @@ void OnSecond(const Perf::Second& second);
 // Video thread, at the end of each frame (UpdateActiveConfig): the EFB scale to draw at. The setting in
 // flat Vulkan, and in Stereoscopic 3D with Dynamic Resolution off.
 int GetEFBScale(const VideoConfig& config);
+
+// For the stats.
+struct Status
+{
+  struct Change
+  {
+    int from = 0;
+    int to = 0;
+    double ago = 0.0;  // seconds
+  };
+
+  // On, and in a display it works in.
+  bool on = false;
+  // The scales it is between. 0: not known yet.
+  int floor = 0;
+  int top = 0;
+  // The last change of the scale in use, for whatever reason, since the game or the display began
+  // and as far as it was watched (OnSecond).
+  std::optional<Change> change;
+};
+
+// Host thread.
+Status GetStatus();
 }  // namespace VR::DynamicResolution
 
 #endif  // ENABLE_VR

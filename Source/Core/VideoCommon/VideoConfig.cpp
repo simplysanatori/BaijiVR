@@ -286,6 +286,8 @@ void VideoConfig::Refresh()
   vr_screen_depth = std::clamp(Config::Get(Config::GFX_VR_SCREEN_DEPTH), 0.0f, 100.0f);
   vr_pointer_beams = Config::Get(Config::GFX_VR_POINTER_BEAMS);
   vr_toasts = Config::Get(Config::GFX_VR_TOASTS);
+  vr_show_stats = Config::Get(Config::GFX_VR_SHOW_STATS);
+  vr_stats_position = Config::Get(Config::GFX_VR_STATS_POSITION);
   vr_head_locked_curvature = std::clamp(Config::Get(Config::GFX_VR_HEAD_LOCKED_CURVATURE),
                                         Config::GFX_VR_HEAD_LOCKED_CURVATURE_MIN,
                                         Config::GFX_VR_HEAD_LOCKED_CURVATURE_MAX);

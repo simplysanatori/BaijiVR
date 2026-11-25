@@ -220,6 +220,9 @@ extern const Info<int> GFX_VR_SCREEN_CURVE;
 extern const Info<float> GFX_VR_SCREEN_DEPTH;
 extern const Info<bool> GFX_VR_POINTER_BEAMS;
 extern const Info<bool> GFX_VR_TOASTS;
+extern const Info<bool> GFX_VR_SHOW_STATS;
+// 0: in front of you, 1: on the left wrist.
+extern const Info<int> GFX_VR_STATS_POSITION;
 extern const Info<float> GFX_VR_HEAD_LOCKED_CURVATURE;
 extern const Info<bool> GFX_VR_DONT_CLEAR_SCREEN;
 extern const Info<bool> GFX_VR_LOAD_CUSTOM_SHADERS;

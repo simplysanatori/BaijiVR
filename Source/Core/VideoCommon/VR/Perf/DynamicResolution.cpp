@@ -23,6 +23,7 @@
 #include "VideoCommon/Present.h"
 #include "VideoCommon/VR/OpenXRManager.h"
 #include "VideoCommon/VR/Perf/DynamicResolutionController.h"
+#include "VideoCommon/VR/Perf/StatsCounters.h"
 #include "VideoCommon/VideoBackendBase.h"
 #include "VideoCommon/VideoConfig.h"
 
@@ -69,6 +70,9 @@ std::atomic<bool> s_stopped{false};
 CeilingHold s_ceiling;
 ScaleStore s_store;
 bool s_store_loaded = false;
+Perf::ScaleWatch s_watch;
+std::string s_watched_game;
+const Mode* s_watched_mode = nullptr;
 Common::EventHook s_state_hook;
 
 constexpr u64 GAP_US = 3'000'000;
@@ -128,6 +132,28 @@ int GetFloor(const VideoConfig& config)
   if (config.iEFBScale != EFB_SCALE_AUTO_INTEGRAL)
     return config.iEFBScale;
   return g_presenter ? static_cast<int>(g_presenter->AutoIntegralScale()) : 0;
+}
+
+// The same for the mode that is drawn. Host thread.
+int GetMaxUp(const Mode& mode, const VideoConfig& config, int floor)
+{
+  const int max_up = GetMaxUp(config, floor);
+  return mode.immersive ?
+             ImmersiveUp(floor,
+                         EyeCeiling(s_eye_width.load(std::memory_order_relaxed),
+                                    s_eye_height.load(std::memory_order_relaxed)),
+                         max_up) :
+             max_up;
+}
+
+void Watch(const Mode* mode, const std::string& game, const Perf::Second& second)
+{
+  if (mode != s_watched_mode || game != s_watched_game)
+    s_watch.Reset();
+  s_watched_mode = mode;
+  s_watched_game = game;
+  if (second.running)
+    s_watch.Update(second.efb_scale, Common::Timer::NowUs());
 }
 
 double GetScreenCoverage()
@@ -226,10 +252,14 @@ void OnSecond(const Perf::Second& second)
     });
   }
   if (s_stopped.exchange(false, std::memory_order_relaxed))
+  {
     s_screen.game_floor = s_immersive.game_floor = 0;
+    s_watch.Reset();
+  }
 
   const VideoConfig& config = g_ActiveConfig;
   Mode* const mode = GetMode(config);
+  Watch(mode, SConfig::GetInstance().GetGameID(), second);
   if (!config.vr_dynamic_resolution || !mode)
     return;
   const bool immersive = mode->immersive;
@@ -243,9 +273,7 @@ void OnSecond(const Perf::Second& second)
 
   const int eye_w = s_eye_width.load(std::memory_order_relaxed);
   const int eye_h = s_eye_height.load(std::memory_order_relaxed);
-  int max_up = GetMaxUp(config, floor);
-  if (immersive)
-    max_up = ImmersiveUp(floor, EyeCeiling(eye_w, eye_h), max_up);
+  const int max_up = GetMaxUp(*mode, config, floor);
   const std::string& game = SConfig::GetInstance().GetGameID();
   const std::string key = StoreKey(game, immersive);
   const int last_up = mode->up.load(std::memory_order_relaxed);
@@ -312,6 +340,26 @@ void OnSecond(const Perf::Second& second)
   }
   if (max_up > 0 && mode->controller.IsSettled())
     Remember(key, floor + mode->controller.Level());
+}
+
+Status GetStatus()
+{
+  const VideoConfig& config = g_ActiveConfig;
+  const Mode* const mode = GetMode(config);
+  Status status;
+  status.on = config.vr_dynamic_resolution && mode;
+  const int floor = status.on ? mode->floor.load(std::memory_order_relaxed) : 0;
+  if (floor > 0)
+  {
+    status.floor = floor;
+    status.top = floor + GetMaxUp(*mode, config, floor);
+  }
+  if (const auto& change = s_watch.GetChange())
+  {
+    status.change = {change->from, change->to,
+                     static_cast<double>(Common::Timer::NowUs() - change->at_us) * 1e-6};
+  }
+  return status;
 }
 }  // namespace VR::DynamicResolution
 

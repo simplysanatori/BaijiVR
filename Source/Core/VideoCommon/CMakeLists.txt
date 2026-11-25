@@ -326,6 +326,8 @@ if(ENABLE_VR)
     VR/FrameUI/PadFilter.h
     VR/FrameUI/ScreenPlacement.cpp
     VR/FrameUI/ScreenPlacement.h
+    VR/FrameUI/Stats.cpp
+    VR/FrameUI/Stats.h
     VR/FrameUI/VrMenu.cpp
     VR/FrameUI/VrMenu.h
     VR/FrameUI/VrUi.cpp
@@ -335,6 +337,8 @@ if(ENABLE_VR)
     VR/FrameUI/list_scroll.cpp
     VR/FrameUI/list_scroll.h
     VR/FrameUI/md3.cpp
+    VR/FrameUI/stats_place.cpp
+    VR/FrameUI/stats_place.h
     VR/FrameUI/stb_truetype.cpp
     VR/FrameUI/ui_canvas.cpp
     VR/FrameUI/ui_ttf.cpp
@@ -344,6 +348,9 @@ if(ENABLE_VR)
     VR/Perf/DynamicResolution.h
     VR/Perf/PerfTest.cpp
     VR/Perf/PerfTest.h
+    VR/Perf/Stats.cpp
+    VR/Perf/Stats.h
+    VR/Perf/StatsCounters.h
     VR/Perf/VRPerf.cpp
     VR/Perf/VRPerf.h
   )
