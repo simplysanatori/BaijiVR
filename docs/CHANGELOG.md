@@ -33,7 +33,7 @@ Baiji's own changelog is in [its README](../README.upstream.md).
 ### Mods and games
 
 - Mods, patches, cheats and texture packs in the VR menu and in a game's properties.
-- Box art for GameCube and Wii games in the VR menu, and a roomier Grid View.
+- Box art for GameCube and Wii games in the VR menu, and a roomier Grid View. The covers come from libretro-thumbnails. **Download Game Covers** is off; adding a directory under **Paths**, or a new game found by a refresh, asks **Download Thumbnails?** for those games.
 
 ### Windows
 

@@ -50,8 +50,11 @@
 - A dual-core FIFO reset must not run beside the GPU thread: `CommandProcessor` flushes it after reads are turned
   off and before CTRL turns them off, and `ProcessorInterface` waits for the buffer reset. Path of Radiance's own
   GPU watchdog, which halts the game, is patched off in `GFEE01.ini`.
-- Box art is `UICommon/GameCovers.*`, cached per game ID in `Cache/GameCovers/`, for the VR UI. The Qt list and
-  Grid View use the games' banners.
+- Box art is `UICommon/GameCovers.*`, cached per game ID in `Cache/GameCovers/`, for the VR UI, from
+  libretro-thumbnails only. `MAIN_USE_GAME_COVERS` (off) is the automatic download; covers on disk are used either way.
+  A directory the player adds (`Settings::AddPath`, `PathAddedByPlayer`) and games a rescan finds that the game
+  cache did not know are counted on the tracker's thread (`GameTracker`); "Download Thumbnails?" is asked once for the
+  games lacking a cover (never in a game or batch mode), and `DownloadCovers` fetches them there. The Qt list and Grid View use the games' banners.
 - In Game Mode every Qt window is fitted to the main window by `DolphinQt/GameModeWindows.*`
   (`Common/WindowFit.h`). The default style is the dark gray Fusion one.
 - Game Mode's window: `DolphinQt/GamepadNavigation.*` is the controller in it (`Common/ListNav.h` has the rules), and

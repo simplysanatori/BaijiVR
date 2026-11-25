@@ -58,6 +58,16 @@ These are the **VR** settings. Everything else is Dolphin's own. The VR menu use
 
 The **Stats** tab of the VR menu shows the last second the game ran, with **Show Stats** off too.
 
+## Game Covers
+
+Under **Interface**.
+
+| Setting | Default |
+|---|---|
+| **Download Game Covers** | off |
+
+On, the covers for the games in the list are downloaded from libretro-thumbnails on GitHub. The request sees your IP address and the names of the games. Off, covers already on your computer are used, and adding a directory under **Paths**, or a new game found by a refresh, asks **Download Thumbnails?** for those games.
+
 ## Autosave
 
 | Setting | Default |
