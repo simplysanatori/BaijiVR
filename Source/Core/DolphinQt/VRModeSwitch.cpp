@@ -347,8 +347,12 @@ void VRModeSwitch::BeforeBoot(const BootParameters& boot)
   {
     m_recipe = MakeRecipe(boot);
     Disarm();
+    const ModeSwitch::Displays displays = GetDisplays();
+    // A VR display was chosen in the settings: Flat is no longer what was switched to.
+    if (displays.base != OpenXRPresentationMode::Vulkan)
+      Config::SetBase(LAST_VR_MODE, OpenXRPresentationMode::Vulkan);
     // Flat is for every game, but not over a display on the command line.
-    if (ModeSwitch::IsFlatForAll(GetDisplays()) &&
+    if (ModeSwitch::IsFlatForAll(displays) &&
         Config::GetActiveLayerForConfig(Config::GFX_VR_PRESENTATION_MODE.GetLocation()) !=
             Config::LayerType::CommandLine)
     {
@@ -394,8 +398,12 @@ std::string VRModeSwitch::GetRefusal() const
 bool VRModeSwitch::SaveState()
 {
   File::CreateFullPath(m_state_path);
-  // Not moved to the "undo save state" file.
-  File::Delete(m_state_path, File::IfAbsentBehavior::NoConsoleWarning);
+  // Not moved to the "undo save state" file. One that was kept is the player's.
+  if (File::Exists(m_state_path) &&
+      !File::Rename(m_state_path, m_state_path.substr(0, m_state_path.size() - 4) + ".old.sav"))
+  {
+    return false;  // else it would pass for this one
+  }
 
   State::SaveOptions options;
   options.compress = false;  // faster, and its size is known
