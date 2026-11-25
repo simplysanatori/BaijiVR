@@ -4,11 +4,10 @@ The short version is in the [README](../Readme.md). This guide has the rest: ins
 
 ## Status and known issues
 
-There is no release of this fork yet. The changes are listed in [CHANGELOG.md](CHANGELOG.md).
+0.9.0 is a beta. The changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 Known issues:
 
-- The new work is tested on a desktop with a simulated headset. Testing on the Frame is in progress.
 - Fire Emblem: Path of Radiance: the watchdog patch is for the US version only.
 - SteamOS places the sound at Baiji's window while it is visible. There is no per-app switch.
 

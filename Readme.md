@@ -93,8 +93,6 @@ Off by default: **Dynamic Resolution**, **Pin Emulation Threads**, **Performance
 
 ## Install
 
-There is no download yet; testing on the Frame is in progress. It will come as:
-
 - [Frametanium](https://github.com/Cogential/frametanium): add `simplysanatori/BaijiVR`.
 - [FrameDrop](https://framedropvr.com): [Install with FrameDrop](https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fsimplysanatori%2FBaijiVR%2Freleases%2Flatest%2Fdownload%2Fbaijivr.framedrop.json).
 - By hand: download `baijivr-<version>-linux-arm64.tar.gz` from [Releases](https://github.com/simplysanatori/BaijiVR/releases). In Konsole on the Frame:
@@ -157,7 +155,7 @@ In Konsole on the Frame, turn on the detailed log, then play until the problem h
 touch ~/.config/baiji/debug-logging
 ```
 
-Logs: `~/.local/share/baiji/Logs`. Check them before sharing. Don't report this fork's problems to Dolphin or Baiji.
+Logs: `~/.local/share/baiji/Logs`. Check them before sharing, and attach them to an [issue](https://github.com/simplysanatori/BaijiVR/issues). Don't report this fork's problems to Dolphin or Baiji.
 
 ## Roadmap (planned)
 
