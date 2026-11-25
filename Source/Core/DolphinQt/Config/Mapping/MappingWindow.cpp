@@ -33,6 +33,7 @@
 #include "Core/HW/SI/SI.h"
 #include "Core/HW/SI/SI_DeviceAMBaseboard.h"
 #include "Core/HW/Wiimote.h"
+#include "Core/VRWiiController.h"
 
 #include "DolphinQt/Config/Mapping/FreeLookGeneral.h"
 #include "DolphinQt/Config/Mapping/FreeLookRotation.h"
@@ -78,7 +79,6 @@
 
 namespace
 {
-constexpr const char* STEAM_FRAME_WIIMOTE_DEFAULT_PROFILE = "Steam Frame Wii Remote + Nunchuk.ini";
 constexpr const char* STEAM_FRAME_GCPAD_DEFAULT_PROFILE = "Steam Frame GameCube.ini";
 constexpr const char* STEAM_FRAME_HOTKEY_DEFAULT_PROFILE = "Steam Frame.ini";
 constexpr const char* OPENXR_CONTROLLER_DEVICE = "OpenXR/0/OpenXR Controller";
@@ -102,6 +102,13 @@ MappingWindow::MappingWindow(QWidget* parent, Type type, int port_num)
     timer->setInterval(1000 / refresh_rate);
 
     const auto lock = GetController()->GetStateLock();
+    // Not by this window: the game that runs has another mapping, or it was changed in the VR menu.
+    if (const u32 generation = m_config->GetGeneration(); generation != m_generation)
+    {
+      m_generation = generation;
+      UpdateTitle();
+      emit ConfigChanged();
+    }
     emit Update();
 
 #ifdef ENABLE_VR
@@ -584,7 +591,7 @@ void MappingWindow::SetMappingType(MappingWindow::Type type)
     auto* extension = new WiimoteEmuExtension(this);
     auto* extension_motion_simulation = new WiimoteEmuExtensionMotionSimulation(this);
     widget = new WiimoteEmuGeneral(this, extension);
-    setWindowTitle(tr("Wii Remote %1").arg(GetPort() + 1));
+    UpdateTitle();
     AddWidget(tr("General and Options"), widget);
     if (!m_is_openxr_wiimote)
       AddWidget(tr("Motion Simulation"), new WiimoteEmuMotionControl(this));
@@ -709,6 +716,21 @@ QWidget* MappingWindow::AddWidget(const QString& name, QWidget* widget)
   return wrapper;
 }
 
+void MappingWindow::UpdateTitle()
+{
+  if (m_mapping_type != Type::MAPPING_WIIMOTE_EMU)
+    return;
+  const auto own =
+      GetPort() == 0 ? VRWiiController::GetOwnMapping() : VRWiiController::Choice::None;
+  QString title = tr("Wii Remote %1").arg(GetPort() + 1);
+  if (own != VRWiiController::Choice::None)
+  {
+    const char* const name = VRWiiController::NAMES[static_cast<std::size_t>(own)];
+    title = tr("%1 - %2 of This Game").arg(title, QString::fromLatin1(name));
+  }
+  setWindowTitle(title);
+}
+
 int MappingWindow::GetPort() const
 {
   return m_port;
@@ -735,11 +757,11 @@ void MappingWindow::OnDefaultFieldsPressed()
 
 bool MappingWindow::LoadOpenXRDefaultProfile()
 {
-  const char* profile_name = nullptr;
+  std::string profile_name;
   switch (m_mapping_type)
   {
   case Type::MAPPING_WIIMOTE_EMU:
-    profile_name = STEAM_FRAME_WIIMOTE_DEFAULT_PROFILE;
+    profile_name = VRWiiController::GetDefaultProfile(GetPort());
     break;
   case Type::MAPPING_GCPAD:
     profile_name = STEAM_FRAME_GCPAD_DEFAULT_PROFILE;
@@ -773,6 +795,8 @@ void MappingWindow::OnClearFieldsPressed()
 
   // Keep the currently selected device.
   const auto default_device = m_controller->GetDefaultDevice();
+  if (m_mapping_type == Type::MAPPING_WIIMOTE_EMU)
+    VRWiiController::KeepChoice(GetPort(), &sec);
   m_controller->LoadConfig(&sec);
   m_controller->SetDefaultDevice(default_device);
 

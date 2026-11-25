@@ -56,13 +56,19 @@ constexpr std::array<TargetInfo, NUM_PAD_TARGETS> TARGETS{{
     {"C", PadControl::C},
     {"Z", PadControl::NunchukZ},
     {"Nunchuk Stick", PadControl::NunchukStick},
+    {"ZL", PadControl::ZL},
+    {"ZR", PadControl::ZR},
+    {"Left Stick", PadControl::LeftStick},
+    {"Right Stick", PadControl::RightStick},
 }};
 
 // The chips on the left (above) and on the right (below), as their controls are on the drawing.
+// `over`: above the ones above.
 struct Sides
 {
   std::vector<PadTarget> first;
   std::vector<PadTarget> second;
+  std::vector<PadTarget> over{};
 };
 
 Sides GetSides(PadKind kind)
@@ -73,11 +79,17 @@ Sides GetSides(PadKind kind)
   case PadKind::GameCube:
     return {{L, Start, Stick, DPadUp, DPadLeft, DPadRight, DPadDown}, {R, Z, Y, X, A, B, CStick}};
   case PadKind::WiiRemote:
-    return {{A, Minus, One}, {B, Home, Plus, Two, Shake}};
+    return {{DPadUp, DPadLeft, DPadRight, DPadDown, A, Minus, One}, {B, Home, Plus, Two, Shake}};
   case PadKind::WiiNunchuk:
-    return {{NunchukStick, C, NunchukZ}, {B, A, Home, Plus, Minus, One, Two, Shake}};
+    return {{NunchukStick, C, NunchukZ, DPadUp, DPadLeft, DPadRight, DPadDown},
+            {B, A, Home, Plus, Minus, One, Two, Shake}};
   case PadKind::WiiRemoteSideways:
-    return {{A, Plus, One}, {B, Home, Minus, Two, Shake}};
+    return {{A, Plus, One},
+            {B, Home, Minus, Two, Shake},
+            {DPadUp, DPadLeft, DPadRight, DPadDown}};
+  case PadKind::WiiClassic:
+    return {{ZL, L, Minus, DPadUp, DPadLeft, DPadRight, DPadDown, LeftStick},
+            {ZR, R, Home, Plus, X, Y, A, B, RightStick}};
   }
   return {};
 }
@@ -162,7 +174,8 @@ std::array<std::string, 2> GetPushes(const Controllers& controllers)
 bool IsStick(PadTarget target)
 {
   return target == PadTarget::Stick || target == PadTarget::CStick ||
-         target == PadTarget::NunchukStick;
+         target == PadTarget::NunchukStick || target == PadTarget::LeftStick ||
+         target == PadTarget::RightStick;
 }
 
 const char* GetTargetName(PadTarget target)
@@ -177,13 +190,14 @@ PadControl GetTargetControl(PadTarget target)
 
 const std::vector<PadTarget>& GetTargets(PadKind kind)
 {
-  static const std::array<std::vector<PadTarget>, 4> targets = [] {
-    std::array<std::vector<PadTarget>, 4> all;
+  static const std::array<std::vector<PadTarget>, NUM_PAD_KINDS> targets = [] {
+    std::array<std::vector<PadTarget>, NUM_PAD_KINDS> all;
     for (std::size_t i = 0; i < all.size(); ++i)
     {
       const Sides sides = GetSides(static_cast<PadKind>(i));
       all[i] = sides.first;
       all[i].insert(all[i].end(), sides.second.begin(), sides.second.end());
+      all[i].insert(all[i].end(), sides.over.begin(), sides.over.end());
     }
     return all;
   }();
@@ -351,13 +365,6 @@ std::vector<PadTarget> PadEdit::TakeChanges()
   return std::exchange(m_changes, {});
 }
 
-bool PadEdit::CanUse(PadInput input) const
-{
-  // It is the Wii Remote's, too, whatever else it is given.
-  const bool dpad = input >= PadInput::DPadUp && input <= PadInput::DPadRight;
-  return m_kind == PadKind::GameCube || !dpad;
-}
-
 void PadEdit::Change(PadTarget target, PadBinding binding)
 {
   m_view.table[static_cast<std::size_t>(target)] = std::move(binding);
@@ -366,7 +373,7 @@ void PadEdit::Change(PadTarget target, PadBinding binding)
 
 PadEdit::Event PadEdit::Press(PadInput input)
 {
-  if (!IsListening() || IsStick(m_view.listening) || !CanUse(input))
+  if (!IsListening() || IsStick(m_view.listening))
     return Event::None;
 
   const PadTarget target = m_view.listening;
@@ -444,11 +451,8 @@ std::vector<PadChip> GetPadChips(PadKind kind, const Rect& area)
   std::vector<PadChip> chips;
   if (kind == PadKind::WiiRemoteSideways)
   {
-    for (const bool above : {true, false})
-    {
-      const std::vector<PadTarget>& targets = above ? sides.first : sides.second;
+    const auto add = [&](const std::vector<PadTarget>& targets, float y, bool above) {
       const auto count = static_cast<float>(targets.size());
-      const float y = above ? area.y0 : area.y1 - PAD_CHIP_H;
       float x = area.Cx() - (count * ROW_CHIP_W + (count - 1.0f) * CHIP_GAP) * 0.5f;
       for (const PadTarget target : targets)
       {
@@ -456,7 +460,10 @@ std::vector<PadChip> GetPadChips(PadKind kind, const Rect& area)
         chips.push_back({target, rect, rect.Cx(), above ? rect.y1 : rect.y0});
         x += ROW_CHIP_W + CHIP_GAP;
       }
-    }
+    };
+    add(sides.over, area.y0, true);
+    add(sides.first, area.y0 + PAD_CHIP_H + CHIP_GAP, true);
+    add(sides.second, area.y1 - PAD_CHIP_H, false);
     return chips;
   }
   for (const bool left : {true, false})
@@ -481,7 +488,7 @@ Rect GetPadEditArt(PadKind kind, const Rect& area)
   if (kind == PadKind::WiiRemoteSideways)
   {
     const float inset = PAD_CHIP_H + ART_GAP * 2.0f;
-    return {area.x0, area.y0 + inset, area.x1, area.y1 - inset};
+    return {area.x0, area.y0 + PAD_CHIP_H + CHIP_GAP + inset, area.x1, area.y1 - inset};
   }
   return {area.x0 + CHIP_W + ART_GAP, area.y0, area.x1 - CHIP_W - ART_GAP, area.y1};
 }

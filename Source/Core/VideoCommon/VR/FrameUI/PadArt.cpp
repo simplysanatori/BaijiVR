@@ -271,6 +271,15 @@ public:
     return Rounded(corners, rounding);
   }
 
+  // An octagon that stands on a corner.
+  Contours Gate(Point c, float r, float rounding) const
+  {
+    std::vector<Point> corners;
+    for (int i = 0; i < 8; ++i)
+      corners.push_back(c + Direction(PI * static_cast<float>(i) / 4.0f) * r);
+    return Rounded(corners, rounding);
+  }
+
   // A polygon with rounded corners.
   Contours Rounded(const std::vector<Point>& corners, float radius) const
   {
@@ -734,6 +743,96 @@ void DrawRemoteAndNunchuk(const Painter& p, const PadLabels& labels)
   DrawRemote(p.UprightAt(REMOTE_AT), labels);
 }
 
+// --- The Classic Controller, 1590 units wide: the middle of its width at 0 ---
+
+constexpr Point CLASSIC_L{-505.0f, 46.0f};
+constexpr Point CLASSIC_ZL{-195.0f, 24.0f};
+constexpr Point CLASSIC_R{505.0f, 46.0f};
+constexpr Point CLASSIC_ZR{195.0f, 24.0f};
+constexpr Point CLASSIC_DPAD{-486.0f, 363.0f};
+constexpr Point CLASSIC_MINUS{-118.0f, 367.0f};
+constexpr Point CLASSIC_HOME{0.0f, 367.0f};
+constexpr Point CLASSIC_PLUS{118.0f, 367.0f};
+constexpr Point CLASSIC_X{495.0f, 262.0f};
+constexpr Point CLASSIC_Y{337.0f, 368.0f};
+constexpr Point CLASSIC_A{643.0f, 368.0f};
+constexpr Point CLASSIC_B{483.0f, 471.0f};
+constexpr Point CLASSIC_LEFT_STICK{-211.0f, 600.0f};
+constexpr Point CLASSIC_RIGHT_STICK{211.0f, 600.0f};
+
+void DrawClassic(const Painter& p, const PadLabels& labels)
+{
+  using enum PadControl;
+  const auto whole = [&p](std::string_view half) {
+    Contour shape = p.Path(half)[0];
+    const Contour mirrored = p.Path(half, true)[0];
+    shape.insert(shape.end(), mirrored.rbegin(), mirrored.rend());
+    return Contours{std::move(shape)};
+  };
+
+  // The cable.
+  Solid(p, p.Path("M -20 740 L -20 866 L 20 866 L 20 740"), BODY);
+
+  // L and R, ZL and ZR, then the clip, behind the body.
+  for (const bool right : {false, true})
+  {
+    Solid(p,
+          p.Path("M -636 130 L -638 92 C -637 84 -632 79 -624 74 C -560 38 -470 12 -372 4 "
+                 "C -362 3 -357 8 -357 16 L -356 120",
+                 right),
+          PART);
+    Detail(p, p.Path("M -634 100 C -560 58 -465 32 -358 24", right));
+    Solid(p,
+          p.Path("M -250 70 L -246 30 C -243 16 -226 10 -205 9 L -168 9 C -150 10 -143 18 -141 30 "
+                 "L -138 70",
+                 right),
+          PART);
+  }
+  Solid(p, p.RoundRect(-26.0f, 8.0f, 26.0f, 90.0f, 16.0f), PART);
+
+  // The shell behind the face.
+  Solid(p, whole("M 0 54 C -110 54 -180 42 -270 42 C -420 42 -560 70 -650 128 L -600 300 L 0 300"),
+        BODY);
+
+  // The face.
+  Solid(p,
+        whole("M 0 108 C -110 108 -190 82 -310 82 C -480 82 -600 104 -690 186 "
+              "C -760 256 -795 330 -795 420 C -795 532 -732 622 -640 684 "
+              "C -560 738 -460 768 -370 768 C -240 768 -140 752 0 752"),
+        BODY);
+
+  // The D-Pad.
+  Solid(p, p.Cross(CLASSIC_DPAD, 140.0f, 47.0f, 12.0f), PART);
+  for (const Point d : {Point{0.0f, -1.0f}, Point{0.0f, 1.0f}, Point{-1.0f, 0.0f}, Point{1.0f, 0.0f}})
+    Detail(p, p.Line(CLASSIC_DPAD + d * 58.0f, CLASSIC_DPAD + d * 102.0f));
+
+  for (const Point c : {CLASSIC_MINUS, CLASSIC_HOME, CLASSIC_PLUS})
+    Solid(p, p.Circle(c, 35.0f), PART);
+  Unbound(p, labels, Minus, CLASSIC_MINUS, 52.0f, "-");
+  Unbound(p, labels, Plus, CLASSIC_PLUS, 52.0f, "+");
+
+  // X and Y stand out, A and B are hollow.
+  for (const Point c : {CLASSIC_X, CLASSIC_Y, CLASSIC_A, CLASSIC_B})
+    Solid(p, p.Circle(c, 60.0f), PART);
+  for (const Point c : {CLASSIC_A, CLASSIC_B})
+    Detail(p, p.Circle(c, 47.0f), true);
+
+  // The sticks.
+  for (const Point c : {CLASSIC_LEFT_STICK, CLASSIC_RIGHT_STICK})
+  {
+    Solid(p, p.Gate(c, 124.0f, 10.0f), BODY);
+    Solid(p, p.Circle(c, 92.0f), PART);
+    Detail(p, p.Circle(c, 66.0f), true);
+  }
+
+  Unbound(p, labels, A, CLASSIC_A, 62.0f, "A");
+  Unbound(p, labels, B, CLASSIC_B, 62.0f, "B");
+  Unbound(p, labels, X, CLASSIC_X, 62.0f, "X");
+  Unbound(p, labels, Y, CLASSIC_Y, 62.0f, "Y");
+  Unbound(p, labels, L, CLASSIC_L + Point{0.0f, 14.0f}, 50.0f, "L");
+  Unbound(p, labels, R, CLASSIC_R + Point{0.0f, 14.0f}, 50.0f, "R");
+}
+
 // --- Callouts ---
 
 enum class Side
@@ -774,24 +873,28 @@ constexpr float ROW_H = 26.0f;
 constexpr float LEADER_DP = 1.5f;
 constexpr float DOT_DP = 3.5f;
 
-const char* ActionOf(PadControl control, bool wii)
+const char* ActionOf(PadControl control, PadKind kind)
 {
+  // By controller: the GameCube Controller's, the Wii Remote's, the Classic Controller's.
+  const auto of = [kind](const char* gamecube, const char* remote, const char* classic) {
+    return kind == PadKind::GameCube ? gamecube : kind == PadKind::WiiClassic ? classic : remote;
+  };
   switch (control)
   {
   case PadControl::A:
-    return wii ? "Wii A" : "GameCube A";
+    return of("GameCube A", "Wii A", "Classic A");
   case PadControl::B:
-    return wii ? "Wii B" : "GameCube B";
+    return of("GameCube B", "Wii B", "Classic B");
   case PadControl::X:
-    return "GameCube X";
+    return of("GameCube X", "", "Classic X");
   case PadControl::Y:
-    return "GameCube Y";
+    return of("GameCube Y", "", "Classic Y");
   case PadControl::Z:
     return "GameCube Z";
   case PadControl::L:
-    return "GameCube L";
+    return of("GameCube L", "", "Classic L");
   case PadControl::R:
-    return "GameCube R";
+    return of("GameCube R", "", "Classic R");
   case PadControl::Start:
     return "Start";
   case PadControl::Stick:
@@ -799,17 +902,17 @@ const char* ActionOf(PadControl control, bool wii)
   case PadControl::CStick:
     return "C Stick";
   case PadControl::DPad:
-    return wii ? "Wii D-Pad" : "GameCube D-Pad";
+    return of("GameCube D-Pad", "Wii D-Pad", "Classic D-Pad");
   case PadControl::One:
     return "Wii 1";
   case PadControl::Two:
     return "Wii 2";
   case PadControl::Plus:
-    return "Wii Plus";
+    return of("", "Wii Plus", "Classic Plus");
   case PadControl::Minus:
-    return "Wii Minus";
+    return of("", "Wii Minus", "Classic Minus");
   case PadControl::Home:
-    return "Wii Home";
+    return of("", "Wii Home", "Classic Home");
   case PadControl::Pointer:
     return "Pointer";
   case PadControl::Shake:
@@ -820,6 +923,14 @@ const char* ActionOf(PadControl control, bool wii)
     return "Nunchuk Z";
   case PadControl::NunchukStick:
     return "Nunchuk Stick";
+  case PadControl::ZL:
+    return "Classic ZL";
+  case PadControl::ZR:
+    return "Classic ZR";
+  case PadControl::LeftStick:
+    return "Classic Left Stick";
+  case PadControl::RightStick:
+    return "Classic Right Stick";
   case PadControl::Count:
     break;
   }
@@ -856,7 +967,7 @@ void FitTo(const Kit& kit, Callout* callout, float width)
 }
 
 std::vector<Callout> MakeCallouts(const Kit& kit, const std::vector<Anchor>& anchors, Side side,
-                                  const PadLabels& labels, bool wii)
+                                  const PadLabels& labels, PadKind kind)
 {
   std::vector<Callout> out;
   for (const Anchor& anchor : anchors)
@@ -867,7 +978,7 @@ std::vector<Callout> MakeCallouts(const Kit& kit, const std::vector<Anchor>& anc
     Callout callout;
     callout.anchor = anchor;
     callout.key = label;
-    callout.action = ActionOf(anchor.control, wii);
+    callout.action = ActionOf(anchor.control, kind);
     FitTo(kit, &callout, MAX_LABEL_W);
     out.push_back(std::move(callout));
   }
@@ -1006,7 +1117,7 @@ struct Plan
 {
   Rect bounds;  // of the drawing, in its units
   void (*draw)(const Painter&, const PadLabels&);
-  bool wii;
+  PadKind kind;
   std::vector<Anchor> anchors;
 };
 
@@ -1015,7 +1126,7 @@ Plan GameCubePlan()
   using enum PadControl;
   return {{-72.0f, -9.0f, 72.0f, 102.0f},
           DrawGameCube,
-          false,
+          PadKind::GameCube,
           {
               {L, Side::Left, GC_L},
               {Stick, Side::Left, GC_STICK},
@@ -1040,7 +1151,7 @@ Plan RemotePlan()
   using enum PadControl;
   return {{-REMOTE_HALF_W, -REMOTE_FRONT - 4.0f, REMOTE_HALF_W, REMOTE_H + 4.0f},
           DrawRemote,
-          true,
+          PadKind::WiiRemote,
           {
               {Pointer, Side::Left, WII_POINTER},
               {DPad, Side::Left, WII_DPAD},
@@ -1060,7 +1171,7 @@ Plan NunchukPlan()
   using enum PadControl;
   return {{0.0f, -REMOTE_FRONT - 4.0f, REMOTE_AT.x + REMOTE_HALF_W, 850.0f},
           DrawRemoteAndNunchuk,
-          true,
+          PadKind::WiiNunchuk,
           {
               {NunchukStick, Side::Left, NUNCHUK_STICK + NUNCHUK_AT},
               {C, Side::Left, NUNCHUK_C + NUNCHUK_AT},
@@ -1078,11 +1189,52 @@ Plan NunchukPlan()
           }};
 }
 
+Plan ClassicPlan()
+{
+  using enum PadControl;
+  return {{-800.0f, -4.0f, 800.0f, 866.0f},
+          DrawClassic,
+          PadKind::WiiClassic,
+          {
+              {ZL, Side::Left, CLASSIC_ZL, true, {-260.0f, -20.0f}},
+              {L, Side::Left, CLASSIC_L},
+              {Home, Side::Left, CLASSIC_HOME, true, {-70.0f, 150.0f}},
+              {Minus, Side::Left, CLASSIC_MINUS, true, {-300.0f, 205.0f}},
+              {DPad, Side::Left, CLASSIC_DPAD},
+              {LeftStick, Side::Left, CLASSIC_LEFT_STICK},
+              {ZR, Side::Right, CLASSIC_ZR, true, {260.0f, -20.0f}},
+              {R, Side::Right, CLASSIC_R},
+              {Plus, Side::Right, CLASSIC_PLUS, true, {300.0f, 180.0f}},
+              {X, Side::Right, CLASSIC_X},
+              {Y, Side::Right, CLASSIC_Y},
+              {A, Side::Right, CLASSIC_A},
+              {B, Side::Right, CLASSIC_B},
+              {RightStick, Side::Right, CLASSIC_RIGHT_STICK},
+          }};
+}
+
+Plan GetPlan(PadKind kind)
+{
+  switch (kind)
+  {
+  case PadKind::GameCube:
+    return GameCubePlan();
+  case PadKind::WiiNunchuk:
+    return NunchukPlan();
+  case PadKind::WiiClassic:
+    return ClassicPlan();
+  case PadKind::WiiRemote:
+  case PadKind::WiiRemoteSideways:
+    break;
+  }
+  return RemotePlan();
+}
+
 void DrawUpright(Kit* kit, Canvas* canvas, const Rect& area, const Plan& plan,
                  const PadLabels& labels)
 {
-  std::vector<Callout> left = MakeCallouts(*kit, plan.anchors, Side::Left, labels, plan.wii);
-  std::vector<Callout> right = MakeCallouts(*kit, plan.anchors, Side::Right, labels, plan.wii);
+  std::vector<Callout> left = MakeCallouts(*kit, plan.anchors, Side::Left, labels, plan.kind);
+  std::vector<Callout> right = MakeCallouts(*kit, plan.anchors, Side::Right, labels, plan.kind);
   const float left_w = WidthOf(left);
   const float right_w = WidthOf(right);
   const float room = area.W() - left_w - right_w;
@@ -1104,7 +1256,7 @@ void DrawUpright(Kit* kit, Canvas* canvas, const Rect& area, const Plan& plan,
   DrawCallouts(kit, right);
 
   // Straight down, between the grips.
-  std::vector<Callout> under = MakeCallouts(*kit, plan.anchors, Side::Under, labels, plan.wii);
+  std::vector<Callout> under = MakeCallouts(*kit, plan.anchors, Side::Under, labels, plan.kind);
   for (Callout& callout : under)
   {
     const Point at = painter.Dp(callout.anchor.at);
@@ -1167,7 +1319,7 @@ void DrawSideways(Kit* kit, Canvas* canvas, const Rect& area, const PadLabels& l
 
   for (const Side side : {Side::Left, Side::Right})
   {
-    std::vector<Callout> callouts = MakeCallouts(*kit, anchors, side, labels, true);
+    std::vector<Callout> callouts = MakeCallouts(*kit, anchors, side, labels, PadKind::WiiRemoteSideways);
     const size_t n = callouts.size();
     if (n == 0)
       continue;
@@ -1233,9 +1385,7 @@ void DrawPadArt(Kit* kit, Canvas* canvas, const Rect& area, PadKind kind,
     return;
   }
 
-  const Plan plan = kind == PadKind::GameCube  ? GameCubePlan() :
-                    kind == PadKind::WiiRemote ? RemotePlan() :
-                                                 NunchukPlan();
+  const Plan plan = GetPlan(kind);
   const float scale = std::min(area.W() / plan.bounds.W(), area.H() / plan.bounds.H());
   const Painter painter(kit, canvas,
                         {area.Cx() - plan.bounds.Cx() * scale, area.Cy() - plan.bounds.Cy() * scale},
@@ -1247,20 +1397,9 @@ void DrawPadArt(Kit* kit, Canvas* canvas, const Rect& area, PadKind kind,
 void DrawPad(Kit* kit, Canvas* canvas, const Rect& area, PadKind kind, const PadLabels& labels)
 {
   kit->Begin(*canvas);
-  switch (kind)
-  {
-  case PadKind::GameCube:
-    DrawUpright(kit, canvas, area, GameCubePlan(), labels);
-    break;
-  case PadKind::WiiRemote:
-    DrawUpright(kit, canvas, area, RemotePlan(), labels);
-    break;
-  case PadKind::WiiNunchuk:
-    DrawUpright(kit, canvas, area, NunchukPlan(), labels);
-    break;
-  case PadKind::WiiRemoteSideways:
+  if (kind == PadKind::WiiRemoteSideways)
     DrawSideways(kit, canvas, area, labels);
-    break;
-  }
+  else
+    DrawUpright(kit, canvas, area, GetPlan(kind), labels);
 }
 }  // namespace VR::UI

@@ -177,6 +177,13 @@ public:
   bool IsUpright() const;
   ControllerEmu::SubscribableSettingValue<bool>& GetMotionPlusSetting();
 
+  // Returns the world rotation from the effects of sideways/upright settings.
+  Common::Quaternion GetOrientation() const;
+
+  // What Shake and Swing do, for an override that has the rest of the motion.
+  Common::Vec3 GetButtonAcceleration() const;
+  Common::Vec3 GetNunchukButtonAcceleration() const;
+
   static Common::Vec3
   OverrideVec3(const ControllerEmu::ControlGroup* control_group, Common::Vec3 vec,
                const ControllerEmu::InputOverrideFunction& input_override_function);
@@ -206,9 +213,6 @@ private:
   // Does not include orientation transformations.
   Common::Matrix44
   GetTransformation(const Common::Matrix33& extra_rotation = Common::Matrix33::Identity()) const;
-
-  // Returns the world rotation from the effects of sideways/upright settings.
-  Common::Quaternion GetOrientation() const;
 
   std::optional<Common::Vec3> OverrideVec3(const ControllerEmu::ControlGroup* control_group,
                                            std::optional<Common::Vec3> optional_vec) const;

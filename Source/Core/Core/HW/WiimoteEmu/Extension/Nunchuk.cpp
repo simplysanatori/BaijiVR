@@ -4,6 +4,7 @@
 #include "Core/HW/WiimoteEmu/Extension/Nunchuk.h"
 
 #include <array>
+#include <vector>
 
 #include "Common/Assert.h"
 #include "Common/Common.h"
@@ -167,6 +168,11 @@ ControllerEmu::ControlGroup* Nunchuk::GetGroup(NunchukGroup group)
   }
 }
 
+Common::Vec3 Nunchuk::GetButtonAcceleration() const
+{
+  return m_swing_state.acceleration + m_shake_state.acceleration;
+}
+
 void Nunchuk::DoState(PointerWrap& p)
 {
   EncryptedExtension::DoState(p);
@@ -183,6 +189,7 @@ void Nunchuk::LoadDefaults()
   m_stick->SetControlExpression(1, "`Left Stick Down`");
   m_stick->SetControlExpression(2, "`Left Stick Left`");
   m_stick->SetControlExpression(3, "`Left Stick Right`");
+  m_stick->SetCalibrationData(std::vector<ControlState>(8, 1.0));
 
   m_buttons->SetControlExpression(0, "`Left Bumper`");
   m_buttons->SetControlExpression(1, "`Left Trigger`");

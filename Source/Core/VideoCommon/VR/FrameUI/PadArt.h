@@ -21,7 +21,10 @@ enum class PadKind
   WiiRemote,
   WiiRemoteSideways,
   WiiNunchuk,
+  WiiClassic,
 };
+
+constexpr std::size_t NUM_PAD_KINDS = 5;
 
 enum class PadControl
 {
@@ -46,6 +49,10 @@ enum class PadControl
   C,
   NunchukZ,
   NunchukStick,
+  ZL,
+  ZR,
+  LeftStick,
+  RightStick,
   Count,
 };
 

@@ -158,6 +158,8 @@ public:
   void Reset() override;
   void DoState(PointerWrap& p) override;
 
+  Common::Vec3 GetButtonAcceleration() const;
+
   ControllerEmu::ControlGroup* GetGroup(NunchukGroup group);
 
   void LoadDefaults() override;

@@ -3,18 +3,17 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "Common/CommonTypes.h"
+#include "Common/IniFile.h"
+
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 #include "InputCommon/DynamicInputTextureManager.h"
-
-namespace Common
-{
-class IniFile;
-}
 
 namespace ControllerEmu
 {
@@ -31,6 +30,15 @@ public:
 
   bool LoadConfig();
   void SaveConfig();
+
+  // For a controller that has another mapping than the one in the file: the function saves it where
+  // it belongs and returns true, and its section stays what it is.
+  using SaveOverride = bool (*)(int index, Common::IniFile::Section* section);
+  void SetSaveOverride(SaveOverride save_override) { m_save_override = save_override; }
+
+  // Changes when a mapping was changed by something else than the window that shows it.
+  u32 GetGeneration() const { return m_generation; }
+  void OnMappingChanged() { ++m_generation; }
 
   template <typename T, typename... Args>
   void CreateController(Args&&... args)
@@ -64,5 +72,7 @@ private:
   const std::string m_gui_name;
   const std::string m_profile_directory_name;
   const std::string m_profile_key;
+  SaveOverride m_save_override = nullptr;
+  std::atomic<u32> m_generation{0};
   InputCommon::DynamicInputTextureManager m_dynamic_input_tex_config_manager;
 };

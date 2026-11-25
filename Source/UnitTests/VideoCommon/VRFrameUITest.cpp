@@ -95,7 +95,7 @@ std::vector<MenuState> GetPages(bool immersive)
     }
   }
   for (const PadKind kind : {PadKind::GameCube, PadKind::WiiRemote, PadKind::WiiRemoteSideways,
-                             PadKind::WiiNunchuk})
+                             PadKind::WiiNunchuk, PadKind::WiiClassic})
   {
     for (const PadTarget listening : {PadTarget::None, PadTarget::A})
     {
@@ -1074,6 +1074,13 @@ PadTable GameCubeTable()
 }
 }  // namespace
 
+TEST(VRFrameUI, DirectionsAreTheirStick)
+{
+  EXPECT_EQ(DescribeUp("`D-Pad Up` | `Left Stick Up`"), "D-Pad or Left Stick");
+  EXPECT_EQ(DescribeUp("`Y`"), "Y");
+  EXPECT_EQ(DescribeUp("`Left Stick Up` & !`X`"), "Left Stick Up & !X");
+}
+
 TEST(VRFrameUI, BindingsAreExpressions)
 {
   EXPECT_EQ(ParseBinding("`A`"), On("A"));
@@ -1213,12 +1220,15 @@ TEST(VRFrameUI, EditControlsOfTheWiiRemote)
 {
   Editor e;
   e.edit.Begin(PadKind::WiiNunchuk, {});
-  // Its D-Pad is always there.
-  e.edit.Choose(PadTarget::One);
+  // Its D-Pad is in the mapping, too.
+  e.edit.Choose(PadTarget::DPadUp);
   e.Frame();
   e.raw[0].dpad_up = true;
-  EXPECT_EQ(e.Frame(), PadEdit::Event::None);
+  EXPECT_EQ(e.Frame(), PadEdit::Event::Changed);
+  EXPECT_EQ(e.Get(PadTarget::DPadUp), On("D-Pad Up"));
   e.raw = {};
+  e.edit.Choose(PadTarget::One);
+  e.Frame();
   e.raw[0].view_button = true;
   EXPECT_EQ(e.Frame(), PadEdit::Event::Changed);
   EXPECT_EQ(e.Get(PadTarget::One), On("View"));
@@ -1228,12 +1238,45 @@ TEST(VRFrameUI, EditControlsOfTheWiiRemote)
   e.Frame();
   e.raw[1].thumbstick_y = 1.0f;
   EXPECT_EQ(e.Frame(), PadEdit::Event::None);
+
+  // The Classic Controller has a right stick of its own.
+  e = {};
+  e.edit.Begin(PadKind::WiiClassic, {});
+  e.edit.Choose(PadTarget::NunchukStick);
+  EXPECT_FALSE(e.edit.IsListening());
+  e.edit.Choose(PadTarget::RightStick);
+  e.Frame();
+  e.raw[1].thumbstick_y = 1.0f;
+  EXPECT_EQ(e.Frame(), PadEdit::Event::Next);
+}
+
+TEST(VRFrameUI, ChipsAreApart)
+{
+  using FrameXr::Menu::Rect;
+  for (std::size_t i = 0; i < NUM_PAD_KINDS; ++i)
+  {
+    const auto kind = static_cast<PadKind>(i);
+    const Rect area{128.0f, 88.0f, 800.0f, 476.0f};
+    const auto chips = GetPadChips(kind, area);
+    EXPECT_EQ(chips.size(), GetTargets(kind).size());
+    const Rect art = GetPadEditArt(kind, area);
+    for (const PadChip& a : chips)
+    {
+      const auto apart = [&a](const Rect& b) {
+        return a.rect.x1 <= b.x0 || b.x1 <= a.rect.x0 || a.rect.y1 <= b.y0 || b.y1 <= a.rect.y0;
+      };
+      EXPECT_TRUE(apart(art)) << GetTargetName(a.target);
+      EXPECT_TRUE(a.rect.y0 >= area.y0 && a.rect.y1 <= area.y1) << GetTargetName(a.target);
+      for (const PadChip& b : chips)
+        EXPECT_TRUE(a.target == b.target || apart(b.rect)) << GetTargetName(a.target);
+    }
+  }
 }
 
 TEST(VRFrameUI, EditControlsHasAChipForEveryControl)
 {
   for (const PadKind kind : {PadKind::GameCube, PadKind::WiiRemote, PadKind::WiiRemoteSideways,
-                             PadKind::WiiNunchuk})
+                             PadKind::WiiNunchuk, PadKind::WiiClassic})
   {
     MenuState s;
     s.tab = MenuTab::Controls;
@@ -1269,8 +1312,8 @@ TEST(VRFrameUI, OnlyWiiGamesHaveAChoiceOfController)
   ASSERT_NE(menu, widgets.end());
   EXPECT_EQ(menu->options[static_cast<std::size_t>(menu->selected)], "Wii Remote + Nunchuk");
   EXPECT_EQ(static_cast<int>(VRWiiController::Choice::RemoteNunchuk), 2);
-  EXPECT_EQ(static_cast<int>(VRWiiController::Choice::RemoteSideways),
-            static_cast<int>(CONTROLLERS.size()) - 1);
+  for (std::size_t i = 0; i < CONTROLLERS.size(); ++i)
+    EXPECT_STREQ(CONTROLLERS[i], VRWiiController::NAMES[i]);
 }
 
 TEST_F(VRFrameUISettings, ControllerIsKeptPerGame)

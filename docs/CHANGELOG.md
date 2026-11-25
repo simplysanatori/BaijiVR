@@ -14,6 +14,7 @@ Baiji's own changelog is in [its README](../README.upstream.md).
 - Switch between VR and Flat during a game.
 - Line drawings of your controller with the game's buttons.
 - The Steam Frame controllers' own names and layout.
+- The controller of each Wii game, the Classic Controller too, with a mapping for each. Well-known games start with the right one.
 
 ### Display
 

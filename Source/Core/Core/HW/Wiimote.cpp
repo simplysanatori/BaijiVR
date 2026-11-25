@@ -227,6 +227,7 @@ OpenXRWiimoteState BuildOpenXRState(const Common::VR::OpenXRControllerState& con
 
 // With the pointer on the controller's ray, the sticks are free: the right one is the Wii Remote's
 // D-Pad (the left thumb is on the Nunchuk's stick), and so is the left one without an extension.
+// Not with the other extensions: they have sticks of their own.
 std::optional<ControlState> StickDPad(const Common::VR::OpenXRInputSnapshot& snapshot,
                                       bool left_stick_too, std::string_view direction,
                                       ControlState bound)
@@ -253,6 +254,22 @@ std::optional<ControlState> StickDPad(const Common::VR::OpenXRInputSnapshot& sna
     }
   }
   return bound;
+}
+
+WiimoteEmu::Wiimote* GetEmulated(unsigned int index)
+{
+  return static_cast<WiimoteEmu::Wiimote*>(::Wiimote::GetConfig()->GetController(index));
+}
+
+std::optional<ControlState> GetComponent(const Common::Vec3& vec, std::string_view control_name)
+{
+  if (control_name == ControllerEmu::ReshapableInput::X_INPUT_OVERRIDE)
+    return vec.x;
+  if (control_name == ControllerEmu::ReshapableInput::Y_INPUT_OVERRIDE)
+    return vec.y;
+  if (control_name == ControllerEmu::ReshapableInput::Z_INPUT_OVERRIDE)
+    return vec.z;
+  return std::nullopt;
 }
 
 // `attachment` is for an extension: it has its own sticks, and its own D-Pad.
@@ -333,29 +350,33 @@ ControllerEmu::InputOverrideFunction CreateOpenXRInputOverrideFunction(unsigned 
     {
       if (attachment)
         return std::nullopt;
-      auto* const wiimote =
-          static_cast<WiimoteEmu::Wiimote*>(::Wiimote::GetConfig()->GetController(wiimote_index));
-      const bool no_extension =
-          wiimote && wiimote->GetActiveExtensionNumber() == WiimoteEmu::ExtensionNumber::NONE;
-      return StickDPad(snapshot, no_extension, control_name, control_state);
+      const auto extension = GetEmulated(wiimote_index)->GetActiveExtensionNumber();
+      if (extension != WiimoteEmu::ExtensionNumber::NONE &&
+          extension != WiimoteEmu::ExtensionNumber::NUNCHUK)
+      {
+        return std::nullopt;
+      }
+      return StickDPad(snapshot, extension == WiimoteEmu::ExtensionNumber::NONE, control_name,
+                       control_state);
     }
     else if (group_name == WiimoteEmu::Wiimote::ACCELEROMETER_GROUP)
     {
-      if (control_name == ControllerEmu::ReshapableInput::X_INPUT_OVERRIDE)
-        return cached_state.acceleration.x;
-      if (control_name == ControllerEmu::ReshapableInput::Y_INPUT_OVERRIDE)
-        return cached_state.acceleration.y;
-      if (control_name == ControllerEmu::ReshapableInput::Z_INPUT_OVERRIDE)
-        return cached_state.acceleration.z;
+      // As any motion input: turned as the Wii Remote is held, and with what Shake does.
+      const WiimoteEmu::Wiimote* const wiimote = GetEmulated(wiimote_index);
+      if (attachment)
+      {
+        return GetComponent(cached_state.acceleration + wiimote->GetNunchukButtonAcceleration(),
+                            control_name);
+      }
+      return GetComponent(wiimote->GetOrientation() * cached_state.acceleration +
+                              wiimote->GetButtonAcceleration(),
+                          control_name);
     }
     else if (group_name == WiimoteEmu::Wiimote::GYROSCOPE_GROUP)
     {
-      if (control_name == ControllerEmu::ReshapableInput::X_INPUT_OVERRIDE)
-        return cached_state.angular_velocity.x;
-      if (control_name == ControllerEmu::ReshapableInput::Y_INPUT_OVERRIDE)
-        return cached_state.angular_velocity.y;
-      if (control_name == ControllerEmu::ReshapableInput::Z_INPUT_OVERRIDE)
-        return cached_state.angular_velocity.z;
+      return GetComponent(GetEmulated(wiimote_index)->GetOrientation() *
+                              cached_state.angular_velocity,
+                          control_name);
     }
     else if (group_name == WiimoteEmu::Wiimote::IR_GROUP)
     {
@@ -632,6 +653,7 @@ void Initialize(InitializeMode init_mode)
   }
 
   s_config.RegisterHotplugCallback();
+  s_config.SetSaveOverride(VRWiiController::SaveOwnMapping);
 
   LoadConfig();
 
@@ -655,8 +677,7 @@ void ResetAllWiimotes()
 
 void LoadConfig()
 {
-  s_config.LoadConfig();
-  VRWiiController::OnMappingLoaded();
+  VRWiiController::LoadMapping();
   s_last_connect_request_counter.fill(0);
 }
 
@@ -694,7 +715,15 @@ void DoState(PointerWrap& p)
       // If using a real wiimote or the save-state source does not match the current source,
       // then force a reconnection on load.
       if (source == WiimoteSource::Real || source != WiimoteSource(state_wiimote_source))
+      {
         WiimoteCommon::UpdateSource(i);
+        // It was connected when the state was made, and nothing would disconnect it.
+        if (source == WiimoteSource::None)
+        {
+          if (const auto bluetooth = WiiUtils::GetBluetoothEmuDevice())
+            bluetooth->AccessWiimoteByIndex(i)->Activate(false);
+        }
+      }
     }
   }
 }

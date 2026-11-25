@@ -207,11 +207,13 @@ void GCPad::LoadDefaults(const ControllerInterface& ciface)
   m_main_stick->SetControlExpression(1, "`Left Stick Down`");
   m_main_stick->SetControlExpression(2, "`Left Stick Left`");
   m_main_stick->SetControlExpression(3, "`Left Stick Right`");
+  m_main_stick->SetCalibrationData({1.0});
 
   m_c_stick->SetControlExpression(0, "`Right Stick Up`");
   m_c_stick->SetControlExpression(1, "`Right Stick Down`");
   m_c_stick->SetControlExpression(2, "`Right Stick Left`");
   m_c_stick->SetControlExpression(3, "`Right Stick Right`");
+  m_c_stick->SetCalibrationData({1.0});
 
   m_triggers->SetControlExpression(0, "`Left Trigger Click`");
   m_triggers->SetControlExpression(1, "`Right Trigger Click`");

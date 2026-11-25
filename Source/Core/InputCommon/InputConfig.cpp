@@ -8,6 +8,7 @@
 #include "Common/FileUtil.h"
 #include "Common/IniFile.h"
 #include "Common/MsgHandler.h"
+#include "Common/ScopeGuard.h"
 #include "Common/StringUtil.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
@@ -27,6 +28,7 @@ InputConfig::~InputConfig() = default;
 
 bool InputConfig::LoadConfig()
 {
+  Common::ScopeGuard on_changed([this] { OnMappingChanged(); });
   Common::IniFile inifile;
   bool useProfile[MAX_BBMOTES] = {false, false, false, false, false};
   static constexpr std::array<std::string_view, MAX_BBMOTES> num = {"1", "2", "3", "4", "BB"};
@@ -123,9 +125,13 @@ void InputConfig::SaveConfig()
   Common::IniFile inifile;
   inifile.Load(ini_filename);
 
+  int n = 0;
   for (auto& controller : m_controllers)
   {
-    controller->SaveConfig(inifile.GetOrCreateSection(controller->GetName()));
+    auto* const section = inifile.GetOrCreateSection(controller->GetName());
+    if (!m_save_override || !m_save_override(n, section))
+      controller->SaveConfig(section);
+    ++n;
   }
 
   inifile.Save(ini_filename);

@@ -6,6 +6,8 @@
 #include <QDialog>
 #include <QString>
 
+#include "Common/CommonTypes.h"
+
 namespace ControllerEmu
 {
 class EmulatedController;
@@ -96,6 +98,7 @@ private:
   void UpdateProfileButtonState();
   void PopulateProfileSelection();
   void UpdateDeviceList();
+  void UpdateTitle();
 
   void OnDefaultFieldsPressed();
   void OnClearFieldsPressed();
@@ -150,4 +153,5 @@ private:
   const int m_port;
   bool m_is_openxr_wiimote = false;
   InputConfig* m_config;
+  u32 m_generation = 0;
 };

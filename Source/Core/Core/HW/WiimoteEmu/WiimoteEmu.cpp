@@ -718,6 +718,7 @@ void Wiimote::LoadDefaults(const ControllerInterface& ciface)
   m_ir->SetControlExpression(2, "`Right Stick Left`");
   m_ir->SetControlExpression(3, "`Right Stick Right`");
   m_ir->SetRelativeInput(false);
+  m_imu_ir->enabled_setting->SetValue(false);
 
   for (int i = 0; i < 3; ++i)
     m_shake->SetControlExpression(i, "`Right Bumper`");
@@ -909,6 +910,17 @@ Common::Quaternion Wiimote::GetOrientation() const
 {
   return Common::Quaternion::RotateZ(float(MathUtil::TAU / -4 * IsSideways())) *
          Common::Quaternion::RotateX(float(MathUtil::TAU / 4 * IsUpright()));
+}
+
+Common::Vec3 Wiimote::GetButtonAcceleration() const
+{
+  return GetOrientation() * m_swing_state.acceleration + m_shake_state.acceleration;
+}
+
+Common::Vec3 Wiimote::GetNunchukButtonAcceleration() const
+{
+  return static_cast<Nunchuk*>(m_attachments->GetAttachmentList()[ExtensionNumber::NUNCHUK].get())
+      ->GetButtonAcceleration();
 }
 
 std::optional<Common::Vec3> Wiimote::OverrideVec3(const ControllerEmu::ControlGroup* control_group,

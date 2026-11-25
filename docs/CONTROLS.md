@@ -25,15 +25,24 @@ The **Controls** tab of the VR menu shows your controller with the game's button
 
 They are by position, as on Nintendo's controllers.
 
-| Steam Frame | GameCube | Wii Remote |
-|---|---|---|
-| **A** (bottom) | B | B |
-| **B** (right) | A | A |
-| **X** (left) | Y | 2 |
-| **Y** (top) | X | 1 |
+| Steam Frame | GameCube | Wii Remote | Wii Remote (Sideways) | Classic Controller |
+|---|---|---|---|---|
+| **A** (bottom) | B | B | 2 | B |
+| **B** (right) | A | A | A | A |
+| **X** (left) | Y | 2 | 1 | Y |
+| **Y** (top) | X | 1 | B | X |
 
-The right trigger is the Wii Remote's B, too. The sideways Wii Remote has its own layout.
+The right trigger is the Wii Remote's B, too, and the right bumper shakes it. The Classic Controller's L and R are the triggers, ZL and ZR the bumpers, **View** is − and **Menu** is +.
 
-## Wii Remote
+## Wii Games
 
-The Wii Remote's extension can be chosen in the Controllers settings without opening the mapping window.
+The **Controls** tab has the controller of a Wii game: **GameCube Controller**, **Wii Remote**, **Wii Remote + Nunchuk**, **Wii Remote (Sideways)** or **Classic Controller**. It is for this game only and can be changed while it runs.
+
+| | |
+|---|---|
+| Without a choice | The Wii Remote of the Controllers settings: Wii Remote + Nunchuk at first. |
+| Well-known games | Start with their own: Wii Remote (Sideways) in *Kirby's Return to Dream Land* and *New Super Mario Bros. Wii*, for example. The list is `Data/Sys/WiiControllers.ini`. |
+| A game's own settings | A profile, the first port or the Wii Remote's source in its INI is in front of the list. A profile is in front of your choice, too. |
+| **Edit** | Changes the mapping of that controller, in every game that has it. The mapping window in the Controllers settings shows the same one. |
+
+The Wii Remote's extension can be chosen in the Controllers settings without opening the mapping window. During a game with its own controller, that changes the game's.

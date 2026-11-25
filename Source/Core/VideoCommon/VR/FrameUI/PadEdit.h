@@ -18,8 +18,8 @@
 // tested).
 namespace VR::UI
 {
-// What can be given something else. The Wii Remote's D-Pad, pointer and motion are not in its
-// mapping (CreateOpenXRInputOverrideFunction).
+// What can be given something else. The Wii Remote's pointer and motion are not in its mapping
+// (CreateOpenXRInputOverrideFunction).
 enum class PadTarget : int
 {
   None = -1,
@@ -46,6 +46,10 @@ enum class PadTarget : int
   C,
   NunchukZ,
   NunchukStick,
+  ZL,
+  ZR,
+  LeftStick,
+  RightStick,
   Count,
 };
 
@@ -147,7 +151,6 @@ public:
   Event Push(const std::string& direction);
 
 private:
-  bool CanUse(PadInput input) const;
   void Change(PadTarget target, PadBinding binding);
   Event Stop(Event event);
 
