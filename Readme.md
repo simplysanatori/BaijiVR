@@ -9,59 +9,72 @@ This is my testing area for fixes and optimizations, and I plan to bring all of 
 
 ## Features
 
-- Stereoscopic 3D or Immersive, switched mid-game
-- A new VR menu with controls, stats, mods and settings
-- Natural 3D, **Screen Curve**, Quick Save and Autosave
-- Game Mode window that works with the controller
-- Fixes for crashes and Path of Radiance
+- Stereoscopic 3D, Immersive or Flat, switched mid-game
+- A new VR menu: save states, stats, settings and **Edit Controls**
+- Natural 3D for your IPD, and a curved screen
+- Mods, patches, cheats and texture packs in the app
+- A window that works with the controller in Game Mode
 
 ## 3D and immersion
 
-- **Stereoscopic 3D or Immersive, any time**: press both bumpers, then **View** and **Menu**. **Switch to Flat** shows the game in the window.
-- **Natural 3D**: at 100% **3D Depth**, distant scenery sits at infinity for your IPD.
-- **Immersive**: **World Scale** sets the world's size. It draws two steps over **Internal Resolution**; **Dynamic Resolution** lowers that when the GPU is short.
+- **Stereoscopic 3D or Immersive**: press both bumpers, then **View** and **Menu**.
+- **Switch to Flat**: the game goes on in the window.
+- **Natural 3D**: at 100% **3D Depth**, distant scenery sits at infinity.
+- **World Scale**: how big the game world feels.
+- **Screen Curve**: hold a grip, press the D-Pad up or down.
+- **Immersive** draws two steps over **Internal Resolution**.
 
 ## The VR menu
 
-Hold **Menu** for 1 second. Tabs: **Main**, **Position**, **Stats**, **Controls**, **Mods**, **Settings**.
+Hold **Menu** for 1 second.
 
-- **Global** or **Per-Game**: the same settings and profiles as the window.
-- **Edit Controls**: pick a control on the drawing, press the button for it.
-- Chips for a Wii game's controller: GameCube, Wii Remote, + Nunchuk, Sideways, Classic.
-- **Stats**: frame rate and resolution in use, in front or on your wrist.
-- **Save State**, **Load State** and **Autosave**. Messages show in the screen's corner.
-- **Screen Curve** bends the screen. Face buttons are by position.
+- **Main**: save states, screenshot, Fast Forward, **Switch to Flat**
+- **Position**: the screen's distance, size and curve
+- **Stats**: frame rate and resolution in use, in front or on your wrist
+- **Controls**: the game's buttons, and **Edit Controls**
+- **Mods**: mods, cheats and textures
+- **Settings**: the window's settings, **Global** or **Per-Game**
 
-<img src="docs/images/menu-main.png" width="48%" alt="Main page"> <img src="docs/images/controls.png" width="48%" alt="Controls">
+<img src="docs/images/menu-main.png" width="37%" alt="VR menu"> <img src="docs/images/menu-edit-controls.png" width="37%" alt="Edit Controls"> <img src="docs/images/stats.png" width="22%" alt="Stats">
 
-## Mods, patches, cheats and textures
+## Controllers
 
-In the **Mods** tab and the window's **Mods** page:
+- Wii games: **GameCube**, **Wii Remote**, **+ Nunchuk**, **Sideways** or **Classic**
+- Mappings for every game or one game, and the window's saved profiles
+- Face buttons by position
+
+## Mods, cheats and textures
 
 - **Mods and Cheats**: 37 cheats, patches and game settings, and 3 mods, for 23 games
-- **Textures**: 24 texture packs, from their creators' pages. None is hosted here.
+- **Textures**: 24 texture packs, from their creators' own pages
 
 <img src="docs/images/menu-mods.png" width="48%" alt="Mods and Cheats">
 
+No texture pack is hosted by this project.
+
 ## The window in Game Mode
 
-Fits the panel, with **Window Scale** for the text. Left stick moves, **A** twice starts a game, **B** goes back. It docks in SteamVR's theater during a VR game.
+- **Window Scale**, and windows that fit the screen
+- Left stick moves, **A** twice starts a game, **B** goes back
+- In SteamVR's theater between VR games
 
-## Game-specific fixes
+## Fixes
 
-- **Fire Emblem: Path of Radiance**: the freeze and white screen, confirmed on the Frame.
-- **Immersive**: nothing goes missing after a multiview pass.
-- **VR states** keep both eyes when loaded.
-- **Video mode changes**: the screen keeps one shape.
-- **All VR games**: no crash on exit, Shake works, errors show in the headset. Mods and textures download.
+- **Fire Emblem: Path of Radiance**: the freeze and white screen, confirmed on the Frame
+- **Save states in VR**: both eyes come back right
+- **Games that change video modes**: the screen keeps one shape
+- **Immersive**: drawing errors
+- **Wii Remote**: Shake works in VR
+- No crash on exit; errors show in the headset
+- Mod and texture downloads work on the Frame
 
 ## Experimental
 
-Off by default, in the **VR** settings under **Advanced**: **Dynamic Resolution**, **Pin Emulation Threads**, **Performance Hint** and [more](docs/SETTINGS.md#performance), with a [performance test](docs/USER_GUIDE.md#performance-test).
+Off by default: **Dynamic Resolution**, **Pin Emulation Threads**, **Performance Hint** and [more](docs/SETTINGS.md#performance), with a [performance test](docs/USER_GUIDE.md#performance-test).
 
 ## Requirements
 
-- A Steam Frame with Developer Mode, SSH and about 250 MB free
+- A Steam Frame with Developer Mode, SSH and 250 MB free
 - A Linux PC (x86-64) with Git, Podman and Flatpak
 - Your own GameCube and Wii games
 
@@ -94,9 +107,12 @@ Add your games' folder in the settings, under **Paths**, then double-click a gam
 
 ## Controls
 
+![What each Frame button does in a game](docs/images/controls.png)
+
 | Steam Frame | What it does |
 |---|---|
 | Hold **Menu** for 1 second | VR menu |
+| Hold **View** for 1.5 seconds | Stop the game |
 | **View**, then right or left bumper | Quick Save or Quick Load (hold the left bumper) |
 | **View**, then right trigger | Fast Forward on or off |
 | Both bumpers, then **View** and **Menu** | Stereoscopic 3D or Immersive |
@@ -106,7 +122,7 @@ Full list: [docs/CONTROLS.md](docs/CONTROLS.md).
 
 ## Update
 
-Quit the emulator, then in the `baijiSteamVR` folder:
+Quit the emulator. In the `baijiSteamVR` folder:
 
 ```sh
 git pull
@@ -117,16 +133,17 @@ git submodule update --init --recursive
 
 ## Uninstall
 
-Run this on the Frame. `--purge` also deletes your settings and saves; moving saves to Dolphin is in the [user guide](docs/USER_GUIDE.md#uninstall).
+On the Frame. `--purge` also deletes your settings and saves. [More](docs/USER_GUIDE.md#uninstall).
 
 ```sh
 ~/baiji/bin/baiji-uninstall
 ```
 
-
 ## Troubleshooting
 
 - The pointer is off in Stereoscopic 3D: recenter once.
+- A game looks wrong in Immersive: switch to Stereoscopic 3D.
+- Immersive is slow: turn on **Dynamic Resolution**.
 
 More: [docs/USER_GUIDE.md](docs/USER_GUIDE.md#troubleshooting).
 
@@ -138,7 +155,7 @@ Turn on the detailed log, then play until the problem happens:
 ssh frame "touch ~/.config/baiji/debug-logging"
 ```
 
-The logs are in `~/.local/share/baiji/Logs`; check them before sharing. Don't report this fork's problems to Dolphin or Baiji.
+Logs: `~/.local/share/baiji/Logs`. Check them before sharing. Don't report this fork's problems to Dolphin or Baiji.
 
 ## More
 
@@ -157,8 +174,8 @@ If you want to support this app or my other Steam Frame ports, such as PrimedFra
 - [Dolphin](https://dolphin-emu.org/): the emulator
 - [dolphinXR](https://github.com/iChris4/dolphinXR/) by iChris4: the VR modes, and some performance switches
 - [Baiji](https://github.com/thejerf/baijiSteamVR) by thejerf: the Steam Frame version
-- [Azahar for Frame](https://github.com/simplysanatori/AzaharVR), my Azahar fork: the VR menu, Dynamic Resolution, window fitting and downloads
-- [GameTDB](https://www.gametdb.com/) and [libretro-thumbnails](https://github.com/libretro-thumbnails): box art
+- [Azahar for Frame](https://github.com/simplysanatori/AzaharVR), my Azahar fork: the VR menu, Dynamic Resolution, the window in Game Mode and downloads
+- [GameTDB](https://www.gametdb.com/): game names
 - Mods, cheats and texture packs: their authors, named in the app
 - Valve: SteamVR and the Frame
 

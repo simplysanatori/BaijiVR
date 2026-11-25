@@ -113,13 +113,13 @@ Short messages show in the headset. In Stereoscopic 3D the answer to a press is 
 
 ## The window in Game Mode
 
-Every window fits the panel. **Window Scale** in the VR settings sets the text size: 100, 150 or 200 percent, read at the start. The left stick or D-Pad moves, **A** twice starts a game, **B** goes back, the right stick scrolls. During a VR game the window docks in SteamVR's theater (`TheaterDock`, see [SETTINGS.md](SETTINGS.md#the-window-in-steamvr)). Mods and texture packs download on the Frame.
+Every window fits the panel. **Window Scale** in the VR settings sets the text size: 100, 150 or 200 percent, read at the start. The left stick or D-Pad moves, **A** twice starts a game, **B** goes back, the right stick scrolls. The window sits in SteamVR's theater at the start and after a VR game, and leaves it before one, which takes a few seconds (`TheaterDock`, see [SETTINGS.md](SETTINGS.md#the-window-in-steamvr)). Mods and texture packs download on the Frame.
 
 ## Fixes
 
 - Fire Emblem: Path of Radiance: the freeze and the white screen. The GPU thread no longer races a FIFO reset or a stop of the reads, and the game's own GPU watchdog is off (US version). Confirmed on the Frame.
-- Immersive: draws are bound again after a multiview pass.
-- A state loaded in VR keeps both eyes.
+- Immersive: every draw has its state bound. Vulkan's validation layer found draws without it.
+- A save state loaded in VR puts each eye's picture back in its own eye, and there is no black frame after switching the display.
 - The screen keeps one shape when a game changes video modes.
 - No crash on exit after a VR game.
 - A Wii Remote's Shake works in VR.
