@@ -14,6 +14,7 @@
 
 #include "Common/Config/Config.h"
 #include "Common/HookableEvent.h"
+#include "Common/Logging/Log.h"
 #include "Common/Timer.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Core.h"
@@ -101,6 +102,7 @@ void SetMeasuring(bool on)
 {
   if (s_measuring.exchange(on) == on)
     return;
+  INFO_LOG_FMT(VIDEO, "Stats: measuring {}", on ? "on" : "off");
   if (!on)
   {
     s_frame_hook.reset();

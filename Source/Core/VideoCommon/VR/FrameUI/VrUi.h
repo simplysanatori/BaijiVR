@@ -133,6 +133,10 @@ private:
   void RequestBindings();
   void OpenEditControls();
   void ChooseController(int controller);
+  // The game's own controls, or the ones of every game again.
+  void SetPadScope(SettingScope scope);
+  // An option of the Profile list.
+  void ChoosePadProfile(int option);
   // Edit Controls waits for a press: the controllers are its own.
   void UpdateListening(const Controllers& controllers, float dt, bool on_cancel);
   void ChangeMod(const MenuWidget& widget);
@@ -276,6 +280,9 @@ private:
   u32 m_stats_drawn_serial = 0;
   std::vector<u32> m_drawn;
   bool m_drawn_ready = false;
+  // The pacing thread's: what it uploads.
+  std::vector<u32> m_menu_upload;
+  std::vector<u32> m_stats_upload;
   std::optional<MenuState> m_last_drawn;
 };
 }  // namespace VR::UI

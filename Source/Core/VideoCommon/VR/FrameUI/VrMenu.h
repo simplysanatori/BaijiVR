@@ -7,6 +7,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "Common/CommonTypes.h"
@@ -56,7 +57,10 @@ enum class MenuItem
   AutosaveSettings,
   UndoLoad,
   ControlsPage,
-  Controller,  // a Wii game's
+  Controller,  // a Wii game's: the index is its VRWiiController::Choice
+  ControlsScope,
+  ControlsMore,
+  PadProfile,
   EditControls,
   EditChip,  // the index is its PadTarget
   EditCancel,
@@ -129,8 +133,14 @@ struct MenuState
   PadKind pad = PadKind::GameCube;
   PadLabels pad_labels;
   std::string edit_lock;  // why they cannot be changed
-  int controller = -1;    // a Wii game's, in CONTROLLERS
+  int controller = -1;    // a Wii game's, in VRWiiController::NAMES; -1: another one
   bool can_choose_controller = true;
+  // The mapping in use is this game's own.
+  SettingScope pad_scope = SettingScope::Global;
+  std::string pad_scope_lock;  // why it cannot be
+  // The saved profiles of this controller, as the mapping window lists them, and the game's.
+  std::vector<std::string> pad_profiles;
+  std::string pad_profile;  // empty: the mapping of every game
   PadEditView edit;
 
   int mods_list = 0;  // Mods, Textures
@@ -152,7 +162,8 @@ struct MenuState
   // The row with its drop-down menu open.
   SettingId open_setting = SettingId::None;
   bool open_scope = false;  // the menu of the dots
-  bool open_controller = false;
+  bool open_pad_scope = false;  // the same on the Controls tab
+  bool open_pad_profile = false;
 
   MenuItem hover = MenuItem::None;
   MenuItem pressed = MenuItem::None;
@@ -192,6 +203,8 @@ struct MenuWidget
     More,  // three dots
     EditPad,
     Chip,
+    Choice,  // one of a row of chips: the chosen one is filled
+    Guide,   // what to do, in two lines
     StatsTitle,
     Stat,
   };
@@ -217,9 +230,16 @@ struct MenuWidget
   FrameXr::Menu::Rect clip;
 };
 
-// In the order of VRWiiController::Choice.
-constexpr std::array CONTROLLERS{"GameCube Controller", "Wii Remote", "Wii Remote + Nunchuk",
-                                 "Wii Remote (Sideways)"};
+// A Wii game's controller on its chip: "Wii Remote + Nunchuk" is "+ Nunchuk" beside "Wii Remote",
+// and "Classic Controller" is "Classic".
+std::string GetControllerChipLabel(std::string_view name);
+// The drawing for a choice of VRWiiController::NAMES, and its name.
+PadKind GetControllerPad(int controller);
+const char* GetPadName(PadKind kind);
+// What the Profile list offers: no profile first, then the saved ones (the game's is among them).
+constexpr const char* NO_PAD_PROFILE = "Every Game";
+constexpr std::size_t MAX_PAD_PROFILES = 8;
+std::vector<std::string> GetPadProfileOptions(const MenuState& state);
 
 // The list of a page that scrolls.
 struct MenuList

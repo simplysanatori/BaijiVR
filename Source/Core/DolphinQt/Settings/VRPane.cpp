@@ -493,6 +493,12 @@ QGridLayout* VRSettingsPage::AddScreen()
                   {tr("60°"), 60},
                   {tr("75°"), 75},
                   {tr("90°"), 90}});
+  // Per game too, as in the VR menu.
+  AddSlider(layout, Screen3D, Config::GFX_VR_SCREEN_DEPTH, 0.0f, 100.0f, 5.0f, [](float value) {
+    if (value < 0.5f)
+      return tr("Off");
+    return value > 99.5f ? tr("Natural") : QString::asprintf("%.0f%%", value);
+  });
   AddSlider(layout, Immersive, Config::GFX_VR_HUD_THICKNESS, Config::GFX_VR_HUD_THICKNESS_MIN,
             Config::GFX_VR_HUD_THICKNESS_MAX, Config::GFX_VR_HUD_THICKNESS_STEP, [](float value) {
               return value <= 0.001f ? tr("Off") : QString::asprintf("%.2f m", value);
@@ -737,14 +743,9 @@ VRPane::VRPane(QWidget* parent) : QWidget(parent)
 
 void VRPane::AddScreenRows(QGridLayout* layout)
 {
-  m_page->AddSlider(layout, VRSettingsPage::Screen3D, Config::GFX_VR_SCREEN_DEPTH, 0.0f, 100.0f,
-                    5.0f, [](float value) {
-                      if (value < 0.5f)
-                        return tr("Off");
-                      return value > 99.5f ? tr("Natural") : QString::asprintf("%.0f%%", value);
-                    });
+  // A game's own is in its Properties, as Dolphin's Stereoscopy has it. Whole steps, as the VR menu.
   m_page->AddSlider(layout, VRSettingsPage::Screen3D, Config::GFX_STEREO_CONVERGENCE, 0.0f,
-                    Config::GFX_STEREO_CONVERGENCE_MAXIMUM, 0.01f, FormatPlain);
+                    Config::GFX_STEREO_CONVERGENCE_MAXIMUM, 1.0f, FormatPlain);
 
   constexpr unsigned screen = VRSettingsPage::Screen3D | VRSettingsPage::Screen2D;
   m_page->AddBool(layout, screen, Config::GFX_VR_LOCK_SCREEN);

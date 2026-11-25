@@ -115,8 +115,16 @@ struct Bindings
   std::string edit_lock;
   int controller = -1;
   bool can_choose = true;
+  PadScope scope = PadScope::Global;
+  std::string scope_lock;
+  std::vector<std::string> profiles;
+  std::string profile;
 };
 std::atomic<bool> s_bindings_ready{false};
+// A state that was to be loaded is not there.
+std::atomic<bool> s_load_failed{false};
+// A download has begun.
+std::atomic<bool> s_install_started{false};
 std::mutex s_bindings_mutex;
 Bindings s_bindings;
 
@@ -309,10 +317,23 @@ void QueueFastForward(bool on)
   });
 }
 
+// What the pacing thread needs of the config, read where the config may be read. Host thread.
+std::atomic<bool> s_autosave_on{false};
+std::atomic<bool> s_can_switch_mode{true};
+
+void ReadFlags()
+{
+  s_autosave_on = Config::Get(Config::MAIN_AUTOSAVE_ENABLED);
+  const OpenXRPresentationMode mode = Config::Get(Config::GFX_VR_PRESENTATION_MODE);
+  s_can_switch_mode =
+      mode == OpenXRPresentationMode::Immersive || mode == OpenXRPresentationMode::StereoScreen;
+}
+
 // Reads the settings after all that was queued before.
 void QueueReadSettings(u32 serial)
 {
   Core::QueueHostJob([serial](Core::System&) {
+    ReadFlags();
     SettingValues values = ReadSettings();
     std::lock_guard lock(s_settings_mutex);
     s_settings.emplace(serial, std::move(values));
@@ -366,7 +387,10 @@ VrUi::VrUi(OpenXRManager* manager, CreateOverlay create_overlay, u32 max_layers)
   std::fill(m_toast_canvas.px.begin(), m_toast_canvas.px.end(), 0u);
   Perf::ForgetLastSecond();
   m_draw_thread = std::thread(&VrUi::DrawThread, this);
-  Core::QueueHostJob([](Core::System& system) { VRWiiController::OnSessionStarted(system); });
+  Core::QueueHostJob([](Core::System& system) {
+    ReadFlags();
+    VRWiiController::OnSessionStarted(system);
+  });
 }
 
 VrUi::~VrUi()
@@ -382,6 +406,9 @@ VrUi::~VrUi()
   Core::QueueHostJob(ResumeFromMenu);
   if (m_fast_forward)
     QueueFastForward(false);
+  // What the stats measure is for the headset only.
+  if (Perf::IsMeasuring())
+    Core::QueueHostJob([](Core::System&) { Perf::SetMeasuring(false); });
 }
 
 void VrUi::PostToast(std::string text, u32 ms)
@@ -519,21 +546,24 @@ void VrUi::SetFastForward(bool on)
 
 void VrUi::SwitchMode()
 {
-  if (m_menu.settings.can_switch_mode)
+  if (s_can_switch_mode)
     QueueSwitchMode(m_frame.has_screen);
 }
 
 void VrUi::LoadState(std::string path, std::string undo_label, s64 time)
 {
-  if (!File::Exists(path))
-  {
-    ShowToast("No Quick Save", ToastFit::kShortNs);
-    return;
-  }
   m_menu.undo_load = fmt::format("{} Loaded: {}", undo_label,
                                  Autosave::LocalTime(time ? time : std::time(nullptr)));
-  Core::QueueHostJob(
-      [path = std::move(path)](Core::System& system) { State::LoadAs(system, path); });
+  Core::QueueHostJob([path = std::move(path)](Core::System& system) {
+    if (!File::Exists(path))
+    {
+      s_load_failed = true;
+      VrUi::PostToast(path.ends_with(QUICK_SAVE_SUFFIX) ? "No Quick Save" : "Save State Not Found",
+                      1500);
+      return;
+    }
+    State::LoadAs(system, path);
+  });
 }
 
 void VrUi::RequestSaves()
@@ -556,6 +586,13 @@ void VrUi::RequestMods()
 
 void VrUi::WatchInstall()
 {
+  if (s_load_failed.exchange(false))
+    m_menu.undo_load.clear();
+  if (s_install_started.exchange(false))
+  {
+    m_watch_install = true;
+    m_last_watch_ns = 0;
+  }
   if (!m_watch_install || m_frame.time_ns - m_last_watch_ns < REFRESH_NS)
     return;
   m_last_watch_ns = m_frame.time_ns;
@@ -811,16 +848,13 @@ void VrUi::OpenMenu(const Frame& frame)
   StopScrolling();
 
   // The autosave is of the moment it opened.
-  m_pause_after_ns = 0;
-  if (Config::Get(Config::MAIN_AUTOSAVE_ENABLED))
-  {
-    m_pause_after_ns = frame.time_ns + AUTOSAVE_PICTURE_NS;
-    Core::QueueHostJob(
-        [](Core::System& system) { Autosave::Request(system, Autosave::Reason::MenuOpen); });
-  }
+  m_pause_after_ns = s_autosave_on ? frame.time_ns + AUTOSAVE_PICTURE_NS : 0;
+  Core::QueueHostJob([](Core::System& system) {
+    if (Config::Get(Config::MAIN_AUTOSAVE_ENABLED))
+      Autosave::Request(system, Autosave::Reason::MenuOpen);
+  });
   RequestBindings();
   RequestSaves();
-  Perf::PublishLastSecond();
   RefreshMenuState();
   UpdatePause();
 }
@@ -834,6 +868,10 @@ void VrUi::RequestBindings()
     bindings.controller = static_cast<int>(VRWiiController::GetCurrent(system));
     bindings.can_choose = VRWiiController::CanChoose(system);
     bindings.table = GetPadTable(bindings.kind);
+    bindings.scope = GetPadScope(bindings.kind);
+    bindings.scope_lock = GetPadScopeLock(bindings.kind);
+    bindings.profiles = GetPadProfiles(bindings.kind);
+    bindings.profile = GetPadProfile(bindings.kind);
     std::lock_guard lock(s_bindings_mutex);
     s_bindings = std::move(bindings);
     s_bindings_ready = true;
@@ -842,9 +880,15 @@ void VrUi::RequestBindings()
 
 void VrUi::ChooseController(int controller)
 {
-  if (controller == m_menu.controller)
+  if (controller == m_menu.controller || controller < 0 ||
+      controller >= static_cast<int>(VRWiiController::NAMES.size()))
+  {
     return;
+  }
   m_menu.controller = controller;
+  // The drawing at once; what is on its controls follows.
+  m_menu.pad = GetControllerPad(controller);
+  m_menu.pad_labels = {};
   Core::QueueHostJob([choice = static_cast<VRWiiController::Choice>(controller)](
                          Core::System& system) { VRWiiController::Choose(system, choice); });
   RequestBindings();
@@ -930,14 +974,12 @@ void VrUi::RefreshMenuState()
   m_menu.wii = Core::System::GetInstance().IsWii();
   m_menu.fast_forward = m_fast_forward;
 
-  const OpenXRPresentationMode mode = Config::Get(Config::GFX_VR_PRESENTATION_MODE);
   SettingState& settings = m_menu.settings;
   settings.has_game = !game_id.empty() && game_id != DEFAULT_GAME_ID;
   if (!settings.has_game)
     settings.scope = SettingScope::Global;
   settings.immersive = !m_frame.has_screen;
-  settings.can_switch_mode =
-      mode == OpenXRPresentationMode::Immersive || mode == OpenXRPresentationMode::StereoScreen;
+  settings.can_switch_mode = s_can_switch_mode;
   settings.can_curve = m_manager->CanCurveScreen();
   if (m_menu.tab == MenuTab::Stats)
     m_menu.stats = GetStatsGroups(Perf::GetStats());
@@ -999,14 +1041,43 @@ void VrUi::UseGlobalValues()
 
 bool VrUi::HasPopup() const
 {
-  return m_menu.open_setting != SettingId::None || m_menu.open_scope || m_menu.open_controller;
+  return m_menu.open_setting != SettingId::None || m_menu.open_scope || m_menu.open_pad_scope ||
+         m_menu.open_pad_profile;
 }
 
 void VrUi::ClosePopup()
 {
   m_menu.open_setting = SettingId::None;
   m_menu.open_scope = false;
-  m_menu.open_controller = false;
+  m_menu.open_pad_scope = false;
+  m_menu.open_pad_profile = false;
+}
+
+void VrUi::ChoosePadProfile(int option)
+{
+  const std::vector<std::string> options = GetPadProfileOptions(m_menu);
+  if (option < 0 || option >= static_cast<int>(options.size()))
+    return;
+  std::string name = option == 0 ? std::string() : options[static_cast<std::size_t>(option)];
+  if (name == m_menu.pad_profile)
+    return;
+  m_menu.pad_profile = name;
+  // It may be of another controller: the drawing follows what comes back.
+  Core::QueueHostJob([kind = m_menu.pad, name = std::move(name)](Core::System&) {
+    SetPadProfile(kind, name);
+  });
+  RequestBindings();
+}
+
+void VrUi::SetPadScope(SettingScope scope)
+{
+  if (scope == m_menu.pad_scope || !m_menu.pad_scope_lock.empty())
+    return;
+  m_menu.pad_scope = scope;
+  Core::QueueHostJob([kind = m_menu.pad, scope](Core::System&) {
+    UI::SetPadScope(kind, scope == SettingScope::PerGame ? PadScope::Game : PadScope::Global);
+  });
+  RequestBindings();
 }
 
 void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float dt)
@@ -1032,6 +1103,11 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
     m_menu.edit_lock = s_bindings.edit_lock;
     m_menu.controller = s_bindings.controller;
     m_menu.can_choose_controller = s_bindings.can_choose;
+    m_menu.pad_scope =
+        s_bindings.scope == PadScope::Game ? SettingScope::PerGame : SettingScope::Global;
+    m_menu.pad_scope_lock = s_bindings.scope_lock;
+    m_menu.pad_profiles = s_bindings.profiles;
+    m_menu.pad_profile = s_bindings.profile;
     m_bindings_table = s_bindings.table;
     if (m_menu.page == MenuPage::EditControls && !m_edit.IsListening())
       OpenEditControls();
@@ -1168,8 +1244,9 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
   const bool pressed = down && !m_press_down;
   const bool released = !down && m_press_down;
   m_press_down = down;
+  // Not over an open menu.
   m_menu.show_tooltip =
-      hovered && !down && frame.time_ns - m_rest_since_ns >= TOOLTIP_NS;
+      hovered && !down && !beside && frame.time_ns - m_rest_since_ns >= TOOLTIP_NS;
 
   float* const scroll =
       can_scroll ? &m_menu.scroll[static_cast<std::size_t>(list->section)] : nullptr;
@@ -1329,8 +1406,11 @@ void VrUi::ChangeMod(const MenuWidget& widget)
   const std::string& game = SConfig::GetInstance().GetGameID();
   if (widget.item == MenuItem::ModGet)
   {
-    m_watch_install = GameMods::StartInstall(list, game, item.id);
-    m_menu.mods_progress = GameMods::GetProgress();
+    // It looks the mod up in the catalogue's files.
+    Core::QueueHostJob([list, game, id = item.id](Core::System&) {
+      if (GameMods::StartInstall(list, game, id))
+        s_install_started = true;
+    });
     return;
   }
   const bool remove = widget.item == MenuItem::ModRemove;
@@ -1365,6 +1445,8 @@ void VrUi::Activate(const MenuWidget& widget, int option)
   case MenuItem::TabStats:
     m_menu.tab = MenuTab::Stats;
     m_menu.page = MenuPage::Main;
+    // With Show Stats off: the last second the game ran.
+    Perf::PublishLastSecond();
     m_menu.stats = GetStatsGroups(Perf::GetStats());
     break;
   case MenuItem::TabControls:
@@ -1374,7 +1456,7 @@ void VrUi::Activate(const MenuWidget& widget, int option)
   case MenuItem::TabMods:
     m_menu.tab = MenuTab::Mods;
     m_menu.page = MenuPage::Main;
-    GameMods::RefreshCatalogAsync();
+    Core::QueueHostJob([](Core::System&) { GameMods::RefreshCatalogAsync(); });
     RequestMods();
     break;
   case MenuItem::TabSettings:
@@ -1488,7 +1570,20 @@ void VrUi::Activate(const MenuWidget& widget, int option)
       m_menu.controls_page = option;
     break;
   case MenuItem::Controller:
-    m_menu.open_controller = true;
+    ChooseController(widget.index);
+    break;
+  case MenuItem::ControlsScope:
+    // Global is what the menu of the dots has: the game's own controls go with it.
+    if (option == 1)
+      SetPadScope(SettingScope::PerGame);
+    else if (option == 0 && m_menu.pad_scope == SettingScope::PerGame)
+      m_menu.open_pad_scope = true;
+    break;
+  case MenuItem::PadProfile:
+    m_menu.open_pad_profile = true;
+    break;
+  case MenuItem::ControlsMore:
+    m_menu.open_pad_scope = true;
     break;
   case MenuItem::EditControls:
     OpenEditControls();
@@ -1532,8 +1627,10 @@ void VrUi::Activate(const MenuWidget& widget, int option)
   case MenuItem::PopupOption:
     if (std::exchange(m_menu.open_scope, false))
       UseGlobalValues();
-    else if (std::exchange(m_menu.open_controller, false))
-      ChooseController(widget.index);
+    else if (std::exchange(m_menu.open_pad_scope, false))
+      SetPadScope(SettingScope::Global);
+    else if (std::exchange(m_menu.open_pad_profile, false))
+      ChoosePadProfile(widget.index);
     else if (const SettingId id = std::exchange(m_menu.open_setting, SettingId::None);
         id != SettingId::None)
     {
@@ -1678,14 +1775,20 @@ void VrUi::UploadStats()
   }
   if (m_stats_waiting)
   {
-    std::lock_guard lock(m_draw_mutex);
-    if (m_stats_drawn_picture != StatsPicture::None)
+    bool ready = false;
     {
-      m_stats_overlay->Upload(reinterpret_cast<const u8*>(m_stats_drawn.data()));
-      m_stats_queued = std::exchange(m_stats_drawn_picture, StatsPicture::None);
-      m_stats_waiting =
-          m_stats_drawn_serial != m_stats_serial || m_stats_queued != m_stats_asked;
+      std::lock_guard lock(m_draw_mutex);
+      if (m_stats_drawn_picture != StatsPicture::None)
+      {
+        m_stats_upload.swap(m_stats_drawn);
+        m_stats_queued = std::exchange(m_stats_drawn_picture, StatsPicture::None);
+        m_stats_waiting =
+            m_stats_drawn_serial != m_stats_serial || m_stats_queued != m_stats_asked;
+        ready = true;
+      }
     }
+    if (ready)
+      m_stats_overlay->Upload(reinterpret_cast<const u8*>(m_stats_upload.data()));
   }
   m_stats_overlay->Poll();
   if (m_stats_overlay->HasImage() && !m_stats_overlay->IsBusy())
@@ -1777,12 +1880,17 @@ void VrUi::BuildLayers(XrSpace space, std::size_t game_layers,
   {
     if (m_menu_open)
       RequestMenuDraw();
-    std::lock_guard lock(m_draw_mutex);
-    if (m_drawn_ready)
+    bool ready = false;
     {
-      m_menu_overlay->Upload(reinterpret_cast<const u8*>(m_drawn.data()));
-      m_drawn_ready = false;
+      std::lock_guard lock(m_draw_mutex);
+      if (std::exchange(m_drawn_ready, false))
+      {
+        m_menu_upload.swap(m_drawn);
+        ready = true;
+      }
     }
+    if (ready)
+      m_menu_overlay->Upload(reinterpret_cast<const u8*>(m_menu_upload.data()));
   }
   m_art->Poll();
   m_toasts->Poll();
@@ -1914,6 +2022,9 @@ void VrUi::DrawThread()
   FrameXr::Menu::Canvas canvas;
   canvas.Init(static_cast<int>(MENU_TEX_WIDTH), static_cast<int>(MENU_TEX_HEIGHT));
   FrameXr::Menu::Canvas stats_canvas;
+  // What is handed over: copied without the lock, swapped under it.
+  std::vector<u32> menu_scratch;
+  std::vector<u32> stats_scratch;
   std::map<std::string, std::optional<MenuPicture>> pictures;
 
   std::unique_lock lock(m_draw_mutex);
@@ -1956,8 +2067,9 @@ void VrUi::DrawThread()
         DrawStats(&kit, &stats_canvas, stats);
       else
         DrawWristStats(&kit, &stats_canvas, stats);
+      stats_scratch = stats_canvas.px;
       lock.lock();
-      m_stats_drawn = stats_canvas.px;
+      m_stats_drawn.swap(stats_scratch);
       m_stats_drawn_picture = picture;
       m_stats_drawn_serial = stats.serial;
       continue;
@@ -1971,8 +2083,9 @@ void VrUi::DrawThread()
         it->second = ReadPicture(path);
       return it->second->width > 0 ? &*it->second : nullptr;
     });
+    menu_scratch = canvas.px;
     lock.lock();
-    m_drawn = canvas.px;
+    m_drawn.swap(menu_scratch);
     m_drawn_ready = true;
   }
 }

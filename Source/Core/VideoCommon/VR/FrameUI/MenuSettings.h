@@ -13,6 +13,11 @@
 
 #include "Core/GameSettingScope.h"
 
+namespace Config
+{
+struct Location;
+}
+
 // The settings in the VR menu as data: what rows there are, where they are, what they say and the
 // config behind them. What a setting is called here is what it is called on the settings page
 // (VRPane). No OpenXR here (unit tested).
@@ -229,6 +234,10 @@ int FindOption(const std::vector<SettingOption>& options, float value);
 float SliderFraction(const SettingRow& row, float value);
 float SliderValue(const SettingRow& row, float t);
 std::string FormatValue(const SettingRow& row, float value);
+
+// The config key of a row: the one its control on the Qt settings pages has
+// (Tools/check-vr-menu.py compares the two).
+const Config::Location& GetSettingLocation(SettingId id);
 
 // The config. Host thread.
 SettingValues ReadSettings();

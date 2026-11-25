@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 
 #include "Common/Config/Config.h"
@@ -1357,15 +1358,111 @@ TEST(VRFrameUI, OnlyWiiGamesHaveAChoiceOfController)
   EXPECT_FALSE(has());
   s.wii = true;
   EXPECT_TRUE(has());
-  s.open_controller = true;
-  s.controller = 2;
-  const auto widgets = VrMenu::Layout(s);
-  const auto menu = std::ranges::find(widgets, MenuWidget::Kind::Menu, &MenuWidget::kind);
-  ASSERT_NE(menu, widgets.end());
-  EXPECT_EQ(menu->options[static_cast<std::size_t>(menu->selected)], "Wii Remote + Nunchuk");
+  // A chip for each, the game's one filled, all on the page and apart.
+  for (int controller = -1; controller < static_cast<int>(VRWiiController::NAMES.size());
+       ++controller)
+  {
+    s.controller = controller;
+    const auto widgets = VrMenu::Layout(s);
+    std::vector<const MenuWidget*> chips;
+    for (const MenuWidget& w : widgets)
+    {
+      if (w.item == MenuItem::Controller)
+        chips.push_back(&w);
+    }
+    ASSERT_EQ(chips.size(), VRWiiController::NAMES.size());
+    for (std::size_t i = 0; i < chips.size(); ++i)
+    {
+      EXPECT_EQ(chips[i]->index, static_cast<int>(i));
+      EXPECT_EQ(chips[i]->active, static_cast<int>(i) == controller);
+      EXPECT_FALSE(chips[i]->label.empty());
+      EXPECT_LE(chips[i]->rect.x1, VrMenu::WIDTH - 16.0f);
+      if (i > 0)
+      {
+        EXPECT_GT(chips[i]->rect.x0, chips[i - 1]->rect.x1);
+      }
+    }
+  }
   EXPECT_EQ(static_cast<int>(VRWiiController::Choice::RemoteNunchuk), 2);
-  for (std::size_t i = 0; i < CONTROLLERS.size(); ++i)
-    EXPECT_STREQ(CONTROLLERS[i], VRWiiController::NAMES[i]);
+  EXPECT_EQ(GetControllerChipLabel("Wii Remote"), "Wii Remote");
+  EXPECT_EQ(GetControllerChipLabel("Wii Remote + Nunchuk"), "+ Nunchuk");
+  EXPECT_EQ(GetControllerChipLabel("Wii Remote (Sideways)"), "Sideways");
+  EXPECT_EQ(GetControllerChipLabel("Classic Controller"), "Classic");
+  EXPECT_EQ(GetControllerChipLabel("GameCube Controller"), "GameCube");
+  // Every choice has its drawing, and the drawing its name.
+  for (int i = 0; i < static_cast<int>(VRWiiController::NAMES.size()); ++i)
+    EXPECT_STREQ(GetPadName(GetControllerPad(i)), VRWiiController::NAMES[static_cast<std::size_t>(i)]);
+  EXPECT_EQ(GetControllerPad(-1), PadKind::WiiRemote);
+  EXPECT_EQ(GetControllerPad(99), PadKind::WiiRemote);
+}
+
+TEST(VRFrameUI, ControlsHaveGlobalAndPerGame)
+{
+  MenuState s;
+  s.tab = MenuTab::Controls;
+  const auto find = [&s](MenuItem item) {
+    const auto widgets = VrMenu::Layout(s);
+    const auto it = std::ranges::find(widgets, item, &MenuWidget::item);
+    return it != widgets.end() ? std::optional<MenuWidget>(*it) : std::nullopt;
+  };
+  ASSERT_TRUE(find(MenuItem::ControlsScope));
+  EXPECT_EQ(find(MenuItem::ControlsScope)->selected, 0);
+  EXPECT_TRUE(find(MenuItem::ControlsMore)->disabled);
+  EXPECT_EQ(find(MenuItem::EditControls)->label, "Edit Controls");
+  // The button is under the scope.
+  EXPECT_GE(find(MenuItem::EditControls)->rect.y0, find(MenuItem::ControlsScope)->rect.y1);
+
+  s.pad_scope = SettingScope::PerGame;
+  EXPECT_EQ(find(MenuItem::ControlsScope)->selected, 1);
+  EXPECT_FALSE(find(MenuItem::ControlsMore)->disabled);
+  s.open_pad_scope = true;
+  ASSERT_TRUE(find(MenuItem::PopupOption));
+
+  s.open_pad_scope = false;
+  s.pad_scope_lock = "The game's settings name a profile.";
+  EXPECT_TRUE(find(MenuItem::ControlsScope)->disabled);
+  EXPECT_EQ(find(MenuItem::ControlsScope)->tooltip, s.pad_scope_lock);
+
+  // Shortcuts has neither.
+  s.controls_page = 1;
+  EXPECT_FALSE(find(MenuItem::ControlsScope));
+  EXPECT_FALSE(find(MenuItem::EditControls));
+}
+
+// One store, two views: a row is one config key, and what the key has at first is something the
+// row can show.
+TEST_F(VRFrameUISettings, EveryRowIsOneConfigKey)
+{
+  const SettingValues values = ReadSettings();
+  std::set<std::string> seen;
+  for (const SettingRow& row : GetSettingRows())
+  {
+    if (row.kind == RowKind::Header)
+      continue;
+    const Config::Location& location = GetSettingLocation(row.id);
+    EXPECT_FALSE(location.key.empty()) << row.label;
+    EXPECT_TRUE(seen.insert(fmt::format("{}/{}/{}", static_cast<int>(location.system),
+                                        location.section, location.key))
+                    .second)
+        << row.label;
+    const float value = values.global[static_cast<std::size_t>(row.id)];
+    if (!row.options.empty())
+    {
+      EXPECT_GE(FindOption(row.options, value), 0) << row.label << " " << value;
+    }
+    else if (row.kind == RowKind::Slider)
+    {
+      EXPECT_GE(value, row.minimum) << row.label;
+      EXPECT_LE(value, row.maximum) << row.label;
+    }
+    // A game's value of a VR key is in its VR file, as on the game's VR page; Dolphin's own keys
+    // are in its game settings.
+    const bool vr_key = location.system == Config::System::GFX && location.section == "VR";
+    if (row.store == SettingStore::VRFile)
+      EXPECT_TRUE(vr_key) << row.label;
+    if (row.store == SettingStore::LocalGame)
+      EXPECT_FALSE(vr_key) << row.label;
+  }
 }
 
 TEST_F(VRFrameUISettings, ControllerIsKeptPerGame)

@@ -748,6 +748,11 @@ std::string FormatValue(const SettingRow& row, float value)
   return row.id == SettingId::InternalResolution ? fmt::format("{:.0f}x", value) : "Other";
 }
 
+const Config::Location& GetSettingLocation(SettingId id)
+{
+  return *std::ranges::find(GetBindings(), id, &Binding::id)->location;
+}
+
 SettingValues ReadSettings()
 {
   SettingValues values;

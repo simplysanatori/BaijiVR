@@ -10,6 +10,7 @@
 
 #include <fmt/format.h>
 
+#include "Core/VRWiiController.h"
 #include "VideoCommon/VR/FrameUI/md3_fonts.h"
 
 namespace VR::UI
@@ -529,22 +530,84 @@ void AddEditControls(Builder* builder, const MenuState& state)
     w.disabled = listening && !w.active;
   }
 
-  MenuWidget& prompt = builder->Add(Kind::Text, MenuItem::None);
-  prompt.rect = {BAR.x0, BAR.y0, BAR.x1 - 112.0f, BAR.y1};
-  prompt.label = listening ? GetPrompt(state.edit) : "";
+  // What to do, and under it whose controls these are.
+  constexpr float PROFILE_W = 260.0f;
+  MenuWidget& guide = builder->Add(Kind::Guide, MenuItem::None);
+  guide.rect = {BAR.x0, BAR.y0, BAR.x1 - (listening ? 112.0f : PROFILE_W + 12.0f), BAR.y1};
+  guide.active = listening;
+  if (listening)
+  {
+    guide.label = fmt::format("{}: {}", GetTargetName(state.edit.listening), GetPrompt(state.edit));
+    guide.note = "On your controllers. The grips and the stick clicks keep their own jobs.";
+  }
+  else
+  {
+    guide.label = "Choose a Control to Change";
+    guide.note = fmt::format("{}, {}.", GetPadName(state.pad),
+                             state.pad_scope == SettingScope::PerGame ? "for this game only" :
+                                                                         "for every game");
+  }
   if (listening)
   {
     MenuWidget& cancel = builder->Add(Kind::Button, MenuItem::EditCancel);
     cancel.rect = {BAR.x1 - 100.0f, BAR.y0, BAR.x1, BAR.y1};
     cancel.label = "Cancel";
+    return;
+  }
+  // The saved profile the game has, as the mapping window's Profile.
+  const Rect profile_rect{BAR.x1 - PROFILE_W, BAR.y0, BAR.x1, BAR.y1};
+  MenuWidget& profile = builder->Add(Kind::Dropdown, MenuItem::PadProfile);
+  profile.rect = profile_rect;
+  profile.control = profile_rect;
+  profile.value = state.pad_profile.empty() ? NO_PAD_PROFILE : state.pad_profile;
+  profile.active = state.open_pad_profile;
+  profile.disabled = !state.pad_scope_lock.empty();
+  profile.tooltip = profile.disabled ? state.pad_scope_lock :
+                                       "The saved profile this game uses, as in the mapping window.";
+  if (state.open_pad_profile)
+  {
+    std::vector<std::string> options = GetPadProfileOptions(state);
+    const auto chosen = std::ranges::find(options, state.pad_profile);
+    const int selected =
+        state.pad_profile.empty() ? 0 :
+        chosen != options.end()   ? static_cast<int>(chosen - options.begin()) :
+                                    -1;
+    AddMenu(builder, profile_rect, 340.0f, std::move(options), selected);
   }
 }
 
 constexpr float CONTROLS_PAGE_W = 248.0f;
-constexpr float EDIT_W = 176.0f;
-// A Wii game's controller, between them.
-constexpr float CONTROLLER_X1 = RIGHT - 112.0f - 12.0f;
-constexpr float CONTROLLER_MENU_W = 284.0f;
+constexpr float EDIT_W = 152.0f;
+constexpr float CHOICE_H = 36.0f;
+constexpr float CHOICE_GAP = 8.0f;
+
+// A Wii game's controllers as a row of chips, as wide as their names, from `x0` on.
+void AddControllers(Builder* builder, const MenuState& state, float x0, float y)
+{
+  std::vector<std::string> labels;
+  std::vector<float> widths;
+  float total = -CHOICE_GAP;
+  for (const char* const name : VRWiiController::NAMES)
+  {
+    labels.push_back(GetControllerChipLabel(name));
+    widths.push_back(28.0f + 7.6f * static_cast<float>(labels.back().size()));
+    total += widths.back() + CHOICE_GAP;
+  }
+  const float scale = std::min(1.0f, (RIGHT - x0) / total);
+  float x = x0;
+  for (std::size_t i = 0; i < labels.size(); ++i)
+  {
+    MenuWidget& w = builder->Add(Kind::Choice, MenuItem::Controller);
+    w.index = static_cast<int>(i);
+    w.rect = {x, y, x + widths[i] * scale, y + CHOICE_H};
+    w.label = std::move(labels[i]);
+    w.active = state.controller == w.index;
+    w.disabled = !state.can_choose_controller;
+    w.tooltip = w.disabled ? "NetPlay, a movie or the game's own settings have chosen it." :
+                             VRWiiController::NAMES[i];
+    x = w.rect.x1 + CHOICE_GAP * scale;
+  }
+}
 
 void AddControls(Builder* builder, const MenuState& state)
 {
@@ -558,40 +621,45 @@ void AddControls(Builder* builder, const MenuState& state)
   page.control = page.rect;
   page.options = {"Game", "Shortcuts"};
   page.selected = state.controls_page;
-  if (state.controls_page == 0)
-  {
-    MenuWidget& edit = builder->Add(Kind::Button, MenuItem::EditControls);
-    edit.rect = {RIGHT - EDIT_W, TOP, RIGHT, TOP + CONTROL_H};
-    edit.icon = Icon::kEdit;
-    edit.label = "Edit Controls";
-    edit.disabled = !state.edit_lock.empty();
-    edit.tooltip = state.edit_lock;
-    if (state.wii)
-    {
-      edit.rect.x0 = CONTROLLER_X1 + 12.0f;
-      edit.label = "Edit";
-      MenuWidget& controller = builder->Add(Kind::Dropdown, MenuItem::Controller);
-      controller.rect = {LEFT + CONTROLS_PAGE_W + 12.0f, TOP, CONTROLLER_X1,
-                         TOP + CONTROL_H};
-      controller.control = controller.rect;
-      controller.value =
-          state.controller >= 0 ? CONTROLLERS[static_cast<std::size_t>(state.controller)] : "Other";
-      controller.active = state.open_controller;
-      controller.disabled = !state.can_choose_controller;
-      if (controller.disabled)
-        controller.tooltip = "NetPlay, a movie or the game's own settings have chosen it.";
-    }
-  }
   builder->Gap(64.0f);
 
   if (state.controls_page == 0)
   {
+    // Under them: Edit Controls, and beside it a Wii game's controllers.
+    const float row_y = builder->GetY() - 4.0f;
+    MenuWidget& edit = builder->Add(Kind::Button, MenuItem::EditControls);
+    edit.rect = {LEFT, row_y, LEFT + EDIT_W, row_y + CHOICE_H};
+    edit.label = "Edit Controls";
+    edit.disabled = !state.edit_lock.empty();
+    edit.tooltip = state.edit_lock;
+
+    // Whose mapping it is, where Settings has it.
+    const bool own = state.pad_scope == SettingScope::PerGame;
+    const bool locked = !state.pad_scope_lock.empty();
+    MenuWidget& scope = builder->Add(Kind::Segmented, MenuItem::ControlsScope);
+    scope.rect = {MORE_X0 - 2.0f - SCOPE_W, TOP, MORE_X0 - 2.0f, TOP + CONTROL_H};
+    scope.control = scope.rect;
+    scope.options = {"Global", "Per-Game"};
+    scope.selected = own ? 1 : 0;
+    scope.disabled = locked;
+    scope.tooltip = locked ? state.pad_scope_lock :
+                    own    ? "This game has its own controls." :
+                             "These controls are for every game.";
+    MenuWidget& more = builder->Add(Kind::More, MenuItem::ControlsMore);
+    more.rect = {MORE_X0, TOP, MORE_X0 + MORE_W, TOP + CONTROL_H};
+    more.active = state.open_pad_scope;
+    more.disabled = locked || !own;
+    if (more.disabled)
+      more.tooltip = locked ? state.pad_scope_lock : "This game has no controls of its own.";
+
+    if (state.wii)
+      AddControllers(builder, state, LEFT + EDIT_W + 16.0f, row_y);
     MenuWidget& pad = builder->Add(Kind::Pad, MenuItem::None);
-    pad.rect = {LEFT, builder->GetY(), RIGHT, PANE.y1 - 8.0f};
-    if (state.wii && state.open_controller)
+    pad.rect = {LEFT, row_y + CHOICE_H + 8.0f, RIGHT, PANE.y1 - 8.0f};
+    if (state.open_pad_scope)
     {
-      AddMenu(builder, {LEFT, TOP, CONTROLLER_X1, TOP + CONTROL_H}, CONTROLLER_MENU_W,
-              {CONTROLLERS.begin(), CONTROLLERS.end()}, state.controller);
+      AddMenu(builder, {MORE_X0, TOP, MORE_X0 + MORE_W, TOP + CONTROL_H}, SCOPE_MENU_W,
+              {"Use Global Values"}, -1);
     }
     return;
   }
@@ -784,6 +852,56 @@ void AddSettings(Builder* builder, const MenuState& state)
   AddScopeMenu(builder, state);
 }
 }  // namespace
+
+std::string GetControllerChipLabel(std::string_view name)
+{
+  constexpr std::string_view REMOTE = "Wii Remote ";
+  constexpr std::string_view CONTROLLER = " Controller";
+  if (name.ends_with(CONTROLLER) && name.size() > CONTROLLER.size())
+    return std::string(name.substr(0, name.size() - CONTROLLER.size()));
+  if (!name.starts_with(REMOTE) || name.size() == REMOTE.size())
+    return std::string(name);
+  const std::string_view rest = name.substr(REMOTE.size());
+  if (rest.size() > 2 && rest.front() == '(' && rest.back() == ')')
+    return std::string(rest.substr(1, rest.size() - 2));
+  return std::string(rest);
+}
+
+std::vector<std::string> GetPadProfileOptions(const MenuState& state)
+{
+  std::vector<std::string> options{NO_PAD_PROFILE};
+  for (const std::string& name : state.pad_profiles)
+  {
+    if (options.size() > MAX_PAD_PROFILES)
+      break;
+    options.push_back(name);
+  }
+  // The game's is always there.
+  if (!state.pad_profile.empty() && std::ranges::find(options, state.pad_profile) == options.end())
+    options.back() = state.pad_profile;
+  return options;
+}
+
+PadKind GetControllerPad(int controller)
+{
+  // In the order of VRWiiController::Choice.
+  static constexpr std::array PADS{PadKind::GameCube, PadKind::WiiRemote, PadKind::WiiNunchuk,
+                                   PadKind::WiiRemoteSideways, PadKind::WiiClassic};
+  static_assert(PADS.size() == VRWiiController::NAMES.size());
+  return controller >= 0 && controller < static_cast<int>(PADS.size()) ?
+             PADS[static_cast<std::size_t>(controller)] :
+             PadKind::WiiRemote;
+}
+
+const char* GetPadName(PadKind kind)
+{
+  for (int i = 0; i < static_cast<int>(VRWiiController::NAMES.size()); ++i)
+  {
+    if (GetControllerPad(i) == kind)
+      return VRWiiController::NAMES[static_cast<std::size_t>(i)];
+  }
+  return VRWiiController::NAMES[0];
+}
 
 bool ShowsGame(MenuTab tab, MenuSection section)
 {
@@ -1119,6 +1237,26 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
                    kit->Fit(Type::RailLabel, w.value, room), 0, shown);
       break;
     }
+    case Kind::Choice:
+    {
+      const float shown = w.disabled ? kDisabledContent : 1.0f;
+      if (w.active)
+        kit->Fill(w.rect, 8.0f, Tok::kSecondaryContainer, shown);
+      else
+        kit->Stroke(w.rect, 8.0f, 1.0f, Tok::kOutline, shown);
+      kit->StateLayer(w.rect, 8.0f, Tok::kOnSurface, look);
+      kit->TextMid(w.rect.Cx(), w.rect.Cy(), Type::RailLabel,
+                   w.active ? Tok::kOnSecondaryContainer : Tok::kOnSurfaceVariant,
+                   kit->Fit(Type::RailLabel, w.label, w.rect.W() - 12.0f), 1, shown);
+      break;
+    }
+    case Kind::Guide:
+      kit->TextMid(w.rect.x0, w.rect.y0 + 14.0f, Type::Label,
+                   w.active ? Tok::kPrimary : Tok::kOnSurface,
+                   kit->Fit(Type::Label, w.label, w.rect.W()));
+      kit->TextMid(w.rect.x0, w.rect.y0 + 36.0f, Type::Tooltip, Tok::kOnSurfaceVariant,
+                   kit->Fit(Type::Tooltip, w.note, w.rect.W()));
+      break;
     case Kind::Header:
       kit->Line(w.rect.x0, w.rect.y0 + 18.0f, w.rect.x1, w.rect.y0 + 18.0f, 1.0f,
                 Tok::kOutlineVariant);
@@ -1136,7 +1274,8 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
       break;
     }
     case Kind::Dropdown:
-      kit->MenuButton(w.control, w.value, w.active, look);
+      kit->MenuButton(w.control, kit->Fit(Type::Label, w.value, w.control.W() - 64.0f), w.active,
+                      look);
       break;
     case Kind::Menu:
       kit->Menu(w.rect, w.options, w.selected,
