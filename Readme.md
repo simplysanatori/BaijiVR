@@ -1,7 +1,7 @@
 # Baiji VR
 
 GameCube and Wii games in VR, running standalone on the Valve Steam Frame (PC VR to come).
-From the developer of [Azahar VR](https://github.com/simplysanatori/AzaharVR) (Nintendo 3DS games in VR).
+From the developer of Azahar VR. See also [Azahar VR](https://github.com/simplysanatori/AzaharVR) for 3DS, DS and GBA games.
 
 It is my unofficial fork of [Baiji](https://github.com/thejerf/baijiSteamVR) by thejerf, the Steam Frame version of iChris4's [dolphinXR](https://github.com/iChris4/dolphinXR/), which is based on [Dolphin](https://dolphin-emu.org/).
 
