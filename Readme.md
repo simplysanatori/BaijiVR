@@ -1,65 +1,64 @@
 # Baiji VR
 
-GameCube and Wii games in VR, running standalone on the Valve Steam Frame.
+GameCube and Wii games in VR, running standalone on the Valve Steam Frame (PC VR to come).
 It is my unofficial fork of [Baiji](https://github.com/thejerf/baijiSteamVR) by thejerf, the Steam Frame version of iChris4's [dolphinXR](https://github.com/iChris4/dolphinXR/), which is based on [Dolphin](https://dolphin-emu.org/).
 
 ![Baiji VR](docs/images/cover.jpg)
 
 ## Features
 
-- Stereoscopic 3D or Immersive, and Flat, switched mid-game
-- Natural 3D, matched to your IPD, and a curved screen
-- A redesigned VR menu with save states and autosave
-- A Games tab: start another game without leaving VR
-- In-app mod, cheat and texture pack downloader
-- Edit the controls on drawings of the GameCube and Wii controllers
+- Stereoscopic 3D and Immersive 3D
+- Natural 3D, matched to your IPD
+- Live switching between VR and Flat
+- Custom VR menu with global and per-game settings
+- Custom controls for every GameCube and Wii controller
+- In-app mods, cheats and texture packs
 - Game-specific fixes
 
 ## Built on Baiji
 
-[Baiji](https://github.com/thejerf/baijiSteamVR) got all of this started. thejerf made dolphinXR a native Steam Frame app, with 3D that works out of the box, the Frame's controllers and smooth frames in the headset. Thank you! I plan to bring my fixes back to it.
+[Baiji](https://github.com/thejerf/baijiSteamVR) got all of this started. thejerf made dolphinXR a native Steam Frame app, with the 3D, the Frame's controllers and the smooth frames this is built on. Thank you! I plan to bring my fixes back to it.
 
-## 3D and immersion
+## 3D modes
 
-- **Stereoscopic 3D or Immersive, any time**: press both bumpers, then **View** and **Menu**.
-- **Stereoscopic 3D**: the game in 3D on a screen you can grab, move and resize.
-- **Immersive**: you are inside the game, drawn two steps over **Internal Resolution**.
-- **Natural 3D**: at 100% **3D Depth**, distant scenery sits at infinity, from your IPD as the Frame measures it.
-- **Screen Curve**: bends the screen around you, up to 90°.
-- **World Scale**: how big the game world feels.
-- **Switch to Flat**: the same game goes on in the window, and back.
+- **Stereoscopic 3D**: the game's world is rendered once for each eye, and each eye sees its own image on a virtual screen.
+- **Immersive 3D**: the world is rendered at the headset's wide field of view, with 3DoF or 6DoF head tracking, two steps over **Internal Resolution**.
+- **Natural 3D**: the gap between the two images is set from your IPD, the distance between your eyes. Too wide strains your eyes, too narrow looks flat. Matched, far scenery looks as far away as in real life.
+- **Screen Curve** and adjustable **World Scale**
+- **VR to Flat, live**: move a running game to a flat window in SteamVR and back to VR, right where you left off.
 
-## The VR menu
+## Custom VR menu
 
-Hold **Menu** for 1 second to open the completely redesigned VR menu. It supports global and per-game settings.
+A completely redesigned VR menu (following Material Design). Supports global and per-game settings.
 
 <img src="docs/images/menu-main.png" width="49%" alt="Main"> <img src="docs/images/menu-games.png" width="49%" alt="Games">
 
-- **Main**: save states with pictures, screenshots, Fast Forward, **Switch to Flat**
-- **Games**: your games with covers, search, sorting and favourites
-- **Position**: the screen's distance, size, curve and shape
-- **Stats**: frame rate, resolution and headset numbers, in front of you or on your wrist
-- **Controls**, **Mods** and **Settings**: below, and the window's own settings
+- **Main**: save states, autosaves, screenshots and Fast Forward
+- **Games**: your games list, with search, sorting and favourites
+- **Position**: screen distance, size, curve and aspect ratio
+- **Stats**: frame rate, game speed, internal resolution, Dynamic Resolution, late frames and GPU time
+- **Controls**: custom controls for each controller, and the profiles to switch between
+- **Mods**: mods, cheats and texture packs from public repositories, many downloadable in the app
+- **Settings**
 
 <img src="docs/images/menu-position.png" width="49%" alt="Position"> <img src="docs/images/menu-stats.png" width="49%" alt="Stats">
 
-## Controllers
+## Controller menu
 
-Every controller is drawn with the Frame button for each control.
+Every GameCube and Wii controller is drawn with its defaults for the Steam Frame controllers.
 
-<img src="docs/images/menu-controls-gamecube.png" width="49%" alt="GameCube controls"> <img src="docs/images/menu-controls-nunchuk.png" width="49%" alt="Wii Remote and Nunchuk controls">
+<img src="docs/images/menu-controls-gamecube.png" width="49%" alt="GameCube Controller"> <img src="docs/images/menu-controls-nunchuk.png" width="49%" alt="Wii Remote and Nunchuk">
 
-- **Wii games** play with a **GameCube** controller, **Wii Remote**, **+ Nunchuk**, **Sideways** or **Classic**.
-- **Edit Controls**: choose a control on the drawing, then press the button for it.
-- **Global** or **Per-Game** mappings, and saved profiles
-- **Well-known games start with the right controller**: Kirby's Return to Dream Land and New Super Mario Bros. Wii with the Wii Remote on its side, Super Mario Galaxy with the Nunchuk.
+- **Wii games**: GameCube Controller, Wii Remote, Wii Remote + Nunchuk, Wii Remote (Sideways) or Classic Controller
+- **Edit Controls**, with global and per-game mappings and saved profiles
+- **Well-known games start with the right controller**: Kirby's Return to Dream Land and New Super Mario Bros. Wii with the Wii Remote (Sideways), Super Mario Galaxy with the Nunchuk
 
-<img src="docs/images/menu-edit-controls.png" width="49%" alt="Edit Controls"> <img src="docs/images/menu-controls-sideways.png" width="49%" alt="Wii Remote on its side">
+<img src="docs/images/menu-edit-controls.png" width="49%" alt="Edit Controls"> <img src="docs/images/menu-controls-sideways.png" width="49%" alt="Wii Remote (Sideways)">
 
-## Mods, cheats and textures
+## Mods, cheats and textures menu
 
-- **Mods and Cheats**: 37 cheats, patches and game settings, and 3 mods, for 23 games
-- **Textures**: 24 texture packs, from their creators' own pages
+- **Mods and cheats**: 40 for 23 games
+- **Textures**: 24 texture packs from their original source, 10 of them downloadable in the app
 
 <img src="docs/images/menu-mods.png" width="49%" alt="Mods and Cheats"> <img src="docs/images/menu-textures.png" width="49%" alt="Textures">
 
@@ -67,7 +66,7 @@ No texture pack is hosted by this project.
 
 ## Game-specific fixes
 
-- **Fire Emblem: Path of Radiance** (USA): no more freeze and white screen, confirmed on the Frame
+- **Fire Emblem: Path of Radiance** (USA): other Dolphin VR versions freeze or show a white screen. Both are fixed here.
 - **Fixes to switch on under Mods**: Eternal Darkness, F-Zero GX, Luigi's Mansion, Metroid Prime, Star Fox Adventures, The Last Story, The Legend of Zelda: Skyward Sword and Wii Sports Resort
 - **16:9 widescreen** in 12 games, such as The Wind Waker, Double Dash!!, Super Smash Bros. Melee and Pikmin 2
 - **60 FPS** in Super Mario Sunshine and Pikmin 2
@@ -75,14 +74,11 @@ No texture pack is hosted by this project.
 ## Other fixes
 
 - **Save states**: no freeze while saving; both eyes come back right in VR
-- **Games that change video modes**: the screen keeps one shape
-- **Immersive**: drawing errors
+- **Immersive 3D**: drawing errors
 - **Wii Remote**: Shake works in VR
+- The screen keeps one shape when a game changes video modes
 - No crash on exit; errors show in the headset
-
-## The window in Game Mode
-
-It fits the screen, works with the controller and sits in SteamVR's theater between VR games. **Window Scale** sets its size.
+- **Game Mode**: the window fits the screen and works with the controller
 
 ## Experimental
 
@@ -96,7 +92,7 @@ Off by default: **Dynamic Resolution**, **Pin Emulation Threads**, **Performance
 
 ## Install
 
-There is no download yet. New work is tested on a desktop; testing on the Frame is in progress.
+There is no download yet; testing on the Frame is in progress.
 
 1. Set up the [SSH name `frame`](docs/USER_GUIDE.md#connect-to-the-frame) on your PC.
 
