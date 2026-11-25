@@ -61,6 +61,7 @@
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/VR/FrameUI/Overlay.h"
 #include "VideoCommon/VR/FrameUI/VrUi.h"
+#include "VideoCommon/VR/FrameUI/cylinder_layer.h"
 #include "VideoCommon/VR/Perf/VRPerf.h"
 #include "VideoCommon/VideoConfig.h"
 
@@ -3625,28 +3626,6 @@ void OpenXRManager::PlaceScreenLayer(const FrameXr::Input::PanelQuad& screen,
   layer->size = {screen.width_m, screen.height_m};
 }
 
-// After Azahar for Frame's MakeCylinder (frame_xr/app.cpp, GPLv3 or later).
-XrCompositionLayerCylinderKHR MakeCylinderLayer(const XrCompositionLayerQuad& quad, float radius)
-{
-  const auto& [orientation, position] = quad.pose;
-  const FrameXr::Input::Cylinder cylinder = FrameXr::Input::CylinderFor(
-      {{orientation.x, orientation.y, orientation.z, orientation.w},
-       {position.x, position.y, position.z}},
-      quad.size.width, quad.size.height, radius);
-  const FrameXr::Input::Vec3f& axis = cylinder.pose.position;
-
-  XrCompositionLayerCylinderKHR layer{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
-  layer.layerFlags = quad.layerFlags;
-  layer.space = quad.space;
-  layer.eyeVisibility = quad.eyeVisibility;
-  layer.subImage = quad.subImage;
-  layer.pose = {orientation, {axis.x, axis.y, axis.z}};
-  layer.radius = cylinder.radius;
-  layer.centralAngle = cylinder.central_angle;
-  layer.aspectRatio = cylinder.aspect_ratio;
-  return layer;
-}
-
 void AddScreenLayers(std::span<XrCompositionLayerQuad> quads, float curve_radius,
                      std::array<XrCompositionLayerCylinderKHR, 2>* cylinders,
                      std::vector<XrCompositionLayerBaseHeader*>* layers)
@@ -3655,7 +3634,7 @@ void AddScreenLayers(std::span<XrCompositionLayerQuad> quads, float curve_radius
   {
     if (curve_radius > 0.0f)
     {
-      (*cylinders)[i] = MakeCylinderLayer(quads[i], curve_radius);
+      (*cylinders)[i] = FrameXr::MakeCylinderLayer(quads[i], curve_radius);
       layers->push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&(*cylinders)[i]));
     }
     else

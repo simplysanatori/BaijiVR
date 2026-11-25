@@ -847,8 +847,6 @@ private:
   XrCompositionLayerQuad m_flat_quad_layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
 };
 
-// The quad layer bent to `radius`: the same picture, place, size along the arc, eyes and flags.
-XrCompositionLayerCylinderKHR MakeCylinderLayer(const XrCompositionLayerQuad& quad, float radius);
 // The virtual screen's layers for xrEndFrame: the quads themselves, or `cylinders` made from them when
 // the screen is curved.
 void AddScreenLayers(std::span<XrCompositionLayerQuad> quads, float curve_radius,
