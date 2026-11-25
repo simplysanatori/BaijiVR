@@ -80,7 +80,6 @@ No texture pack is hosted by this project.
 - **Wii Remote**: Shake works in VR
 - The screen keeps one shape when a game changes video modes
 - No crash on exit; errors show in the headset
-- **Game Mode**: the window fits the screen and works with the controller
 
 ## Experimental
 
