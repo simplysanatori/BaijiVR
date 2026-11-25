@@ -100,9 +100,16 @@ std::atomic<u32> s_mods_changed{0};
 // What the config has, and for which of the menu's changes (m_settings_serial).
 std::mutex s_settings_mutex;
 std::optional<std::pair<u32, SettingValues>> s_settings;
+struct Bindings
+{
+  PadKind kind = PadKind::GameCube;
+  PadLabels labels;
+  PadTable table;
+  std::string edit_lock;
+};
 std::atomic<bool> s_bindings_ready{false};
 std::mutex s_bindings_mutex;
-std::pair<PadKind, PadLabels> s_bindings;
+Bindings s_bindings;
 
 Vec3f ToVec(const std::array<float, 3>& v)
 {
@@ -426,6 +433,7 @@ void VrUi::Update(const Frame& frame, Controllers* controllers)
 void VrUi::OnFocusLost()
 {
   m_filter.Reset();
+  m_edit.Cancel();
   if (m_grab_hand >= 0)
   {
     m_grab_hand = -1;
@@ -687,15 +695,54 @@ void VrUi::OpenMenu(const Frame& frame)
     Core::QueueHostJob(
         [](Core::System& system) { Autosave::Request(system, Autosave::Reason::MenuOpen); });
   }
+  RequestBindings();
+  RequestSaves();
+  RefreshMenuState();
+  UpdatePause();
+}
+
+void VrUi::RequestBindings()
+{
   Core::QueueHostJob([](Core::System& system) {
-    auto bindings = GetPadBindings(system.IsWii());
+    Bindings bindings;
+    std::tie(bindings.kind, bindings.labels) = GetPadBindings(system.IsWii());
+    bindings.edit_lock = GetPadEditLock(bindings.kind);
+    bindings.table = GetPadTable(bindings.kind);
     std::lock_guard lock(s_bindings_mutex);
     s_bindings = std::move(bindings);
     s_bindings_ready = true;
   });
-  RequestSaves();
-  RefreshMenuState();
-  UpdatePause();
+}
+
+void VrUi::OpenEditControls()
+{
+  m_menu.page = MenuPage::EditControls;
+  m_edit.Begin(m_menu.pad, m_bindings_table);
+  m_menu.edit = m_edit.GetView();
+}
+
+void VrUi::UpdateListening(const Controllers& controllers, float dt, bool on_cancel)
+{
+  const PadEdit::Event event = m_edit.Update(controllers, dt, on_cancel);
+  if (event == PadEdit::Event::Changed)
+  {
+    std::vector<std::pair<PadTarget, PadBinding>> bindings;
+    const PadTable& table = m_edit.GetView().table;
+    for (const PadTarget target : m_edit.TakeChanges())
+      bindings.emplace_back(target, table[static_cast<std::size_t>(target)]);
+    Core::QueueHostJob([kind = m_edit.GetKind(), bindings = std::move(bindings)](Core::System&) {
+      SetPadBindings(kind, bindings);
+    });
+    RequestBindings();
+  }
+  if (event != PadEdit::Event::None)
+    m_manager->PulseHaptics(static_cast<std::size_t>(m_menu_hand));
+  m_menu.edit = m_edit.GetView();
+  // The press was the answer, and is not for the menu.
+  m_menu_armed = false;
+  m_press_down = false;
+  m_press_item = MenuItem::None;
+  m_menu.pressed = MenuItem::None;
 }
 
 void VrUi::StopScrolling()
@@ -709,6 +756,7 @@ void VrUi::CloseMenu()
 {
   if (!m_menu_open)
     return;
+  m_edit.Cancel();
   m_menu_open = false;
   EndDrag();
   m_press_item = MenuItem::None;
@@ -841,7 +889,12 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
   if (s_bindings_ready.exchange(false))
   {
     std::lock_guard lock(s_bindings_mutex);
-    std::tie(m_menu.pad, m_menu.pad_labels) = s_bindings;
+    m_menu.pad = s_bindings.kind;
+    m_menu.pad_labels = s_bindings.labels;
+    m_menu.edit_lock = s_bindings.edit_lock;
+    m_bindings_table = s_bindings.table;
+    if (m_menu.page == MenuPage::EditControls && !m_edit.IsListening())
+      OpenEditControls();
   }
   {
     std::lock_guard lock(s_settings_mutex);
@@ -871,7 +924,11 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
                     controllers[0].menu_button;
   const bool back_pressed = back && !m_back_down;
   m_back_down = back;
-  if (!m_menu_armed)
+  if (m_edit.IsListening())
+  {
+    // Any of them can be the answer.
+  }
+  else if (!m_menu_armed)
   {
     // The press that opened it is not for it.
     m_menu_armed = !back && controllers[0].trigger_value < TRIGGER_OFF &&
@@ -888,8 +945,7 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
     {
       m_menu.autosave_list = false;
     }
-    else if (controllers[1].secondary_button && m_menu.tab == MenuTab::Main &&
-             m_menu.page != MenuPage::Main)
+    else if (controllers[1].secondary_button && m_menu.page != MenuPage::Main)
     {
       m_menu.page = MenuPage::Main;
     }
@@ -945,6 +1001,14 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
   // With a menu open, what is beside it only closes it.
   const bool beside =
       HasPopup() && hover != MenuItem::Popup && hover != MenuItem::PopupOption;
+  if (m_edit.IsListening())
+  {
+    const bool on_cancel = hovered && hovered->item == MenuItem::EditCancel;
+    m_menu.hover = on_cancel ? MenuItem::EditCancel : MenuItem::None;
+    m_menu.show_tooltip = false;
+    UpdateListening(controllers, dt, on_cancel);
+    return;
+  }
   const bool usable = hovered && !hovered->disabled && !beside;
   const int option = usable ? VrMenu::OptionAt(*hovered, x) : -1;
   if (hover != m_menu.hover || index != m_menu.hover_index)
@@ -1277,6 +1341,22 @@ void VrUi::Activate(const MenuWidget& widget, int option)
   case MenuItem::ControlsPage:
     if (option >= 0)
       m_menu.controls_page = option;
+    break;
+  case MenuItem::EditControls:
+    OpenEditControls();
+    break;
+  case MenuItem::EditChip:
+    m_edit.Choose(static_cast<PadTarget>(widget.index));
+    m_menu.edit = m_edit.GetView();
+    break;
+  case MenuItem::EditReset:
+    Core::QueueHostJob([kind = m_edit.GetKind()](Core::System&) { ResetPadBindings(kind); });
+    RequestBindings();
+    break;
+  case MenuItem::EditDone:
+    m_menu.page = MenuPage::Main;
+    break;
+  case MenuItem::EditCancel:
     break;
   case MenuItem::Stop:
     events.stop = true;

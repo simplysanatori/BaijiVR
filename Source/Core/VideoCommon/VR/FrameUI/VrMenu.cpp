@@ -493,13 +493,76 @@ void AddScreen(Builder* builder, const MenuState& state)
   AddScopeMenu(builder, state);
 }
 
+// Edit Controls: the drawing with a chip for each control that can be given something else.
+void AddEditControls(Builder* builder, const MenuState& state)
+{
+  const bool listening = state.edit.listening != PadTarget::None;
+  MenuWidget& headline = builder->Add(Kind::Headline, MenuItem::None);
+  headline.rect = {LEFT, TOP, LEFT + 260.0f, TOP + CONTROL_H};
+  headline.label = "Edit Controls";
+  MenuWidget& done = builder->Add(Kind::Button, MenuItem::EditDone);
+  constexpr float DONE_X0 = RIGHT - 96.0f;
+  done.rect = {DONE_X0, TOP, RIGHT, TOP + CONTROL_H};
+  done.label = "Done";
+  done.active = true;
+  done.disabled = listening;
+  MenuWidget& reset = builder->Add(Kind::Button, MenuItem::EditReset);
+  reset.rect = {DONE_X0 - 12.0f - 196.0f, TOP, DONE_X0 - 12.0f, TOP + CONTROL_H};
+  reset.icon = Icon::kRestartAlt;
+  reset.label = "Reset to Default";
+  reset.disabled = listening;
+
+  constexpr float BAR_H = 48.0f;
+  constexpr Rect BAR{LEFT, PANE.y1 - 12.0f - BAR_H, RIGHT, PANE.y1 - 12.0f};
+  constexpr Rect AREA{LEFT, TOP + CONTROL_H + 8.0f, RIGHT, BAR.y0 - 8.0f};
+  MenuWidget& pad = builder->Add(Kind::EditPad, MenuItem::None);
+  pad.rect = GetPadEditArt(state.pad, AREA);
+  for (const PadChip& chip : GetPadChips(state.pad, AREA))
+  {
+    MenuWidget& w = builder->Add(Kind::Chip, MenuItem::EditChip);
+    w.index = static_cast<int>(chip.target);
+    w.rect = chip.rect;
+    w.label = GetTargetName(chip.target);
+    w.active = chip.target == state.edit.listening;
+    w.value = DescribeBinding(chip.target, state.edit.table[static_cast<std::size_t>(w.index)]);
+    w.disabled = listening && !w.active;
+  }
+
+  MenuWidget& prompt = builder->Add(Kind::Text, MenuItem::None);
+  prompt.rect = {BAR.x0, BAR.y0, BAR.x1 - 112.0f, BAR.y1};
+  prompt.label = listening ? GetPrompt(state.edit) : "";
+  if (listening)
+  {
+    MenuWidget& cancel = builder->Add(Kind::Button, MenuItem::EditCancel);
+    cancel.rect = {BAR.x1 - 100.0f, BAR.y0, BAR.x1, BAR.y1};
+    cancel.label = "Cancel";
+  }
+}
+
+constexpr float CONTROLS_PAGE_W = 248.0f;
+constexpr float EDIT_W = 176.0f;
+
 void AddControls(Builder* builder, const MenuState& state)
 {
+  if (state.page == MenuPage::EditControls)
+  {
+    AddEditControls(builder, state);
+    return;
+  }
   MenuWidget& page = builder->Add(Kind::Segmented, MenuItem::ControlsPage);
-  page.rect = {LEFT + 136.0f, PANE.y0 + 16.0f, RIGHT - 136.0f, PANE.y0 + 64.0f};
+  page.rect = {LEFT, TOP, LEFT + CONTROLS_PAGE_W, TOP + CONTROL_H};
   page.control = page.rect;
   page.options = {"Game", "Shortcuts"};
   page.selected = state.controls_page;
+  if (state.controls_page == 0)
+  {
+    MenuWidget& edit = builder->Add(Kind::Button, MenuItem::EditControls);
+    edit.rect = {RIGHT - EDIT_W, TOP, RIGHT, TOP + CONTROL_H};
+    edit.icon = Icon::kEdit;
+    edit.label = "Edit Controls";
+    edit.disabled = !state.edit_lock.empty();
+    edit.tooltip = state.edit_lock;
+  }
   builder->Gap(64.0f);
 
   if (state.controls_page == 0)
@@ -932,6 +995,40 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
     case Kind::Pad:
       DrawPad(kit, canvas, w.rect, state.pad, state.pad_labels);
       break;
+    case Kind::EditPad:
+    {
+      std::vector<PadLink> links;
+      for (const MenuWidget& chip : widgets)
+      {
+        const bool lit = state.edit.listening != PadTarget::None ?
+                             chip.active :
+                             chip.item == state.hover && chip.index == state.hover_index;
+        if (chip.kind != Kind::Chip || !lit)
+          continue;
+        const Rect& r = chip.rect;
+        PadLink link{GetTargetControl(static_cast<PadTarget>(chip.index)), r.Cx(), r.Cy()};
+        if (state.pad == PadKind::WiiRemoteSideways)
+          link.y = r.Cy() < w.rect.Cy() ? r.y1 : r.y0;
+        else
+          link.x = r.Cx() < w.rect.Cx() ? r.x1 : r.x0;
+        links.push_back(link);
+      }
+      DrawPadArt(kit, canvas, w.rect, state.pad, links);
+      break;
+    }
+    case Kind::Chip:
+    {
+      const u32 text = w.active ? Tok::kOnPrimaryContainer : Tok::kOnSurface;
+      const float shown = w.disabled ? kDisabledContent : 1.0f;
+      const float room = w.rect.W() - 24.0f;
+      kit->Fill(w.rect, 12.0f, w.active ? Tok::kPrimaryContainer : Tok::kSurfaceContainerHigh);
+      kit->StateLayer(w.rect, 12.0f, Tok::kOnSurface, look);
+      kit->TextMid(w.rect.x0 + 12.0f, w.rect.y0 + 13.0f, Type::Tooltip,
+                   w.active ? text : Tok::kOnSurfaceVariant, w.label, 0, shown);
+      kit->TextMid(w.rect.x0 + 12.0f, w.rect.y0 + 29.0f, Type::RailLabel, text,
+                   kit->Fit(Type::RailLabel, w.value, room), 0, shown);
+      break;
+    }
     case Kind::Header:
       kit->Line(w.rect.x0, w.rect.y0 + 18.0f, w.rect.x1, w.rect.y0 + 18.0f, 1.0f,
                 Tok::kOutlineVariant);

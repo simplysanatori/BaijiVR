@@ -1116,12 +1116,11 @@ void DrawUpright(Kit* kit, Canvas* canvas, const Rect& area, const Plan& plan,
   DrawCallouts(kit, under);
 }
 
-// The remote held sideways: its callouts are in a row above it and a row below.
-void DrawSideways(Kit* kit, Canvas* canvas, const Rect& area, const PadLabels& labels)
+// In the upright remote's units; the turn is the painter's. Left is above, right is below.
+std::vector<Anchor> SidewaysAnchors()
 {
   using enum PadControl;
-  // In the upright remote's units; the turn is the painter's. Left is above, right is below.
-  const std::vector<Anchor> anchors = {
+  return {
       {DPad, Side::Left, WII_DPAD}, {A, Side::Left, WII_A},
       {Plus, Side::Left, WII_PLUS}, {One, Side::Left, WII_ONE},
       {B, Side::Right, {-WII_B.x, WII_B.y}},
@@ -1129,6 +1128,33 @@ void DrawSideways(Kit* kit, Canvas* canvas, const Rect& area, const PadLabels& l
       {Home, Side::Right, WII_HOME, true, {-40.0f, 376.0f}},
       {Two, Side::Right, WII_TWO},  {Shake, Side::Right, {-WII_SHAKE.x, WII_SHAKE.y}},
   };
+}
+
+void DrawLinks(Kit* kit, const Painter& painter, const std::vector<Anchor>& anchors,
+               const std::vector<PadLink>& links)
+{
+  for (const PadLink& link : links)
+  {
+    const auto anchor = std::ranges::find(anchors, link.control, &Anchor::control);
+    if (anchor == anchors.end())
+      continue;
+    const Point at = painter.Dp(anchor->at);
+    Point from = at;
+    if (anchor->has_bend)
+    {
+      const Point bend = painter.Dp(anchor->bend);
+      kit->Line(from.x, from.y, bend.x, bend.y, LEADER_DP, Tok::kPrimary);
+      from = bend;
+    }
+    kit->Line(from.x, from.y, link.x, link.y, LEADER_DP, Tok::kPrimary);
+    kit->Dot(at.x, at.y, DOT_DP, Tok::kPrimary);
+  }
+}
+
+// The remote held sideways: its callouts are in a row above it and a row below.
+void DrawSideways(Kit* kit, Canvas* canvas, const Rect& area, const PadLabels& labels)
+{
+  const std::vector<Anchor> anchors = SidewaysAnchors();
   constexpr float SPACE = 64.0f;  // between the remote and the texts
   constexpr float APART = 18.0f;  // between texts
 
@@ -1190,6 +1216,33 @@ void DrawSideways(Kit* kit, Canvas* canvas, const Rect& area, const PadLabels& l
   }
 }
 }  // namespace
+
+void DrawPadArt(Kit* kit, Canvas* canvas, const Rect& area, PadKind kind,
+                const std::vector<PadLink>& links)
+{
+  kit->Begin(*canvas);
+  if (kind == PadKind::WiiRemoteSideways)
+  {
+    const float scale =
+        std::min(area.W() / (REMOTE_H + REMOTE_FRONT), area.H() / (2.0f * REMOTE_HALF_W));
+    const Painter remote(kit, canvas,
+                         {area.Cx() - (REMOTE_H - REMOTE_FRONT) * scale * 0.5f, area.Cy()}, scale,
+                         true);
+    DrawRemote(remote, {});
+    DrawLinks(kit, remote, SidewaysAnchors(), links);
+    return;
+  }
+
+  const Plan plan = kind == PadKind::GameCube  ? GameCubePlan() :
+                    kind == PadKind::WiiRemote ? RemotePlan() :
+                                                 NunchukPlan();
+  const float scale = std::min(area.W() / plan.bounds.W(), area.H() / plan.bounds.H());
+  const Painter painter(kit, canvas,
+                        {area.Cx() - plan.bounds.Cx() * scale, area.Cy() - plan.bounds.Cy() * scale},
+                        scale);
+  plan.draw(painter, {});
+  DrawLinks(kit, painter, plan.anchors, links);
+}
 
 void DrawPad(Kit* kit, Canvas* canvas, const Rect& area, PadKind kind, const PadLabels& labels)
 {

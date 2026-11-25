@@ -13,6 +13,7 @@
 #include "Core/GameMods/GameMods.h"
 #include "VideoCommon/VR/FrameUI/MenuSettings.h"
 #include "VideoCommon/VR/FrameUI/PadArt.h"
+#include "VideoCommon/VR/FrameUI/PadEdit.h"
 #include "VideoCommon/VR/FrameUI/list_scroll.h"
 #include "VideoCommon/VR/FrameUI/md3.h"
 
@@ -52,6 +53,11 @@ enum class MenuItem
   AutosaveSettings,
   UndoLoad,
   ControlsPage,
+  EditControls,
+  EditChip,  // the index is its PadTarget
+  EditCancel,
+  EditReset,
+  EditDone,
   ModsList,
   ModSwitch,
   ModGet,
@@ -81,6 +87,7 @@ enum class MenuPage
   Main,
   Save,
   Load,
+  EditControls,  // on the Controls tab
 };
 
 constexpr int NUM_SLOTS = 10;
@@ -117,6 +124,8 @@ struct MenuState
   int controls_page = 0;
   PadKind pad = PadKind::GameCube;
   PadLabels pad_labels;
+  std::string edit_lock;  // why they cannot be changed
+  PadEditView edit;
 
   int mods_list = 0;  // Mods, Textures
   int mods_page = 0;
@@ -172,6 +181,8 @@ struct MenuWidget
     Option,  // of it; drawn with it
     Scrollbar,
     More,  // three dots
+    EditPad,
+    Chip,
   };
 
   Kind kind = Kind::Text;

@@ -319,6 +319,8 @@ if(ENABLE_VR)
     VR/FrameUI/PadArt.h
     VR/FrameUI/PadBindings.cpp
     VR/FrameUI/PadBindings.h
+    VR/FrameUI/PadEdit.cpp
+    VR/FrameUI/PadEdit.h
     VR/FrameUI/PadFilter.cpp
     VR/FrameUI/PadFilter.h
     VR/FrameUI/ScreenPlacement.cpp

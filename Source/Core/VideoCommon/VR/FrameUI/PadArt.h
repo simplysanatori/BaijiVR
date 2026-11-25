@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <string>
+#include <vector>
 
 #include "VideoCommon/VR/FrameUI/md3.h"
 
@@ -65,4 +66,16 @@ struct PadLabels
 // thread, as the kit.
 void DrawPad(FrameXr::Menu::Kit* kit, FrameXr::Menu::Canvas* canvas,
              const FrameXr::Menu::Rect& area, PadKind kind, const PadLabels& labels);
+
+// A line from a control to a point (dp).
+struct PadLink
+{
+  PadControl control = PadControl::Count;
+  float x = 0.0f;
+  float y = 0.0f;
+};
+
+// The drawing alone, with the controls' letters on it.
+void DrawPadArt(FrameXr::Menu::Kit* kit, FrameXr::Menu::Canvas* canvas,
+                const FrameXr::Menu::Rect& area, PadKind kind, const std::vector<PadLink>& links);
 }  // namespace VR::UI

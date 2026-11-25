@@ -87,6 +87,20 @@ std::vector<MenuState> GetPages(bool immersive)
       pages.push_back(s);
     }
   }
+  for (const PadKind kind : {PadKind::GameCube, PadKind::WiiRemote, PadKind::WiiRemoteSideways,
+                             PadKind::WiiNunchuk})
+  {
+    for (const PadTarget listening : {PadTarget::None, PadTarget::A})
+    {
+      MenuState s = base;
+      s.tab = MenuTab::Controls;
+      s.page = MenuPage::EditControls;
+      s.pad = kind;
+      s.edit.listening = listening;
+      s.edit.countdown = 3;
+      pages.push_back(s);
+    }
+  }
   for (std::size_t i = 0; i < NUM_SECTIONS; ++i)
   {
     MenuState s = base;
@@ -977,4 +991,222 @@ TEST_F(VRFrameUISettings, WhereItIs)
   EXPECT_EQ(Config::GetBase(Config::GFX_VR_SCREEN_SIZE), 2.0f);
   EXPECT_EQ(Config::Get(Config::GFX_VR_SCREEN_SIZE), 3.5f);
   EXPECT_NE(Read(VRFile()).find("ScreenSize = 3.5"), std::string::npos);
+}
+
+namespace
+{
+PadBinding On(std::string name)
+{
+  return {{std::move(name)}, {}};
+}
+
+struct Editor
+{
+  PadEdit edit;
+  Controllers raw{};
+
+  const PadBinding& Get(PadTarget target) const
+  {
+    return edit.GetView().table[static_cast<std::size_t>(target)];
+  }
+  PadEdit::Event Frame(float seconds = 0.011f, bool on_cancel = false)
+  {
+    return edit.Update(raw, seconds, on_cancel);
+  }
+};
+
+PadTable GameCubeTable()
+{
+  PadTable table;
+  const auto set = [&table](PadTarget target, PadBinding binding) {
+    table[static_cast<std::size_t>(target)] = std::move(binding);
+  };
+  set(PadTarget::A, On("B"));
+  set(PadTarget::B, On("A"));
+  set(PadTarget::L, On("Left Trigger"));
+  set(PadTarget::Z, {{}, "`Right Bumper` & `X`"});
+  set(PadTarget::X, {{"Y", "Left Bumper"}, {}});
+  set(PadTarget::Stick,
+      {{"Left Stick Up", "Left Stick Down", "Left Stick Left", "Left Stick Right"}, {}});
+  set(PadTarget::CStick,
+      {{"Right Stick Up", "Right Stick Down", "Right Stick Left", "Right Stick Right"}, {}});
+  return table;
+}
+}  // namespace
+
+TEST(VRFrameUI, BindingsAreExpressions)
+{
+  EXPECT_EQ(ParseBinding("`A`"), On("A"));
+  EXPECT_EQ(ParseBinding(" `Right Trigger` | `A` "), (PadBinding{{"Right Trigger", "A"}, {}}));
+  EXPECT_EQ(ParseBinding("").names.size(), 0u);
+  EXPECT_EQ(ParseBinding("`A` & `B`").custom, "`A` & `B`");
+  EXPECT_EQ(ParseBinding("if(`A`|`B`,1,0)").custom, "if(`A`|`B`,1,0)");
+  for (const char* const text : {"`A`", "`Right Trigger` | `A`", "", "`A` & !`B`"})
+    EXPECT_EQ(MakeExpression(ParseBinding(text)), text);
+  EXPECT_EQ(DescribeBinding(PadTarget::A, ParseBinding("`X` | `Y`")), "X or Y");
+  EXPECT_EQ(DescribeBinding(PadTarget::A, ParseBinding("")), "None");
+  EXPECT_EQ(DescribeBinding(PadTarget::A, ParseBinding("`X` & `Y`")), "Custom");
+  const PadTable table = GameCubeTable();
+  EXPECT_EQ(DescribeBinding(PadTarget::Stick, table[static_cast<std::size_t>(PadTarget::Stick)]),
+            "Left Stick");
+}
+
+TEST(VRFrameUI, EditControlsSwaps)
+{
+  Editor e;
+  e.edit.Begin(PadKind::GameCube, GameCubeTable());
+  // The trigger that chose the chip is still down.
+  e.raw[1].trigger_value = 1.0f;
+  e.edit.Choose(PadTarget::A);
+  EXPECT_TRUE(e.edit.IsListening());
+  EXPECT_EQ(GetPrompt(e.edit.GetView()), "Press a Button\u2026");
+  EXPECT_EQ(e.Frame(), PadEdit::Event::None);
+  e.raw[1].trigger_value = 0.0f;
+  EXPECT_EQ(e.Frame(), PadEdit::Event::None);
+  e.raw[1].primary_button = true;
+  EXPECT_EQ(e.Frame(), PadEdit::Event::Changed);
+  EXPECT_FALSE(e.edit.IsListening());
+  EXPECT_EQ(e.Get(PadTarget::A), On("A"));
+  EXPECT_EQ(e.Get(PadTarget::B), On("B"));
+  auto changes = e.edit.TakeChanges();
+  std::ranges::sort(changes);
+  EXPECT_EQ(changes, (std::vector{PadTarget::A, PadTarget::B}));
+  EXPECT_TRUE(e.edit.TakeChanges().empty());
+
+  // The same again changes nothing.
+  e.raw = {};
+  e.edit.Choose(PadTarget::A);
+  e.Frame();
+  e.raw[1].primary_button = true;
+  EXPECT_EQ(e.Frame(), PadEdit::Event::Cancelled);
+  EXPECT_TRUE(e.edit.TakeChanges().empty());
+
+  // One of two inputs is exchanged.
+  e.raw = {};
+  e.edit.Choose(PadTarget::L);
+  e.Frame();
+  e.raw[0].bumper_button = true;
+  EXPECT_EQ(e.Frame(), PadEdit::Event::Changed);
+  EXPECT_EQ(e.Get(PadTarget::L), On("Left Bumper"));
+  EXPECT_EQ(e.Get(PadTarget::X), (PadBinding{{"Y", "Left Trigger"}, {}}));
+
+  // A formula is kept until it is replaced.
+  e.raw = {};
+  e.edit.Choose(PadTarget::Y);
+  e.Frame();
+  e.raw[1].bumper_button = true;
+  EXPECT_EQ(e.Frame(), PadEdit::Event::Changed);
+  EXPECT_EQ(e.Get(PadTarget::Z).custom, "`Right Bumper` & `X`");
+}
+
+TEST(VRFrameUI, EditControlsCancels)
+{
+  Editor e;
+  const PadTable table = GameCubeTable();
+  e.edit.Begin(PadKind::GameCube, table);
+  // Choosing it again.
+  e.edit.Choose(PadTarget::A);
+  e.edit.Choose(PadTarget::A);
+  EXPECT_FALSE(e.edit.IsListening());
+  // Not a control of this controller.
+  e.edit.Choose(PadTarget::One);
+  EXPECT_FALSE(e.edit.IsListening());
+  // The trigger on Cancel.
+  e.edit.Choose(PadTarget::A);
+  e.Frame(0.011f, true);
+  e.raw[1].trigger_value = 1.0f;
+  EXPECT_EQ(e.Frame(0.011f, true), PadEdit::Event::Cancelled);
+  // Nobody presses anything.
+  e.raw = {};
+  e.edit.Choose(PadTarget::B);
+  e.Frame();
+  for (int i = 0; i < 59; ++i)
+  {
+    EXPECT_EQ(e.Frame(0.1f), PadEdit::Event::None);
+    if (i == 20)
+    {
+      EXPECT_EQ(e.edit.GetView().countdown, 0);
+    }
+    if (i == 45)
+    {
+      EXPECT_EQ(e.edit.GetView().countdown, 2);
+    }
+  }
+  EXPECT_EQ(GetPrompt(e.edit.GetView()), "Press a Button\u2026 1");
+  PadEdit::Event event = PadEdit::Event::None;
+  for (int i = 0; i < 3 && event == PadEdit::Event::None; ++i)
+    event = e.Frame(0.1f);
+  EXPECT_EQ(event, PadEdit::Event::Cancelled);
+  EXPECT_EQ(e.edit.GetView().table, table);
+  EXPECT_TRUE(e.edit.TakeChanges().empty());
+}
+
+TEST(VRFrameUI, EditControlsSticks)
+{
+  Editor e;
+  e.edit.Begin(PadKind::GameCube, GameCubeTable());
+  e.edit.Choose(PadTarget::Stick);
+  e.Frame();
+  // A button is no answer.
+  e.raw[1].primary_button = true;
+  EXPECT_EQ(e.Frame(), PadEdit::Event::None);
+  e.raw = {};
+  e.raw[1].thumbstick_y = 0.9f;
+  EXPECT_EQ(e.Frame(), PadEdit::Event::Next);
+  EXPECT_EQ(GetPrompt(e.edit.GetView()), "Push the Stick Right\u2026");
+  EXPECT_EQ(e.Frame(), PadEdit::Event::None);
+  // The other stick is not it.
+  e.raw[0].thumbstick_x = 0.9f;
+  EXPECT_EQ(e.Frame(), PadEdit::Event::None);
+  e.raw = {};
+  e.Frame();
+  e.raw[1].thumbstick_x = 0.9f;
+  EXPECT_EQ(e.Frame(), PadEdit::Event::Changed);
+  EXPECT_EQ(DescribeBinding(PadTarget::Stick, e.Get(PadTarget::Stick)), "Right Stick");
+  EXPECT_EQ(DescribeBinding(PadTarget::CStick, e.Get(PadTarget::CStick)), "Left Stick");
+  EXPECT_EQ(e.Get(PadTarget::Stick).names,
+            (std::vector<std::string>{"Right Stick Up", "Right Stick Down", "Right Stick Left",
+                                      "Right Stick Right"}));
+}
+
+TEST(VRFrameUI, EditControlsOfTheWiiRemote)
+{
+  Editor e;
+  e.edit.Begin(PadKind::WiiNunchuk, {});
+  // Its D-Pad is always there.
+  e.edit.Choose(PadTarget::One);
+  e.Frame();
+  e.raw[0].dpad_up = true;
+  EXPECT_EQ(e.Frame(), PadEdit::Event::None);
+  e.raw = {};
+  e.raw[0].view_button = true;
+  EXPECT_EQ(e.Frame(), PadEdit::Event::Changed);
+  EXPECT_EQ(e.Get(PadTarget::One), On("View"));
+  // The right stick is its D-Pad.
+  e.raw = {};
+  e.edit.Choose(PadTarget::NunchukStick);
+  e.Frame();
+  e.raw[1].thumbstick_y = 1.0f;
+  EXPECT_EQ(e.Frame(), PadEdit::Event::None);
+}
+
+TEST(VRFrameUI, EditControlsHasAChipForEveryControl)
+{
+  for (const PadKind kind : {PadKind::GameCube, PadKind::WiiRemote, PadKind::WiiRemoteSideways,
+                             PadKind::WiiNunchuk})
+  {
+    MenuState s;
+    s.tab = MenuTab::Controls;
+    s.page = MenuPage::EditControls;
+    s.pad = kind;
+    std::set<int> chips;
+    for (const MenuWidget& w : VrMenu::Layout(s))
+    {
+      if (w.item == MenuItem::EditChip)
+        chips.insert(w.index);
+    }
+    EXPECT_EQ(chips.size(), GetTargets(kind).size());
+    for (const PadTarget target : GetTargets(kind))
+      EXPECT_TRUE(chips.contains(static_cast<int>(target)));
+  }
 }

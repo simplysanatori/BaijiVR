@@ -126,6 +126,11 @@ private:
   void ActivateSetting(const MenuWidget& widget, int option);
   void ChooseOption(const SettingRow& row, int option);
   void StopScrolling();
+  // What is on the controller's controls.
+  void RequestBindings();
+  void OpenEditControls();
+  // Edit Controls waits for a press: the controllers are its own.
+  void UpdateListening(const Controllers& controllers, float dt, bool on_cancel);
   void ChangeMod(const MenuWidget& widget);
   void Activate(const MenuWidget& widget, int option);
   void SetSlider(const MenuWidget& widget, float t);
@@ -189,6 +194,8 @@ private:
   int m_press_index = 0;
   std::optional<MenuWidget> m_drag;
   bool m_drag_changed = false;
+  PadEdit m_edit;
+  PadTable m_bindings_table;
   s64 m_rest_since_ns = 0;
   // Counts the menu's changes of settings.
   u32 m_settings_serial = 0;

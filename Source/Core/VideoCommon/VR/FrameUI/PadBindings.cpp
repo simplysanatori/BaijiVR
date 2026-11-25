@@ -6,8 +6,13 @@
 #include <algorithm>
 #include <string_view>
 
+#include <fmt/format.h>
+
+#include "Common/IniFile.h"
+
 #include "Common/StringUtil.h"
 
+#include "Core/ConfigManager.h"
 #include "Core/HW/GCPad.h"
 #include "Core/HW/GCPadEmu.h"
 #include "Core/HW/Wiimote.h"
@@ -17,6 +22,8 @@
 #include "InputCommon/ControlReference/ControlReference.h"
 #include "InputCommon/ControllerEmu/Control/Control.h"
 #include "InputCommon/ControllerEmu/ControlGroup/ControlGroup.h"
+#include "InputCommon/ControllerEmu/ControllerEmu.h"
+#include "InputCommon/ControllerInterface/ControllerInterface.h"
 #include "InputCommon/InputConfig.h"
 
 namespace VR::UI
@@ -29,6 +36,153 @@ std::string GetExpression(const ControllerEmu::ControlGroup* group, std::string_
     return {};
   const auto it = std::ranges::find(group->controls, control, &ControllerEmu::Control::name);
   return it == group->controls.end() ? std::string{} : (*it)->control_ref->GetExpression();
+}
+
+constexpr std::string_view FRAME_DEVICE = "OpenXR/0/OpenXR Controller";
+constexpr std::string_view CLICK = " Click";
+
+InputConfig* GetConfig(PadKind kind)
+{
+  return kind == PadKind::GameCube ? Pad::GetConfig() : Wiimote::GetConfig();
+}
+
+// Where a control is in the mapping.
+struct Place
+{
+  const ControllerEmu::ControlGroup* group = nullptr;
+  std::vector<const char*> names;
+  // The same for a trigger's way in.
+  const char* analog = nullptr;
+};
+
+Place GetPlace(PadKind kind, PadTarget target)
+{
+  if (kind == PadKind::GameCube)
+  {
+    const auto button = [](PadGroup group, const char* name, const char* analog = nullptr) {
+      return Place{Pad::GetGroup(0, group), {name}, analog};
+    };
+    const auto stick = [](PadGroup group) {
+      return Place{Pad::GetGroup(0, group), {"Up", "Down", "Left", "Right"}};
+    };
+    switch (target)
+    {
+    case PadTarget::A:
+    case PadTarget::B:
+    case PadTarget::X:
+    case PadTarget::Y:
+    case PadTarget::Z:
+    case PadTarget::Start:
+      return button(PadGroup::Buttons, GetTargetName(target));
+    case PadTarget::L:
+      return button(PadGroup::Triggers, "L", "L-Analog");
+    case PadTarget::R:
+      return button(PadGroup::Triggers, "R", "R-Analog");
+    case PadTarget::DPadUp:
+      return button(PadGroup::DPad, "Up");
+    case PadTarget::DPadDown:
+      return button(PadGroup::DPad, "Down");
+    case PadTarget::DPadLeft:
+      return button(PadGroup::DPad, "Left");
+    case PadTarget::DPadRight:
+      return button(PadGroup::DPad, "Right");
+    case PadTarget::Stick:
+      return stick(PadGroup::MainStick);
+    case PadTarget::CStick:
+      return stick(PadGroup::CStick);
+    default:
+      return {};
+    }
+  }
+
+  const auto button = [](const char* name) {
+    return Place{Wiimote::GetWiimoteGroup(0, WiimoteEmu::WiimoteGroup::Buttons), {name}};
+  };
+  const auto nunchuk = [](const char* name) {
+    return Place{Wiimote::GetNunchukGroup(0, WiimoteEmu::NunchukGroup::Buttons), {name}};
+  };
+  switch (target)
+  {
+  case PadTarget::A:
+    return button("A");
+  case PadTarget::B:
+    return button("B");
+  case PadTarget::One:
+    return button("1");
+  case PadTarget::Two:
+    return button("2");
+  case PadTarget::Plus:
+    return button("+");
+  case PadTarget::Minus:
+    return button("-");
+  case PadTarget::Home:
+    return button("Home");
+  case PadTarget::Shake:
+    return {Wiimote::GetWiimoteGroup(0, WiimoteEmu::WiimoteGroup::Shake), {"X", "Y", "Z"}};
+  case PadTarget::C:
+    return nunchuk("C");
+  case PadTarget::NunchukZ:
+    return nunchuk("Z");
+  case PadTarget::NunchukStick:
+    return {Wiimote::GetNunchukGroup(0, WiimoteEmu::NunchukGroup::Stick),
+            {"Up", "Down", "Left", "Right"}};
+  default:
+    return {};
+  }
+}
+
+// A trigger is one thing to press, however far it has to be pulled.
+PadBinding WithoutClicks(PadBinding binding)
+{
+  for (std::string& name : binding.names)
+  {
+    if (name.ends_with(" Trigger Click"))
+      name.resize(name.size() - CLICK.size());
+  }
+  return binding;
+}
+
+PadBinding WithClicks(PadBinding binding)
+{
+  for (std::string& name : binding.names)
+  {
+    if (name.ends_with(" Trigger"))
+      name += CLICK;
+  }
+  return binding;
+}
+
+void SetExpression(const ControllerEmu::ControlGroup* group, std::string_view control,
+                   const std::string& expression)
+{
+  const auto it = std::ranges::find(group->controls, control, &ControllerEmu::Control::name);
+  if (it != group->controls.end())
+    (*it)->control_ref->SetExpression(expression);
+}
+
+const char* GetProfileName(PadKind kind)
+{
+  switch (kind)
+  {
+  case PadKind::GameCube:
+    return "Steam Frame GameCube";
+  case PadKind::WiiRemote:
+    return "Steam Frame Wii Remote";
+  case PadKind::WiiRemoteSideways:
+    return "Steam Frame Wii Remote (Sideways)";
+  case PadKind::WiiNunchuk:
+    return "Steam Frame Wii Remote + Nunchuk";
+  }
+  return "";
+}
+
+// Not under the state lock.
+void ApplyAndSave(PadKind kind)
+{
+  InputConfig* const config = GetConfig(kind);
+  config->GetController(0)->UpdateReferences(g_controller_interface);
+  config->SaveConfig();
+  config->GenerateControllerTextures();
 }
 
 class Labels
@@ -125,5 +279,82 @@ std::pair<PadKind, PadLabels> GetPadBindings(bool wii)
                      wiimote->GetNunchukGroup(WiimoteEmu::NunchukGroup::Stick));
   }
   return {kind, labels.Take()};
+}
+
+std::string GetPadEditLock(PadKind kind)
+{
+  if (GetConfig(kind)->GetController(0)->GetDefaultDevice().ToString() != FRAME_DEVICE)
+    return "Only for the Frame controllers.";
+  // Saving would put the game's profile into the mapping of every game.
+  Common::IniFile game_ini = SConfig::GetInstance().LoadGameIni();
+  const std::string profile = fmt::format("{}Profile1", GetConfig(kind)->GetProfileKey());
+  if (game_ini.GetOrCreateSection("Controls")->Exists(profile))
+    return "This game has a controller profile of its own.";
+  return {};
+}
+
+PadTable GetPadTable(PadKind kind)
+{
+  PadTable table;
+  const auto lock = ControllerEmu::EmulatedController::GetStateLock();
+  for (const PadTarget target : GetTargets(kind))
+  {
+    const Place place = GetPlace(kind, target);
+    PadBinding& binding = table[static_cast<std::size_t>(target)];
+    if (!IsStick(target))
+    {
+      if (place.group)
+        binding = WithoutClicks(ParseBinding(GetExpression(place.group, place.names.front())));
+      continue;
+    }
+    std::string all;
+    for (const char* const name : place.names)
+    {
+      const std::string expression = GetExpression(place.group, name);
+      PadBinding direction = ParseBinding(expression);
+      if (direction.names.size() == 1)
+        binding.names.push_back(std::move(direction.names.front()));
+      all += expression;
+    }
+    if (binding.names.size() != place.names.size())
+      binding = {{}, all};
+  }
+  return table;
+}
+
+void SetPadBindings(PadKind kind, const std::vector<std::pair<PadTarget, PadBinding>>& bindings)
+{
+  {
+    const auto lock = ControllerEmu::EmulatedController::GetStateLock();
+    for (const auto& [target, binding] : bindings)
+    {
+      const Place place = GetPlace(kind, target);
+      if (!place.group)
+        continue;
+      if (IsStick(target))
+      {
+        // One that is more than that is as it was.
+        for (std::size_t i = 0; i < place.names.size() && i < binding.names.size(); ++i)
+          SetExpression(place.group, place.names[i], MakeExpression({{binding.names[i]}, {}}));
+        continue;
+      }
+      const std::string expression = MakeExpression(binding);
+      for (const char* const name : place.names)
+        SetExpression(place.group, name, place.analog ? MakeExpression(WithClicks(binding)) : expression);
+      if (place.analog)
+        SetExpression(place.group, place.analog, expression);
+    }
+  }
+  ApplyAndSave(kind);
+}
+
+void ResetPadBindings(PadKind kind)
+{
+  InputConfig* const config = GetConfig(kind);
+  Common::IniFile ini;
+  if (!ini.Load(config->GetSysProfileDirectoryPath() + GetProfileName(kind) + ".ini"))
+    return;
+  config->GetController(0)->LoadConfig(ini.GetOrCreateSection("Profile"));
+  ApplyAndSave(kind);
 }
 }  // namespace VR::UI
