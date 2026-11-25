@@ -420,6 +420,7 @@ void MappingWindow::OnLoadProfilePressed()
 
   const auto lock = GetController()->GetStateLock();
   emit ConfigChanged();
+  emit Save();
 }
 
 void MappingWindow::OnSaveProfilePressed()
