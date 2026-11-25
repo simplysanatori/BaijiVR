@@ -101,6 +101,7 @@
 #include "DolphinQt/GCMemcardManager.h"
 #include "DolphinQt/GameList/GameList.h"
 #include "DolphinQt/GameModeWindows.h"
+#include "DolphinQt/GamepadNavigation.h"
 #include "DolphinQt/Host.h"
 #include "DolphinQt/HotkeyScheduler.h"
 #include "DolphinQt/InfinityBase/InfinityBaseWindow.h"
@@ -256,6 +257,7 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
     {
       showFullScreen();
       GameModeWindows::Install(this);
+      GamepadNavigation::Install(this, m_game_list);
     }
     else
       show();

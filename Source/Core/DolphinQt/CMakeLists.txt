@@ -306,6 +306,8 @@ add_executable(dolphin-emu
   GameList/GameTracker.h
   GameModeWindows.cpp
   GameModeWindows.h
+  GamepadNavigation.cpp
+  GamepadNavigation.h
   GameList/GridDelegate.cpp
   GameList/GridDelegate.h
   GameList/GridProxyModel.cpp

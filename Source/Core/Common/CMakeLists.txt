@@ -98,6 +98,7 @@ add_library(common
   JsonUtil.cpp
   Lazy.h
   LinearDiskCache.h
+  ListNav.h
   UnixUtil.h
   Logging/ConsoleListener.h
   Logging/Log.h
