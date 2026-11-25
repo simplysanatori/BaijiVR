@@ -18,6 +18,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/Event.h"
 #include "Common/WorkQueueThread.h"
+#include "UICommon/GameCovers.h"
 #include "UICommon/GameFileCache.h"
 
 namespace UICommon
@@ -46,7 +47,16 @@ public:
   void RefreshAll();
   void PurgeCache();
 
+  // For all games that lack a cover, whatever the setting says. CoversDownloaded follows.
+  void DownloadCovers();
+  // Another picture of one game. CoverDownloaded follows.
+  void DownloadCover(const std::string& path, UICommon::CoverKind kind);
+
 signals:
+  // `asked` games, `found` of them have one now, `unanswered` could not be asked for.
+  void CoversDownloaded(int asked, int found, int unanswered);
+  void CoverDownloaded(const std::string& path, UICommon::CoverKind kind, bool found,
+                       bool unanswered);
   void GameLoaded(const std::shared_ptr<const UICommon::GameFile>& game);
   void GameUpdated(const std::shared_ptr<const UICommon::GameFile>& game);
   void GameRemoved(const std::string& path);
@@ -68,6 +78,8 @@ private:
   void CountCoversInternal(const QString& dir, u64 generation);
   void CoversCounted(u64 generation, std::vector<std::string> games);
   void AskAboutCovers();
+  void DownloadAllCoversInternal();
+  void DownloadCoverInternal(const std::string& path, UICommon::CoverKind kind);
   // Games that a scan found and the cache did not know: tracker thread, sent after each command.
   void FlushNewGames();
   void NewGamesFound(std::vector<std::string> games);
@@ -90,6 +102,8 @@ private:
     EndRefresh,
     CountCovers,
     DownloadCovers,
+    DownloadAllCovers,
+    DownloadCover,
   };
 
   struct Command
@@ -98,6 +112,7 @@ private:
     QString path;
     u64 generation = 0;
     std::vector<std::string> games;
+    UICommon::CoverKind cover = UICommon::CoverKind::Box;
   };
 
   // game path -> directories that track it
@@ -128,3 +143,4 @@ private:
 
 Q_DECLARE_METATYPE(std::shared_ptr<const UICommon::GameFile>)
 Q_DECLARE_METATYPE(std::string)
+Q_DECLARE_METATYPE(UICommon::CoverKind)

@@ -68,6 +68,16 @@ The **Stats** tab of the VR menu shows the last second the game ran, with **Show
 | 2 | It stays in the theater when a VR game starts |
 | 0 | Off |
 
+## Game Covers
+
+Under **Interface**.
+
+| Setting | Default |
+|---|---|
+| **Download Game Covers** | off |
+
+On, the covers for the games in the list are downloaded from libretro-thumbnails on GitHub. Off, covers already on your computer are used, and adding a directory under **Paths**, or a new game found by a refresh, asks **Download Thumbnails?** for those games. GitHub sees your IP address and the names of the games that are asked for.
+
 ## Autosave
 
 | Setting | Default |

@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <openxr/openxr.h>
@@ -25,6 +26,8 @@
 #include "VideoCommon/VR/FrameUI/Stats.h"
 #include "VideoCommon/VR/FrameUI/VrMenu.h"
 #include "VideoCommon/VR/FrameUI/beam.h"
+#include "VideoCommon/VR/FrameUI/geometry.h"
+#include "VideoCommon/VR/FrameUI/grid_focus.h"
 #include "VideoCommon/VR/FrameUI/layer_slots.h"
 #include "VideoCommon/VR/FrameUI/list_scroll.h"
 #include "VideoCommon/VR/FrameUI/toast_corner.h"
@@ -158,6 +161,12 @@ private:
   void OpenGames();
   void PressGame(const std::string& path);
   void StartGame();
+  // Where the D-Pad and the left stick are on the Games tab, instead of the beam.
+  std::optional<std::pair<float, float>> UpdateFocus(const Controllers& controllers,
+                                                     const FrameXr::Input::QuadHit& hit,
+                                                     bool* options);
+  void OpenFiles(FilePurpose purpose, std::string game);
+  void RequestFiles(std::string path);
   void ChooseGamesOption(MenuGames::Popup popup, int option);
   // Says when a download is done, the menu open or not.
   void WatchInstall();
@@ -245,6 +254,13 @@ private:
   float m_game_pointed_s = 0.0f;
   int m_menu_hand = 1;
   bool m_press_down = false;
+  FrameXr::Menu::Focus::GridFocus m_focus;
+  FrameXr::Menu::Focus::DirRepeat m_focus_dir;
+  // Off the grid: what it is on.
+  std::pair<MenuItem, int> m_focus_on{MenuItem::None, 0};
+  // Where the beam was.
+  std::optional<std::pair<float, float>> m_focus_beam;
+  bool m_focus_options_down = false;
   MenuItem m_press_item = MenuItem::None;
   int m_press_index = 0;
   std::optional<MenuWidget> m_drag;
@@ -292,6 +308,8 @@ private:
   std::optional<MenuState> m_draw_request;
   bool m_saves_request = false;
   std::optional<GameMods::List> m_mods_request;
+  std::optional<std::pair<std::string, FilePurpose>> m_files_request;
+  std::optional<FileListing> m_files;
   std::optional<std::pair<GameMods::List, std::vector<GameMods::Item>>> m_mods;
   std::optional<MenuSaves> m_saves;
   std::optional<std::pair<Perf::Stats, StatsPicture>> m_stats_request;

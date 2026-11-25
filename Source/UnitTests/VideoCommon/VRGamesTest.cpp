@@ -19,10 +19,12 @@
 #include "Core/TitleDatabase.h"
 #include "UICommon/GameFile.h"
 #include "UICommon/VRGames.h"
+#include "VideoCommon/VR/FrameUI/FileList.h"
 #include "VideoCommon/VR/FrameUI/GamesHost.h"
 #include "VideoCommon/VR/FrameUI/VrMenu.h"
 #include "VideoCommon/VR/FrameUI/cover_art.h"
 #include "VideoCommon/VR/FrameUI/games_tab.h"
+#include "VideoCommon/VR/FrameUI/grid_focus.h"
 
 using namespace FrameXr::Menu;
 using namespace VR::UI;
@@ -243,20 +245,22 @@ TEST(VRGames, OptionsAndQuestion)
   state.games.game = "/games/Game AC";
   auto menus = Of(state, MenuItem::Popup);
   ASSERT_EQ(menus.size(), 1u);
-  EXPECT_EQ(menus[0].options, (Titles{"Play", "Favourite"}));
+  EXPECT_EQ(menus[0].options,
+            (Titles{"Play", "Favourite", "Choose Another Cover", "No Cover", "Use My Own Image",
+                    "Reset Cover", "Download Thumbnails"}));
   EXPECT_EQ(menus[0].selected, -1);
   state.games.game = state.games.running;
-  EXPECT_EQ(Of(state, MenuItem::Popup)[0].options, (Titles{"Continue", "Favourite"}));
+  EXPECT_EQ(Of(state, MenuItem::Popup)[0].options[0], "Continue");
 
   state.games.popup = MenuGames::Popup::Question;
   state.games.game = "/games/Game AC";
   menus = Of(state, MenuItem::Popup);
   ASSERT_EQ(menus.size(), 1u);
   EXPECT_EQ(menus[0].label, "Start Game AC?");
-  EXPECT_EQ(menus[0].value, "Game AB will close.");
-  EXPECT_TRUE(menus[0].note.empty());
+  EXPECT_EQ(menus[0].options, (Titles{"Start Game AC?", "Game AB will close."}));
+  EXPECT_EQ(menus[0].selected, 1);
   state.games.loses_progress = true;
-  EXPECT_FALSE(Of(state, MenuItem::Popup)[0].note.empty());
+  EXPECT_EQ(Of(state, MenuItem::Popup)[0].options.size(), 3u);
   const auto answers = Of(state, MenuItem::PopupOption);
   ASSERT_EQ(answers.size(), 2u);
   for (const MenuWidget& answer : answers)
@@ -390,4 +394,214 @@ TEST(VRGames, FromTheGameList)
   EXPECT_EQ(UICommon::FindRunningVRGame(games, "/nowhere/One.iso", "X"), "/nowhere/One.iso");
   EXPECT_EQ(UICommon::FindRunningVRGame(games, "/elsewhere", "X"), "");
   File::DeleteDirRecursively(directory);
+}
+
+TEST(VRGames, Typing)
+{
+  MenuState state = GamesMenu(30);
+  EXPECT_EQ(Of(state, MenuItem::GamesSearch).size(), 1u);
+  EXPECT_TRUE(Of(state, MenuItem::GamesKey).empty());
+  state.games.typing = true;
+  const std::vector<MenuWidget> keys = Of(state, MenuItem::GamesKey);
+  EXPECT_EQ(keys.size(), 40u);
+  for (const MenuWidget& key : keys)
+  {
+    EXPECT_GE(key.rect.x0, kGamesX0);
+    EXPECT_LE(key.rect.x1, kGamesX1 + 0.5f);
+    EXPECT_LE(key.rect.y1, VrMenu::HEIGHT);
+  }
+  for (const MenuWidget& tile : Of(state, MenuItem::GameTile))
+    EXPECT_LT(tile.rect.y0, kGamesKeysY0);
+  // No space in front.
+  state.games.Type(' ');
+  EXPECT_TRUE(state.games.search.empty());
+  for (const char key : std::string("game aa"))
+    state.games.Type(key);
+  EXPECT_EQ(state.games.search, "game aa");
+  EXPECT_EQ(state.games.shown.size(), 1u);
+  state.games.Type('\b');
+  EXPECT_EQ(state.games.search, "game a");
+  EXPECT_EQ(state.games.shown.size(), 26u);
+  state.games.Type('\n');
+  EXPECT_FALSE(state.games.typing);
+  // Where All was; its cross ends it.
+  EXPECT_EQ(Of(state, MenuItem::GamesSearchClear).size(), 1u);
+  EXPECT_EQ(Of(state, MenuItem::GamesChip).size(), 2u);
+  for (const char key : std::string("zzz"))
+    state.games.Type(key);
+  EXPECT_TRUE(state.games.shown.empty());
+  // The chip's, and the button under No Matches.
+  EXPECT_EQ(Of(state, MenuItem::GamesSearchClear).size(), 2u);
+}
+
+TEST(VRGames, Folders)
+{
+  EXPECT_TRUE(IsGameFileName("A.ISO"));
+  EXPECT_TRUE(IsGameFileName("a.b.rvz"));
+  EXPECT_FALSE(IsGameFileName("rvz"));
+  EXPECT_FALSE(IsGameFileName("a.png"));
+  EXPECT_TRUE(IsImageFileName("a.PNG"));
+  EXPECT_FALSE(IsImageFileName("a.rvz"));
+
+  const std::string root = File::CreateTempDir();
+  ASSERT_FALSE(root.empty());
+  File::CreateDir(root + "/wii");
+  File::CreateDir(root + "/Empty");
+  File::CreateDir(root + "/.hidden");
+  for (const char* const name : {"/one.iso", "/wii/two.rvz", "/wii/three.wbfs", "/wii/notes.txt"})
+    File::WriteStringToFile(root + name, "");
+  File::WriteStringToFile(root + "/picture.png", "");
+
+  const FileListing folder = ReadFileList(root, FilePurpose::Folder);
+  EXPECT_TRUE(folder.readable);
+  EXPECT_EQ(folder.path, root);
+  EXPECT_FALSE(folder.parent.empty());
+  EXPECT_EQ(folder.games, 1);
+  ASSERT_EQ(folder.rows.size(), 2u);
+  EXPECT_EQ(folder.rows[0].name, "Empty");
+  EXPECT_EQ(folder.rows[0].games, 0);
+  EXPECT_EQ(folder.rows[1].name, "wii");
+  EXPECT_EQ(folder.rows[1].games, 2);
+  EXPECT_FALSE(folder.places.empty());
+
+  const FileListing image = ReadFileList(root, FilePurpose::Image);
+  ASSERT_EQ(image.rows.size(), 3u);
+  EXPECT_EQ(image.rows[2].name, "picture.png");
+  EXPECT_FALSE(image.rows[2].is_folder);
+
+  EXPECT_FALSE(ReadFileList(root + "/not there", FilePurpose::Folder).readable);
+  EXPECT_TRUE(ReadFileList("/", FilePurpose::Folder).parent.empty());
+  EXPECT_EQ(GetFileListStart({root + "/not there", root}), root);
+
+  // The page: Up, the rows, the button.
+  MenuState state = GamesMenu(3);
+  state.page = MenuPage::Files;
+  state.files.listing = folder;
+  EXPECT_EQ(Of(state, MenuItem::FileRow).size(), 3u);
+  ASSERT_EQ(Of(state, MenuItem::FileAdd).size(), 1u);
+  EXPECT_FALSE(Of(state, MenuItem::FileAdd)[0].disabled);
+  state.files.wanted = "/somewhere";
+  EXPECT_TRUE(Of(state, MenuItem::FileAdd)[0].disabled);
+  state.files.wanted.clear();
+  state.files.purpose = FilePurpose::Image;
+  EXPECT_TRUE(Of(state, MenuItem::FileAdd).empty());
+  // The D-Pad: from the top row of the list to what is over it, and down again.
+  const std::vector<MenuWidget> widgets = VrMenu::Layout(state);
+  const MenuWidget up = Of(state, MenuItem::FileRow)[0];
+  const MenuWidget* const next = VrMenu::Next(widgets, up.rect.Cx(), up.rect.Cy(), 0, 1);
+  ASSERT_TRUE(next);
+  EXPECT_EQ(next->item, MenuItem::FileRow);
+  EXPECT_EQ(next->index, 0);
+  const MenuWidget* const above = VrMenu::Next(widgets, up.rect.Cx(), up.rect.Cy(), 0, -1);
+  ASSERT_TRUE(above);
+  EXPECT_NE(above->item, MenuItem::FileRow);
+  File::DeleteDirRecursively(root);
+}
+
+TEST(VRGames, CoverChoices)
+{
+  const std::string root = File::CreateTempDir();
+  ASSERT_FALSE(root.empty());
+  using Cover = UICommon::VRGameStore::Cover;
+  {
+    UICommon::VRGameStore store(root + "/VRGames.ini");
+    EXPECT_EQ(store.GetCover("RSBE01"), Cover::Default);
+    store.SetCover("RSBE01", Cover::None);
+    store.SetCover("GFEE01", Cover::Own);
+    store.SetCover("GM4E01", Cover::Snap);
+    store.SetCover("GM4E01", Cover::Default);
+  }
+  const UICommon::VRGameStore store(root + "/VRGames.ini");
+  EXPECT_EQ(store.GetCover("RSBE01"), Cover::None);
+  EXPECT_EQ(store.GetCover("GFEE01"), Cover::Own);
+  EXPECT_EQ(store.GetCover("GM4E01"), Cover::Default);
+  File::DeleteDirRecursively(root);
+}
+
+TEST(VRGames, FocusMoves)
+{
+  using namespace Focus;
+  Shape s{.columns = 4, .games = 10, .top = 3, .above = 2, .rail = 7, .rail_active = 1};
+  GridFocus f;
+  f.Move(Dir::Right, s);  // the first one only shows it
+  EXPECT_TRUE(f.shown);
+  EXPECT_EQ(f.tile, 0);
+  f.Move(Dir::Right, s);
+  f.Move(Dir::Down, s);
+  EXPECT_EQ(f.tile, 5);
+  for (int i = 0; i < 3; ++i)
+    f.Move(Dir::Right, s);
+  EXPECT_EQ(f.tile, 7);
+  f.Move(Dir::Down, s);  // the short last row's last game
+  EXPECT_EQ(f.tile, 9);
+  GridFocus up = f;
+  up.Move(Dir::Up, s);
+  up.Move(Dir::Up, s);
+  EXPECT_EQ(up.tile, 1);
+  up.Move(Dir::Up, s);
+  EXPECT_EQ(up.area, Area::Top);
+  EXPECT_EQ(up.top, 2);
+  up.Move(Dir::Left, s);
+  up.Move(Dir::Down, s);
+  EXPECT_EQ(up.area, Area::Grid);
+  EXPECT_EQ(up.tile, 1);
+  f.Move(Dir::Left, s);
+  f.Move(Dir::Left, s);
+  EXPECT_EQ(f.area, Area::Rail);
+  EXPECT_EQ(f.rail, 1);
+  f.Move(Dir::Right, s);
+  EXPECT_EQ(f.area, Area::Grid);
+  EXPECT_EQ(f.tile, 8);
+  s.games = 3;
+  f.Move(Dir::Left, s);
+  EXPECT_EQ(f.tile, 1);
+  EXPECT_EQ(ScrollToShow(0.0f, 424.0f, 624.0f, 420.0f, 600.0f), 204.0f);
+  EXPECT_EQ(ScrollToShow(300.0f, 212.0f, 412.0f, 420.0f, 600.0f), 212.0f);
+  EXPECT_EQ(ScrollToShow(50.0f, 0.0f, 200.0f, 420.0f, -5.0f), 0.0f);
+}
+
+TEST(VRGames, HeldDirections)
+{
+  using namespace Focus;
+  DirRepeat repeat;
+  EXPECT_EQ(repeat.Update(false, Dir::Up, 0.0f, 0.0f, 0), Dir::None);
+  // Held as it became true: nothing until let go.
+  EXPECT_EQ(repeat.Update(true, Dir::Up, 0.0f, 0.0f, 1'000'000'000), Dir::None);
+  EXPECT_EQ(repeat.Update(true, Dir::None, 0.0f, 0.0f, 1'100'000'000), Dir::None);
+  EXPECT_EQ(repeat.Update(true, Dir::None, 0.0f, -0.9f, 1'200'000'000), Dir::Down);
+  EXPECT_EQ(repeat.Update(true, Dir::None, 0.0f, -0.9f, 1'300'000'000), Dir::None);
+  EXPECT_EQ(repeat.Update(true, Dir::None, 0.0f, -0.9f, 1'700'000'000), Dir::Down);
+}
+
+TEST(VRGames, QuestionFits)
+{
+  MenuState state = GamesMenu(0);
+  state.games.list = Listed({Game("A", GameSystem::Wii),
+                             Game("A Very Long Title of a Game: With a Subtitle That Goes On and On "
+                                  "and On, Until It Has Run Out of Words",
+                                  GameSystem::GameCube, "/long")});
+  state.games.running = "/games/A";
+  state.games.UpdateShown();
+  state.games.popup = MenuGames::Popup::Question;
+  float height = 0.0f;
+  for (const char* const path : {"/games/A", "/long"})
+  {
+    state.games.game = path;
+    const std::vector<MenuWidget> box = Of(state, MenuItem::Popup);
+    const std::vector<MenuWidget> buttons = Of(state, MenuItem::PopupOption);
+    ASSERT_EQ(box.size(), 1u);
+    ASSERT_EQ(buttons.size(), 2u);
+    EXPECT_LE(box[0].selected, 3);
+    EXPECT_GE(box[0].rect.y0, 0.0f);
+    EXPECT_LE(box[0].rect.y1, VrMenu::HEIGHT);
+    // The box follows the text; the buttons are in its middle.
+    EXPECT_GT(box[0].rect.H(), height);
+    height = box[0].rect.H();
+    EXPECT_NEAR((buttons[0].rect.x0 + buttons[1].rect.x1) * 0.5f, box[0].rect.Cx(), 0.1f);
+    EXPECT_LT(buttons[0].rect.y1, box[0].rect.y1);
+    std::string words;
+    for (int i = 0; i < box[0].selected; ++i)
+      words += (i ? " " : "") + box[0].options[static_cast<std::size_t>(i)];
+    EXPECT_EQ(words, box[0].label);
+  }
 }

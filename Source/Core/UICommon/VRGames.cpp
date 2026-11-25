@@ -4,12 +4,14 @@
 #include "UICommon/VRGames.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <utility>
 #include <vector>
 
 #include "Common/FileUtil.h"
+#include "Common/NandPaths.h"
 #include "Common/StringUtil.h"
 #include "Core/TimePlayed.h"
 #include "Core/TitleDatabase.h"
@@ -28,6 +30,9 @@ namespace
 {
 constexpr char FAVOURITES[] = "Favourites";
 constexpr char LAST_PLAYED[] = "LastPlayed";
+constexpr char COVERS[] = "Covers";
+// In the order of VRGameStore::Cover.
+constexpr std::array COVER_NAMES{"", "None", "Box", "Title", "Snap", "Own"};
 
 GameSystem GetSystem(DiscIO::Platform platform)
 {
@@ -51,7 +56,7 @@ std::string GetRegion(DiscIO::Region region)
   case DiscIO::Region::NTSC_J:
     return "Japan";
   case DiscIO::Region::NTSC_U:
-    return "North America";
+    return "USA";  // also beside "GameCube" it has room
   case DiscIO::Region::PAL:
     return "Europe";
   case DiscIO::Region::NTSC_K:
@@ -117,6 +122,28 @@ void VRGameStore::SetLastPlayed(const std::string& key, s64 time)
   m_ini.Save(m_path);
 }
 
+VRGameStore::Cover VRGameStore::GetCover(const std::string& key) const
+{
+  std::string name;
+  m_ini.GetIfExists(COVERS, key, &name);
+  const auto it = std::ranges::find(COVER_NAMES, name);
+  return it != COVER_NAMES.end() ? static_cast<Cover>(it - COVER_NAMES.begin()) : Cover::Default;
+}
+
+void VRGameStore::SetCover(const std::string& key, Cover cover)
+{
+  if (cover == Cover::Default)
+    m_ini.DeleteKey(COVERS, key);
+  else
+    m_ini.GetOrCreateSection(COVERS)->Set(key, std::string(COVER_NAMES[static_cast<size_t>(cover)]));
+  m_ini.Save(m_path);
+}
+
+std::string GetOwnCoverPath(const std::string& key)
+{
+  return File::GetUserPath(D_CONFIG_IDX) + "VRCovers/" + Common::EscapeFileName(key) + ".png";
+}
+
 std::string GetVRGameKey(const GameFile& game)
 {
   if (!game.GetGameID().empty())
@@ -155,15 +182,33 @@ GamesSnapshot VRGameList::Make(std::span<const std::shared_ptr<const GameFile>> 
     GameEntry& entry = rows.emplace_back();
     entry.path = path;
     entry.title = file->GetName(sources.titles);
+    // Without a name of its own it is the file's, with the extension.
+    if (entry.title == file->GetFileName())
+      entry.title = name;
     entry.file_name = name;
     entry.region = GetRegion(file->GetRegion());
     entry.game_id = file->GetGameID();
     entry.system = GetSystem(file->GetPlatform());
     entry.favorite = sources.store.IsFavourite(key);
     entry.missing = sources.missing.contains(path);
-    entry.covers = {directory + name + ".cover.png", directory + "cover.png"};
-    if (!file->GetGameTDBID().empty())
-      entry.covers.push_back(GetCoverPath(file->GetGameTDBID()));
+    using Cover = VRGameStore::Cover;
+    const Cover cover = sources.store.GetCover(key);
+    const std::string& id = file->GetGameTDBID();
+    if (cover == Cover::Own)
+      entry.covers.push_back(GetOwnCoverPath(key));
+    else if (!id.empty() && cover == Cover::Title)
+      entry.covers.push_back(GetCoverPath(id, CoverKind::Title));
+    else if (!id.empty() && cover == Cover::Snap)
+      entry.covers.push_back(GetCoverPath(id, CoverKind::Snap));
+    else if (!id.empty() && cover == Cover::Box)
+      entry.covers.push_back(GetCoverPath(id));
+    if (cover != Cover::None)
+    {
+      entry.covers.push_back(directory + name + ".cover.png");
+      entry.covers.push_back(directory + "cover.png");
+      if (!id.empty() && cover != Cover::Box)
+        entry.covers.push_back(GetCoverPath(id));
+    }
     entry.cover_version = k.cover_version;
     entry.played_s = static_cast<u64>(std::chrono::duration_cast<std::chrono::seconds>(
                                           sources.time_played.GetTimePlayed(file->GetGameID()))
@@ -179,6 +224,12 @@ GamesSnapshot VRGameList::Make(std::span<const std::shared_ptr<const GameFile>> 
   for (auto& [time, path] : played)
     recent.push_back(std::move(path));
   return FrameXr::Menu::MakeSnapshot(std::move(rows), recent);
+}
+
+void VRGameList::CoverChanged(const std::string& path)
+{
+  if (const auto it = m_known.find(path); it != m_known.end())
+    ++it->second.cover_version;
 }
 
 std::string FindRunningVRGame(const GamesSnapshot& games, const std::string& path,

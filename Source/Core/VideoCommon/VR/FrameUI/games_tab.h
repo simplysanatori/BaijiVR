@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,13 @@ constexpr float kGamesRoundR = 24.0f;
 constexpr float kGamesSortMenuW = 220.0f, kGamesOptionsMenuW = 264.0f;
 constexpr float kGamesBarRight = 822.0f; ///< what the scrollbar hangs off
 constexpr float kGamesClipRoom = 6.0f;   ///< the grid's clip is this much wider
+constexpr float kGamesSearchChipRoom = 64.0f, kGamesSearchChipMaxW = 137.0f,
+                kGamesSearchChipClose = 48.0f;
+/// The keyboard of Search: under one row of tiles.
+constexpr int kGamesKeyColumns = 10, kGamesKeyRows = 4;
+constexpr float kGamesKeysY0 = 324.0f, kGamesKeyH = 48.0f, kGamesKeyGap = 5.0f;
+constexpr float kGamesTypingY1 = kGamesY0 + 200.0f;
+constexpr std::size_t kGamesSearchMax = 60;
 constexpr float kGameOptionsTarget = 48.0f;
 /// A row of tiles and its gap: what a stick's tap scrolls.
 constexpr float kGameRow = kGameTileH + kGameGap;

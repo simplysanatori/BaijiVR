@@ -7,7 +7,7 @@ Baiji's own changelog is in [its README](../README.upstream.md).
 ### VR menu and controls
 
 - A new VR menu: **Main**, **Games**, **Position**, **Stats**, **Controls**, **Mods** and **Settings**.
-- The **Games** tab: the games of the list with covers or banners, GameCube and Wii chips, sorting and favourites. It starts another game without leaving VR.
+- The **Games** tab: the games of the list with covers or banners, GameCube and Wii chips, search, sorting and favourites. It starts another game without leaving VR. **Add Folder** adds games to the list.
 - **Global** and **Per-Game** settings in the menu, the same ones as in the window.
 - **Show Stats**: frame rate, the resolution in use and Dynamic Resolution's changes, in front of you or on the wrist.
 - **Screen Curve**.
@@ -34,6 +34,7 @@ Baiji's own changelog is in [its README](../README.upstream.md).
 ### Mods and games
 
 - Mods, patches, cheats and texture packs in the VR menu and in a game's properties.
+- **Download Thumbnails** and **Download Game Covers**: covers for the Games tab from libretro-thumbnails on GitHub. **Choose Another Cover**, **Use My Own Image**, **No Cover** and **Reset Cover** for one game.
 - A roomier Grid View.
 
 ### Windows

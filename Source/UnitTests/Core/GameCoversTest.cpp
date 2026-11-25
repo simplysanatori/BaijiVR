@@ -57,6 +57,18 @@ TEST(GameCovers, Urls)
                          "master/Named_Boxarts/A%20_%20B%20%28USA%29.png");
 }
 
+TEST(GameCovers, OtherPictures)
+{
+  CoverQuery query = Query("A (USA).rvz");
+  query.kind = CoverKind::Title;
+  EXPECT_TRUE(CoverUrls(query).back().ends_with("/master/Named_Titles/A%20%28USA%29.png"));
+  query.kind = CoverKind::Snap;
+  EXPECT_TRUE(CoverUrls(query).back().ends_with("/master/Named_Snaps/A%20%28USA%29.png"));
+  EXPECT_TRUE(GetCoverPath("RSBE01").ends_with("RSBE01.png"));
+  EXPECT_TRUE(GetCoverPath("RSBE01", CoverKind::Title).ends_with("RSBE01.title.png"));
+  EXPECT_TRUE(GetCoverPath("RSBE01", CoverKind::Snap).ends_with("RSBE01.snap.png"));
+}
+
 TEST(GameCovers, NeedsCover)
 {
   const CoverState bare{.game_id = "RSBE01"};

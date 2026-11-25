@@ -12,14 +12,22 @@
 #include "Common/CommonTypes.h"
 #include "DiscIO/Enums.h"
 
-// Box art for the game list and the VR UI: one PNG per game ID in the cover cache, from
+// Covers for the VR menu: one PNG per game ID in the cover cache, from
 // libretro-thumbnails on GitHub (by name). EnsureCover blocks on the network, so it is called from
 // the game list's own thread.
 namespace UICommon
 {
 // While false there is no question, no automatic download whatever UseGameCovers says, and no
 // check box: nothing shows covers yet.
-constexpr bool COVERS_ARE_SHOWN = false;  // until the VR menu has a Games tab
+constexpr bool COVERS_ARE_SHOWN = true;
+
+// Which of a game's pictures. The box is the one that is its cover by itself.
+enum class CoverKind
+{
+  Box,
+  Title,
+  Snap,
+};
 
 struct CoverQuery
 {
@@ -28,9 +36,10 @@ struct CoverQuery
   DiscIO::Region region = DiscIO::Region::Unknown;
   std::string file_name;  // with its extension
   std::string title;      // the database's name for the game
+  CoverKind kind = CoverKind::Box;
 };
 
-std::string GetCoverPath(const std::string& game_id);
+std::string GetCoverPath(const std::string& game_id, CoverKind kind = CoverKind::Box);
 
 // What decides whether a game still lacks a cover: none of its own (beside the game), none in the
 // cache, and the cache does not know it as missing.
@@ -43,7 +52,7 @@ struct CoverState
 };
 bool NeedsCover(const CoverState& state);
 // The cache's side of a CoverState, from the files on disk.
-void FillCoverCacheState(CoverState* state);
+void FillCoverCacheState(CoverState* state, CoverKind kind = CoverKind::Box);
 
 // True when the cover is in the cache (it was, or it is now).
 bool EnsureCover(const CoverQuery& query);

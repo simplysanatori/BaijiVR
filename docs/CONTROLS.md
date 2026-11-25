@@ -52,7 +52,17 @@ The game is paused behind the menu. On **Position**, and on **Graphics** and **I
 
 ### Games
 
-The chips show all games, **GameCube** or **Wii**; **Sort** changes their order. The right stick scrolls. Choosing a game asks before the running one closes; the running game's tile goes back to it. The three dots of a tile, or **X** with the D-Pad, have **Play**, **Favourite** and the covers.
+The chips show all games, **GameCube** or **Wii**; **Search** finds games as you type, and **Sort** changes their order. **Add Folder** adds a folder of games to the list, as **Paths** in the window does. The right stick scrolls; the D-Pad or the left stick goes from game to game, and **A** chooses. Choosing a game asks before the running one closes; the running game's tile goes back to it. The three dots of a tile, or **X** with the D-Pad, have:
+
+| | |
+|---|---|
+| **Play** or **Continue** | Starts it, or goes back to it |
+| **Favourite** | A star on the tile, and first with **Favourites First** |
+| **Choose Another Cover** | **Box Art**, **Title Screen** or **Screenshot**, downloaded when it is not there |
+| **No Cover** | Its banner, or else its initials |
+| **Use My Own Image** | A PNG or JPEG image of yours |
+| **Reset Cover** | The cover it has by itself |
+| **Download Thumbnails** | Covers for all games that lack one |
 
 ### Stats
 

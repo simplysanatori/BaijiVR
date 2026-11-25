@@ -88,6 +88,9 @@ public:
 
   void PurgeCache();
 
+  // Where the covers come from.
+  GameTracker& GetTracker() { return m_tracker; }
+
 private:
   // Index in m_games, or -1 if it isn't found
   int FindGameIndex(const std::string& path) const;

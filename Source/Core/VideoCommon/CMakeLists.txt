@@ -312,6 +312,8 @@ endif()
 
 if(ENABLE_VR)
   target_sources(videocommon PRIVATE
+    VR/FrameUI/FileList.cpp
+    VR/FrameUI/FileList.h
     VR/FrameUI/GamesHost.cpp
     VR/FrameUI/GamesHost.h
     VR/FrameUI/GrabHint.h
@@ -341,6 +343,7 @@ if(ENABLE_VR)
     VR/FrameUI/games_snapshot.h
     VR/FrameUI/games_tab.cpp
     VR/FrameUI/games_tab.h
+    VR/FrameUI/grid_focus.h
     VR/FrameUI/geometry.cpp
     VR/FrameUI/list_scroll.cpp
     VR/FrameUI/list_scroll.h

@@ -61,15 +61,22 @@ void SetDown(const std::string& host)
   s_down_until[host] = Clock::now() + DOWN_TIME;
 }
 
-std::string MissingPath(const std::string& game_id)
+// After the game ID in a file's name.
+const char* GetSuffix(CoverKind kind)
 {
-  return File::GetUserPath(D_COVERCACHE_IDX) + game_id + ".missing";
+  static constexpr std::array SUFFIXES{"", ".title", ".snap"};
+  return SUFFIXES[static_cast<size_t>(kind)];
 }
 
-bool IsKnownMissing(const std::string& game_id)
+std::string MissingPath(const std::string& game_id, CoverKind kind)
+{
+  return File::GetUserPath(D_COVERCACHE_IDX) + game_id + GetSuffix(kind) + ".missing";
+}
+
+bool IsKnownMissing(const std::string& game_id, CoverKind kind)
 {
   std::error_code ec;
-  const auto time = std::filesystem::last_write_time(StringToPath(MissingPath(game_id)), ec);
+  const auto time = std::filesystem::last_write_time(StringToPath(MissingPath(game_id, kind)), ec);
   return !ec && std::filesystem::file_time_type::clock::now() - time < MISSING_TIME;
 }
 
@@ -129,9 +136,9 @@ std::string WithoutTag(const std::string& name, std::string_view tag)
 }
 }  // namespace
 
-std::string GetCoverPath(const std::string& game_id)
+std::string GetCoverPath(const std::string& game_id, CoverKind kind)
 {
-  return File::GetUserPath(D_COVERCACHE_IDX) + game_id + ".png";
+  return File::GetUserPath(D_COVERCACHE_IDX) + game_id + GetSuffix(kind) + ".png";
 }
 
 std::vector<std::string> LibretroNames(const CoverQuery& query)
@@ -173,12 +180,14 @@ std::vector<std::string> LibretroNames(const CoverQuery& query)
 std::vector<std::string> CoverUrls(const CoverQuery& query)
 {
   std::vector<std::string> urls;
+  static constexpr std::array FOLDERS{"Named_Boxarts", "Named_Titles", "Named_Snaps"};
+  const char* const folder = FOLDERS[static_cast<size_t>(query.kind)];
   const char* const system = query.is_wii ? "Nintendo_-_Wii" : "Nintendo_-_GameCube";
   for (const std::string& name : LibretroNames(query))
   {
     urls.push_back(fmt::format(
-        "https://raw.githubusercontent.com/libretro-thumbnails/{}/master/Named_Boxarts/{}.png",
-        system, UrlEncode(name)));
+        "https://raw.githubusercontent.com/libretro-thumbnails/{}/master/{}/{}.png", system, folder,
+        UrlEncode(name)));
   }
   return urls;
 }
@@ -189,10 +198,10 @@ bool NeedsCover(const CoverState& state)
          !state.has_custom && !state.has_cached && !state.known_missing;
 }
 
-void FillCoverCacheState(CoverState* state)
+void FillCoverCacheState(CoverState* state, CoverKind kind)
 {
-  state->has_cached = !state->game_id.empty() && File::Exists(GetCoverPath(state->game_id));
-  state->known_missing = !state->game_id.empty() && IsKnownMissing(state->game_id);
+  state->has_cached = !state->game_id.empty() && File::Exists(GetCoverPath(state->game_id, kind));
+  state->known_missing = !state->game_id.empty() && IsKnownMissing(state->game_id, kind);
 }
 
 std::optional<std::string> LinkTarget(const std::string& url, std::string_view body)
@@ -260,10 +269,10 @@ bool EnsureCover(const CoverQuery& query)
   // The ID is part of a file name.
   if (query.game_id.empty() || !std::ranges::all_of(query.game_id, Common::IsAlnum))
     return false;
-  const std::string path = GetCoverPath(query.game_id);
+  const std::string path = GetCoverPath(query.game_id, query.kind);
   if (File::Exists(path))
     return true;
-  if (IsKnownMissing(query.game_id))
+  if (IsKnownMissing(query.game_id, query.kind))
     return false;
 
   bool all_answered = true;
@@ -308,12 +317,12 @@ bool EnsureCover(const CoverQuery& query)
     if (code == 200 && StoreCover(*response, path))
     {
       INFO_LOG_FMT(COMMON, "Covers: {} from {}", query.game_id, url);
-      File::Delete(MissingPath(query.game_id), File::IfAbsentBehavior::NoConsoleWarning);
+      File::Delete(MissingPath(query.game_id, query.kind), File::IfAbsentBehavior::NoConsoleWarning);
       return true;
     }
   }
   if (all_answered)
-    File::WriteStringToFile(MissingPath(query.game_id), "");
+    File::WriteStringToFile(MissingPath(query.game_id, query.kind), "");
   return false;
 }
 }  // namespace UICommon

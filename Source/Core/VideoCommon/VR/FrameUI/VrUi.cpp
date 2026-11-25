@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <deque>
@@ -148,6 +149,9 @@ struct Bindings
 std::atomic<bool> s_bindings_ready{false};
 // A state that was to be loaded is not there.
 std::atomic<bool> s_load_failed{false};
+// Where the page of folders starts.
+std::mutex s_files_mutex;
+std::optional<std::string> s_files_start;
 // Another game was asked for and is on its way.
 std::atomic<bool> s_game_starts{false};
 // A download has begun.
@@ -990,6 +994,7 @@ void VrUi::OpenMenu(const Frame& frame)
   m_menu.page = MenuPage::Main;
   m_menu.autosave_list = false;
   m_menu.games.scroll = 0.0f;
+  m_menu.games.typing = false;
   ClosePopup();
   m_menu.section = MenuSection::General;
   m_menu.settings.scope = DEFAULT_SCOPE;
@@ -1266,6 +1271,15 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
     CloseMenu();
     return;
   }
+  {
+    std::optional<std::string> start;
+    {
+      std::lock_guard lock(s_files_mutex);
+      start = std::exchange(s_files_start, std::nullopt);
+    }
+    if (start && m_menu.page == MenuPage::Files)
+      RequestFiles(std::move(*start));
+  }
   if (m_menu.tab == MenuTab::Games && GetPublishedGamesSerial() != m_games_seen)
     ReadGames();
   if (s_bindings_ready.exchange(false))
@@ -1299,6 +1313,12 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
   {
     if (m_saves)
       m_menu.saves = std::move(*std::exchange(m_saves, std::nullopt));
+    if (auto files = std::exchange(m_files, std::nullopt); files && !m_menu.files.wanted.empty())
+    {
+      m_menu.files.listing = std::move(*files);
+      m_menu.files.wanted.clear();
+      m_menu.files.scroll = 0.0f;
+    }
     if (auto mods = std::exchange(m_mods, std::nullopt);
         mods && (mods->first == GameMods::List::Mods) == (m_menu.mods_list == 0))
     {
@@ -1329,6 +1349,10 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
     if (controllers[1].secondary_button && HasPopup())
     {
       ClosePopup();
+    }
+    else if (controllers[1].secondary_button && m_menu.tab == MenuTab::Games && m_menu.games.typing)
+    {
+      m_menu.games.typing = false;
     }
     else if (controllers[1].secondary_button && m_menu.autosave_list)
     {
@@ -1366,11 +1390,21 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
 
   const auto hand = static_cast<std::size_t>(m_menu_hand);
   const auto& c = controllers[hand];
-  const QuadHit& hit = hits[hand];
-  const float x = hit.u * VrMenu::WIDTH;
-  const float y = hit.v * VrMenu::HEIGHT;
+  QuadHit hit = hits[hand];
 
   m_widgets = VrMenu::Layout(m_menu);
+  bool focus_options = false;
+  const std::optional<std::pair<float, float>> focus =
+      UpdateFocus(controllers, hit, &focus_options);
+  m_menu.focus = focus.has_value();
+  if (focus)
+  {
+    hit.on_plane = hit.in_bounds = true;
+    hit.u = focus->first / VrMenu::WIDTH;
+    hit.v = focus->second / VrMenu::HEIGHT;
+  }
+  const float x = hit.u * VrMenu::WIDTH;
+  const float y = hit.v * VrMenu::HEIGHT;
   const std::optional<MenuList> list = VrMenu::GetList(m_menu);
   const bool can_scroll = list && list->bar.Valid() && !HasPopup();
   const bool scrolling = m_bar_press.Active() || m_list_drag.Dragging();
@@ -1413,13 +1447,27 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
   const bool down = m_menu_armed &&
                     (c.trigger_value > (m_press_down ? TRIGGER_OFF : TRIGGER_ON) ||
                      (c.trigger_button && c.trigger_value <= 0.0f) ||
-                     (hand == 1 && c.primary_button));
+                     ((hand == 1 || focus) && controllers[1].primary_button));
   const bool pressed = down && !m_press_down;
   const bool released = !down && m_press_down;
   m_press_down = down;
   // Not over an open menu.
   m_menu.show_tooltip =
       hovered && !down && !beside && frame.time_ns - m_rest_since_ns >= TOOLTIP_NS;
+
+  if (focus && focus_options && usable && hovered->item == MenuItem::GameTile)
+  {
+    const auto dots = std::ranges::find_if(m_widgets, [&](const MenuWidget& w) {
+      return w.item == MenuItem::GameOptions && w.index == hovered->index;
+    });
+    if (dots != m_widgets.end())
+    {
+      const MenuWidget widget = *dots;
+      Activate(widget, -1);
+      UpdateGames(nullptr, dt);
+      return;
+    }
+  }
 
   float* const scroll = can_scroll ? &GetScroll(&m_menu, *list) : nullptr;
   const float seconds = static_cast<float>(frame.time_ns % 1'000'000'000'000) * 1e-9f;
@@ -1498,7 +1546,8 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
   }
   if (!m_bar_press.Active() && !m_list_drag.Dragging() && !m_drag)
   {
-    const float left = controllers[0].thumbstick_y;
+    // On the Games tab it moves the focus.
+    const float left = m_menu.tab == MenuTab::Games ? 0.0f : controllers[0].thumbstick_y;
     const float right = controllers[1].thumbstick_y;
     const float stick = std::abs(left) > std::abs(right) ? left : right;
     *scroll = m_stick_scroll.Update(stick, dt, *scroll, list->bar.max_scroll, list->bar.list.H(),
@@ -1631,6 +1680,7 @@ void VrUi::OpenGames()
 {
   m_menu.tab = MenuTab::Games;
   m_menu.page = MenuPage::Main;
+  m_menu.games.typing = false;
   m_menu.games.scroll = 0.0f;
   m_game_pointed.clear();
   ReadGames();
@@ -1638,6 +1688,216 @@ void VrUi::OpenGames()
     if (const GamesHost* const host = GetGamesHost())
       host->publish();
   });
+}
+
+static bool IsFocusRail(const MenuWidget& w)
+{
+  return w.item >= MenuItem::TabMain && w.item <= MenuItem::TabSettings && !w.disabled;
+}
+
+// The row over the tiles, from the left.
+static std::vector<const MenuWidget*> GetFocusTop(const std::vector<MenuWidget>& widgets)
+{
+  std::vector<const MenuWidget*> top;
+  for (const MenuWidget& w : widgets)
+  {
+    if ((w.item == MenuItem::GamesChip || w.item == MenuItem::GamesSearch ||
+         w.item == MenuItem::GamesSearchClear || w.item == MenuItem::GamesSort ||
+         w.item == MenuItem::GamesAddFolder) &&
+        w.rect.y0 < FrameXr::Menu::kGamesTopY1)
+    {
+      top.push_back(&w);
+    }
+  }
+  std::ranges::stable_sort(top, {}, [](const MenuWidget* w) { return w->rect.Cx(); });
+  return top;
+}
+
+static FrameXr::Menu::Focus::Shape GetFocusShape(const std::vector<MenuWidget>& widgets,
+                                                 int games, int tile)
+{
+  namespace Games = FrameXr::Menu;
+  Games::Focus::Shape shape;
+  shape.columns = Games::kGamesColumns;
+  shape.games = games;
+  for (const MenuWidget& w : widgets)
+  {
+    if (!IsFocusRail(w))
+      continue;
+    if (w.item == MenuItem::TabGames)
+      shape.rail_active = shape.rail;
+    ++shape.rail;
+  }
+  const float x = Games::kGamesX0 + Games::kGameTileW * 0.5f +
+                  static_cast<float>(tile % Games::kGamesColumns) *
+                      (Games::kGameTileW + Games::kGameGap);
+  float best = 0.0f;
+  for (const MenuWidget* const w : GetFocusTop(widgets))
+  {
+    const float off = std::max({w->rect.x0 - x, x - w->rect.x1, 0.0f});
+    if (shape.top == 0 || off < best)
+    {
+      best = off;
+      shape.above = shape.top;
+    }
+    ++shape.top;
+  }
+  return shape;
+}
+
+std::optional<std::pair<float, float>>
+VrUi::UpdateFocus(const Controllers& controllers, const QuadHit& hit, bool* options)
+{
+  namespace Games = FrameXr::Menu;
+  using Games::Focus::Dir;
+  const auto& left = controllers[0];
+  const Dir dpad = left.dpad_up    ? Dir::Up :
+                   left.dpad_down  ? Dir::Down :
+                   left.dpad_left  ? Dir::Left :
+                   left.dpad_right ? Dir::Right :
+                                     Dir::None;
+  const bool enabled = m_menu_armed && m_menu.tab == MenuTab::Games && !m_press_down;
+  const Dir dir = m_focus_dir.Update(enabled, dpad, left.thumbstick_x, left.thumbstick_y,
+                                     m_frame.time_ns);
+  const bool x_down = controllers[1].frame_x_button || left.primary_button;
+  *options = enabled && x_down && !m_focus_options_down;
+  m_focus_options_down = x_down;
+  if (m_menu.tab != MenuTab::Games)
+  {
+    m_focus = {};
+    return std::nullopt;
+  }
+
+  MenuGames& games = m_menu.games;
+  const bool popup = games.popup != MenuGames::Popup::None;
+  const bool grid = m_menu.page == MenuPage::Main && !popup && !games.typing;
+  const float x = hit.u * VrMenu::WIDTH;
+  const float y = hit.v * VrMenu::HEIGHT;
+  const std::optional<MenuList> list = VrMenu::GetList(m_menu);
+  const bool was_shown = m_focus.shown;
+  if (dir != Dir::None)
+  {
+    if (grid)
+    {
+      m_focus.Move(dir, GetFocusShape(m_widgets, static_cast<int>(games.shown.size()),
+                                      m_focus.tile));
+      if (m_focus.area == Games::Focus::Area::Grid && list)
+      {
+        StopScrolling();
+        const float top = static_cast<float>(m_focus.tile / Games::kGamesColumns) * Games::kGameRow;
+        games.scroll =
+            Games::Focus::ScrollToShow(games.scroll, top, top + Games::kGameTileH,
+                                       list->bar.list.H(), list->bar.max_scroll);
+      }
+    }
+    m_focus.shown = true;
+    m_focus_beam.reset();
+    if (hit.in_bounds)
+      m_focus_beam.emplace(x, y);
+    m_widgets = VrMenu::Layout(m_menu);
+  }
+  else if (m_focus.shown && !m_press_down)
+  {
+    // The beam points again when it moves (a hand trembles), comes onto the menu or is pulled.
+    constexpr float MOVED = 16.0f;
+    const bool pulled = controllers[0].trigger_value > TRIGGER_ON ||
+                        controllers[1].trigger_value > TRIGGER_ON;
+    const bool moved = hit.in_bounds &&
+                       (!m_focus_beam || std::hypot(x - m_focus_beam->first,
+                                                    y - m_focus_beam->second) > MOVED);
+    m_focus.shown = !pulled && !moved;
+    if (!hit.in_bounds)
+      m_focus_beam.reset();
+  }
+  if (!m_focus.shown)
+    return std::nullopt;
+
+  const MenuWidget* at = nullptr;
+  if (grid)
+  {
+    if (m_focus.area == Games::Focus::Area::Top)
+    {
+      const std::vector<const MenuWidget*> top = GetFocusTop(m_widgets);
+      if (!top.empty())
+        at = top[static_cast<std::size_t>(std::clamp(m_focus.top, 0, static_cast<int>(top.size()) - 1))];
+    }
+    else if (m_focus.area == Games::Focus::Area::Rail)
+    {
+      int rail = 0;
+      for (const MenuWidget& w : m_widgets)
+      {
+        if (IsFocusRail(w) && rail++ == m_focus.rail)
+          at = &w;
+      }
+    }
+    else if (!games.shown.empty())
+    {
+      m_focus.tile = std::clamp(m_focus.tile, 0, static_cast<int>(games.shown.size()) - 1);
+      const int tile = games.shown[static_cast<std::size_t>(m_focus.tile)];
+      for (const MenuWidget& w : m_widgets)
+      {
+        if (w.item == MenuItem::GameTile && w.index == tile)
+          at = &w;
+      }
+    }
+  }
+  else
+  {
+    const auto find = [&](MenuItem item, int index) -> const MenuWidget* {
+      for (const MenuWidget& w : m_widgets)
+      {
+        if (w.item == item && w.index == index && VrMenu::CanFocus(w, popup))
+          return &w;
+      }
+      return nullptr;
+    };
+    at = find(m_focus_on.first, m_focus_on.second);
+    if (!at)
+    {
+      // What it was on is gone: the first row, or else the first there is.
+      for (const MenuWidget& w : m_widgets)
+      {
+        if (VrMenu::CanFocus(w, popup) &&
+            (!at || (w.item == MenuItem::FileRow && at->item != MenuItem::FileRow)))
+        {
+          at = &w;
+        }
+      }
+    }
+    else if (dir != Dir::None && was_shown)
+    {
+      const int dx = dir == Dir::Left ? -1 : dir == Dir::Right ? 1 : 0;
+      const int dy = dir == Dir::Up ? -1 : dir == Dir::Down ? 1 : 0;
+      const int first = m_menu.files.listing.parent.empty() ? 0 : -1;
+      const int index = at->index + dy;
+      if (at->item == MenuItem::FileRow && dy != 0 && list && index >= first)
+      {
+        // Along the list, also where it has to scroll.
+        if (index < static_cast<int>(m_menu.files.listing.rows.size()))
+        {
+          const float row = static_cast<float>(index - first) * list->row_h;
+          m_menu.files.scroll =
+              Games::Focus::ScrollToShow(m_menu.files.scroll, row, row + list->row_h,
+                                         list->bar.list.H(), list->bar.max_scroll);
+          m_widgets = VrMenu::Layout(m_menu);
+          at = find(MenuItem::FileRow, index);
+        }
+      }
+      else if (const MenuWidget* const next =
+                   VrMenu::Next(m_widgets, at->rect.Cx(), at->rect.Cy(), dx, dy))
+      {
+        at = next;
+      }
+    }
+    if (at)
+      m_focus_on = {at->item, at->index};
+  }
+  if (!at)
+    return std::nullopt;
+  float at_y = at->rect.Cy();
+  if (at->clipped)
+    at_y = std::clamp(at_y, at->clip.y0 + 1.0f, at->clip.y1 - 1.0f);
+  return std::pair{at->rect.Cx(), at_y};
 }
 
 // What is pointed at, and the list at rest.
@@ -1680,6 +1940,42 @@ void VrUi::UpdateGames(const FrameXr::Menu::Scrolling::Bar* bar, float dt)
   }
 }
 
+void VrUi::OpenFiles(FilePurpose purpose, std::string game)
+{
+  m_menu.page = MenuPage::Files;
+  m_menu.files = {};
+  m_menu.files.purpose = purpose;
+  m_menu.files.game = std::move(game);
+  m_menu.files.wanted = " ";
+  StopScrolling();
+  Core::QueueHostJob([purpose](Core::System&) {
+    std::vector<std::string> wanted;
+    if (purpose == FilePurpose::Folder)
+    {
+      wanted = Config::GetIsoPaths();
+      std::ranges::reverse(wanted);
+    }
+    else if (const char* const home = std::getenv("HOME"))
+    {
+      wanted.push_back(std::string(home) + "/Pictures");
+    }
+    std::string start = GetFileListStart(wanted);
+    std::lock_guard lock(s_files_mutex);
+    s_files_start = std::move(start);
+  });
+}
+
+void VrUi::RequestFiles(std::string path)
+{
+  m_menu.files.wanted = path;
+  {
+    std::lock_guard lock(m_draw_mutex);
+    m_files_request.emplace(std::move(path), m_menu.files.purpose);
+    m_files.reset();
+  }
+  m_draw_cv.notify_one();
+}
+
 void VrUi::PressGame(const std::string& path)
 {
   MenuGames& games = m_menu.games;
@@ -1713,6 +2009,14 @@ void VrUi::StartGame()
   });
 }
 
+static void QueueCover(const std::string& path, CoverChoice choice, const std::string& image = {})
+{
+  Core::QueueHostJob([path, choice, image](Core::System&) {
+    if (const GamesHost* const host = GetGamesHost())
+      host->choose_cover(path, choice, image);
+  });
+}
+
 void VrUi::ChooseGamesOption(MenuGames::Popup popup, int option)
 {
   MenuGames& games = m_menu.games;
@@ -1737,6 +2041,34 @@ void VrUi::ChooseGamesOption(MenuGames::Popup popup, int option)
           host->toggle_favourite(path);
       });
     }
+    else if (option == MenuGames::AnotherCover)
+    {
+      games.popup = MenuGames::Popup::Covers;
+    }
+    else if (option == MenuGames::NoCover)
+    {
+      QueueCover(games.game, CoverChoice::None);
+    }
+    else if (option == MenuGames::OwnImage)
+    {
+      OpenFiles(FilePurpose::Image, games.game);
+    }
+    else if (option == MenuGames::ResetCover)
+    {
+      QueueCover(games.game, CoverChoice::Default);
+    }
+    else if (option == MenuGames::Download)
+    {
+      Core::QueueHostJob([](Core::System&) {
+        if (const GamesHost* const host = GetGamesHost())
+          host->download_thumbnails();
+      });
+    }
+    break;
+  case MenuGames::Popup::Covers:
+    QueueCover(games.game, option == 0 ? CoverChoice::Box :
+                           option == 1 ? CoverChoice::Title :
+                                         CoverChoice::Snap);
     break;
   case MenuGames::Popup::Question:
     if (option == MenuGames::Start)
@@ -1774,8 +2106,58 @@ void VrUi::Activate(const MenuWidget& widget, int option)
     break;
   case MenuItem::GamesChip:
     m_menu.games.chip = static_cast<FrameXr::Menu::SystemFilter>(widget.index);
+    // A search has All's place: the chosen chip again is All.
+    if (widget.active && !m_menu.games.search.empty())
+      m_menu.games.chip = FrameXr::Menu::SystemFilter::All;
     m_menu.games.scroll = 0.0f;
     m_menu.games.UpdateShown();
+    break;
+  case MenuItem::GamesAddFolder:
+    OpenFiles(FilePurpose::Folder, {});
+    break;
+  case MenuItem::FilePlace:
+    if (const auto at = static_cast<std::size_t>(widget.index);
+        at < m_menu.files.listing.places.size())
+    {
+      RequestFiles(m_menu.files.listing.places[at].second);
+    }
+    break;
+  case MenuItem::FileRow:
+    if (widget.index < 0)
+    {
+      RequestFiles(m_menu.files.listing.parent);
+    }
+    else if (const auto at = static_cast<std::size_t>(widget.index);
+             at < m_menu.files.listing.rows.size())
+    {
+      const FileRow& row = m_menu.files.listing.rows[at];
+      if (row.is_folder)
+      {
+        RequestFiles(row.path);
+        break;
+      }
+      QueueCover(m_menu.files.game, CoverChoice::Own, row.path);
+      m_menu.page = MenuPage::Main;
+    }
+    break;
+  case MenuItem::FileAdd:
+    Core::QueueHostJob([path = m_menu.files.listing.path](Core::System&) {
+      if (const GamesHost* const host = GetGamesHost())
+        host->add_folder(path);
+    });
+    m_menu.page = MenuPage::Main;
+    break;
+  case MenuItem::GamesSearch:
+    m_menu.games.typing = true;
+    m_menu.games.scroll = 0.0f;
+    break;
+  case MenuItem::GamesSearchClear:
+    m_menu.games.search.clear();
+    m_menu.games.scroll = 0.0f;
+    m_menu.games.UpdateShown();
+    break;
+  case MenuItem::GamesKey:
+    m_menu.games.Type(static_cast<char>(widget.index));
     break;
   case MenuItem::GamesSort:
     m_menu.games.popup = MenuGames::Popup::Sort;
@@ -2413,8 +2795,8 @@ void VrUi::DrawThread()
   while (true)
   {
     m_draw_cv.wait(lock, [this, &covers] {
-      return m_draw_exit || m_saves_request || m_mods_request || m_stats_request ||
-             m_draw_request.has_value() || covers.IsWaiting();
+      return m_draw_exit || m_saves_request || m_mods_request || m_files_request ||
+             m_stats_request || m_draw_request.has_value() || covers.IsWaiting();
     });
     if (m_draw_exit)
       return;
@@ -2437,6 +2819,16 @@ void VrUi::DrawThread()
           GameMods::GetItems(list, config.GetGameID(), config.GetRevision());
       lock.lock();
       m_mods.emplace(list, std::move(items));
+      continue;
+    }
+    if (const auto request = std::exchange(m_files_request, std::nullopt))
+    {
+      lock.unlock();
+      FileListing listing = ReadFileList(request->first, request->second);
+      lock.lock();
+      // Not when another was asked for meanwhile.
+      if (!m_files_request)
+        m_files = std::move(listing);
       continue;
     }
     if (const auto request = std::exchange(m_stats_request, std::nullopt))

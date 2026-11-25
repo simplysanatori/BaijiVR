@@ -36,6 +36,18 @@ public:
   // Unix seconds; 0: not since this is kept.
   s64 GetLastPlayed(const std::string& key) const;
   void SetLastPlayed(const std::string& key, s64 time);
+  // What its cover is, other than by itself.
+  enum class Cover
+  {
+    Default,
+    None,
+    Box,
+    Title,
+    Snap,
+    Own,
+  };
+  Cover GetCover(const std::string& key) const;
+  void SetCover(const std::string& key, Cover cover);
 
 private:
   std::string m_path;
@@ -44,6 +56,8 @@ private:
 
 // What is kept by: the game ID, or for a file without one its name.
 std::string GetVRGameKey(const GameFile& game);
+// Where the player's own image for it is kept.
+std::string GetOwnCoverPath(const std::string& key);
 
 class VRGameList
 {
@@ -60,6 +74,8 @@ public:
   // version of its cover.
   FrameXr::Menu::GamesSnapshot Make(std::span<const std::shared_ptr<const GameFile>> games,
                                     const Sources& sources);
+  // Its cover's files are others now.
+  void CoverChanged(const std::string& path);
 
 private:
   struct Known

@@ -10,9 +10,11 @@
 
 #include <fmt/format.h>
 
+#include "Common/StringUtil.h"
 #include "Core/VRWiiController.h"
 #include "VideoCommon/VR/FrameUI/games_tab.h"
 #include "VideoCommon/VR/FrameUI/md3_fonts.h"
+#include "VideoCommon/VR/FrameUI/ui_ttf.h"
 
 namespace VR::UI
 {
@@ -855,6 +857,106 @@ void AddStats(Builder* builder, const MenuState& state)
   }
 }
 
+constexpr float QUESTION_W = 480.0f;
+constexpr float QUESTION_EDGE = 24.0f;
+constexpr float QUESTION_TITLE_H = 34.0f;
+constexpr float QUESTION_TEXT_H = 26.0f;
+constexpr float QUESTION_GAP = 12.0f;
+
+// In lines of about `max` letters; the last of `max_lines` has the rest.
+std::vector<std::string> WrapWords(std::string_view text, std::size_t max, std::size_t max_lines)
+{
+  std::vector<std::string> lines;
+  while (text.size() > max && lines.size() + 1 < max_lines)
+  {
+    std::size_t cut = text.rfind(' ', max);
+    if (cut == 0 || cut == std::string_view::npos)
+      cut = text.find(' ');
+    if (cut == std::string_view::npos)
+      break;
+    lines.emplace_back(text.substr(0, cut));
+    text.remove_prefix(cut + 1);
+  }
+  lines.emplace_back(text);
+  return lines;
+}
+
+// A box with a title, lines of text and buttons, all in its middle; the last button is the filled
+// one. Its height follows the text.
+void AddQuestion(Builder* builder, const std::string& title, const std::vector<std::string>& text,
+                 const std::vector<std::pair<std::string, int>>& buttons)
+{
+  const std::vector<std::string> title_lines = WrapWords(title, 34, 3);
+  std::vector<std::string> text_lines;
+  for (const std::string& line : text)
+  {
+    for (std::string& part : WrapWords(line, 44, 3))
+      text_lines.push_back(std::move(part));
+  }
+  const float height = QUESTION_EDGE * 2.0f + QUESTION_GAP * 2.0f + 48.0f +
+                       QUESTION_TITLE_H * static_cast<float>(title_lines.size()) +
+                       QUESTION_TEXT_H * static_cast<float>(text_lines.size());
+  // In the middle of the pane.
+  const float cx = PANE.Cx();
+  const float cy = PANE.Cy();
+  MenuWidget& box = builder->Add(Kind::Question, MenuItem::Popup);
+  box.rect = {cx - QUESTION_W * 0.5f, cy - height * 0.5f, cx + QUESTION_W * 0.5f,
+              cy + height * 0.5f};
+  box.label = title;
+  box.options = title_lines;
+  box.selected = static_cast<int>(title_lines.size());
+  box.options.insert(box.options.end(), text_lines.begin(), text_lines.end());
+  const float bottom = box.rect.y1 - QUESTION_EDGE;
+  constexpr float WIDTH = 112.0f;
+  constexpr float GAP = 12.0f;
+  const float count = static_cast<float>(buttons.size());
+  float x = cx - (WIDTH * count + GAP * (count - 1.0f)) * 0.5f;
+  for (const auto& [label, index] : buttons)
+  {
+    MenuWidget& w = builder->Add(Kind::Button, MenuItem::PopupOption);
+    w.index = index;
+    w.rect = {x, bottom - 48.0f, x + WIDTH, bottom};
+    w.label = label;
+    w.active = &label == &buttons.back().first;
+    x = w.rect.x1 + GAP;
+  }
+}
+
+Rect GetGamesGrid(const MenuGames& games)
+{
+  return {kGamesX0, kGamesY0, kGamesX1, games.typing ? kGamesTypingY1 : kGamesY1};
+}
+
+void AddKeyboard(Builder* builder)
+{
+  static constexpr std::array<std::string_view, kGamesKeyRows> ROWS{"1234567890", "qwertyuiop",
+                                                                    "asdfghjkl'", "zxcvbnm \b\n"};
+  const float pitch = (kGamesX1 - kGamesX0 + kGamesKeyGap) / kGamesKeyColumns;
+  for (int row = 0; row < kGamesKeyRows; ++row)
+  {
+    const float y = kGamesKeysY0 + static_cast<float>(row) * (kGamesKeyH + kGamesKeyGap);
+    const std::string_view keys = ROWS[static_cast<std::size_t>(row)];
+    for (std::size_t i = 0; i < keys.size(); ++i)
+    {
+      const float x = kGamesX0 + static_cast<float>(i) * pitch;
+      MenuWidget& w = builder->Add(Kind::Key, MenuItem::GamesKey);
+      w.index = keys[i];
+      w.rect = {x, y, x + pitch - kGamesKeyGap, y + kGamesKeyH};
+      if (keys[i] == '\b')
+        w.icon = Icon::kBackspace;
+      else if (keys[i] == '\n')
+        w.label = "Done";
+      else if (keys[i] == ' ')
+        w.label = "Space";
+      else
+        w.label = std::string(1, static_cast<char>(Common::ToUpper(keys[i])));
+      w.active = keys[i] == '\n';
+      if (keys[i] == '\b')
+        w.tooltip = "Backspace";
+    }
+  }
+}
+
 // Azahar for Frame's Games tab: chips and buttons, the count, the tiles.
 void AddGames(Builder* builder, const MenuState& state)
 {
@@ -862,8 +964,25 @@ void AddGames(Builder* builder, const MenuState& state)
   const std::vector<SystemFilter> chips = GameChips(games.list);
   const SystemFilter chosen = GameChip(games.list, games.chip);
   float x = kGamesX0;
+  if (!games.search.empty() && !games.typing)
+  {
+    // In All's place.
+    const float width =
+        std::min(kGamesSearchChipMaxW,
+                 std::ceil(10.0f * static_cast<float>(games.search.size()) + kGamesSearchChipRoom));
+    MenuWidget& w = builder->Add(Kind::SearchChip, MenuItem::GamesSearch);
+    w.rect = {x, kGamesTopY0, x + width, kGamesTopY1};
+    w.label = games.search;
+    MenuWidget& clear = builder->Add(Kind::IconButton, MenuItem::GamesSearchClear);
+    clear.rect = {x + width - kGamesSearchChipClose, kGamesTopY0, x + width, kGamesTopY1};
+    clear.icon = Icon::kClose;
+    clear.tooltip = "Clear Search";
+    x += width + kGamesChipGap;
+  }
   for (const SystemFilter chip : chips)
   {
+    if (games.typing || (chip == SystemFilter::All && !games.search.empty()))
+      continue;
     MenuWidget& w = builder->Add(Kind::GamesChip, MenuItem::GamesChip);
     w.index = static_cast<int>(chip);
     w.label = ChipName(chip);
@@ -874,14 +993,40 @@ void AddGames(Builder* builder, const MenuState& state)
     x = w.rect.x1 + kGamesChipGap;
   }
 
-  const Rect sort_rect{kGamesX1 - kGamesRoundR * 2.0f, kGamesTopY0, kGamesX1, kGamesTopY1};
-  if (games.list && games.has_window)
+  const Rect add_rect{kGamesX1 - kGamesRoundR * 2.0f, kGamesTopY0, kGamesX1, kGamesTopY1};
+  const Rect sort_rect{add_rect.x0 - 56.0f, kGamesTopY0, add_rect.x1 - 56.0f, kGamesTopY1};
+  if (games.typing)
+  {
+    MenuWidget& field = builder->Add(Kind::SearchField, MenuItem::GamesSearch);
+    field.rect = {kGamesX0, kGamesTopY0, kGamesX1, kGamesTopY1};
+    field.label = games.search;
+    if (!games.search.empty())
+    {
+      MenuWidget& clear = builder->Add(Kind::IconButton, MenuItem::GamesSearchClear);
+      clear.rect = {kGamesX1 - 48.0f, kGamesTopY0, kGamesX1, kGamesTopY1};
+      clear.icon = Icon::kClose;
+      clear.tooltip = "Clear Search";
+    }
+    AddKeyboard(builder);
+  }
+  else if (games.list && games.has_window && games.search.empty())
+  {
+    MenuWidget& search = builder->Add(Kind::RoundButton, MenuItem::GamesSearch);
+    search.rect = {sort_rect.x0 - 56.0f, kGamesTopY0, sort_rect.x1 - 56.0f, kGamesTopY1};
+    search.label = "Search";
+    search.tooltip = "Search";
+  }
+  if (games.list && games.has_window && !games.typing)
   {
     MenuWidget& sort = builder->Add(Kind::RoundButton, MenuItem::GamesSort);
     sort.rect = sort_rect;
     sort.label = "Sort";
     sort.tooltip = "Sort";
     sort.active = games.popup == MenuGames::Popup::Sort;
+    MenuWidget& add = builder->Add(Kind::RoundButton, MenuItem::GamesAddFolder);
+    add.rect = add_rect;
+    add.label = "Add Folder";
+    add.tooltip = "Add Folder";
   }
 
   MenuWidget& count = builder->Add(Kind::GamesCount, MenuItem::None);
@@ -890,11 +1035,11 @@ void AddGames(Builder* builder, const MenuState& state)
   if (!games.has_window)
     count.label = "The list of games is in Baiji VR's window.";
   else if (games.list)
-    count.label = GameCount(games.shown.size(), false) + " \u00b7 " + SortName(games.sort);
+    count.label = GameCount(games.shown.size(), !games.search.empty()) + " \u00b7 " + SortName(games.sort);
 
   const std::size_t first = builder->GetCount();
-  constexpr Rect GRID{kGamesX0, kGamesY0, kGamesX1, kGamesY1};
-  constexpr Rect CLIP{GRID.x0 - kGamesClipRoom, GRID.y0 - kGamesClipRoom, GRID.x1 + kGamesClipRoom,
+  const Rect GRID = GetGamesGrid(games);
+  const Rect CLIP{GRID.x0 - kGamesClipRoom, GRID.y0 - kGamesClipRoom, GRID.x1 + kGamesClipRoom,
                       GRID.y1 + kGamesClipRoom};
   Rect options_rect{};
   for (std::size_t i = 0; i < games.shown.size(); ++i)
@@ -920,12 +1065,23 @@ void AddGames(Builder* builder, const MenuState& state)
     options.rect = {rect.x1 - kGameOptionsTarget, rect.y0, rect.x1, rect.y0 + kGameOptionsTarget};
     options.label = "Options: " + game->title;
     options.tooltip = "Options";
-    options.active = games.popup == MenuGames::Popup::Options && games.game == game->path;
+    options.active = (games.popup == MenuGames::Popup::Options ||
+                      games.popup == MenuGames::Popup::Covers) &&
+                     games.game == game->path;
     if (options.active)
       options_rect = options.rect;
   }
   builder->Clip(first, CLIP);
 
+  if (games.shown.empty() && !games.search.empty())
+  {
+    MenuWidget& none = builder->Add(Kind::NoMatches, MenuItem::None);
+    none.rect = GRID;
+    none.label = "No Matches";
+    MenuWidget& clear = builder->Add(Kind::Button, MenuItem::GamesSearchClear);
+    clear.label = "Clear Search";
+    clear.rect = {GRID.Cx() - 76.0f, GRID.Cy() + 28.0f, GRID.Cx() + 76.0f, GRID.Cy() + 76.0f};
+  }
   if (const std::optional<MenuList> list = VrMenu::GetList(state); list && list->bar.Valid())
   {
     MenuWidget& bar = builder->Add(Kind::Scrollbar, MenuItem::Scrollbar);
@@ -947,6 +1103,7 @@ void AddGames(Builder* builder, const MenuState& state)
     break;
   }
   case MenuGames::Popup::Options:
+  case MenuGames::Popup::Covers:
   {
     const GameEntry* const game = games.FindGame(games.game);
     if (!game || options_rect.W() <= 0.0f)
@@ -954,8 +1111,14 @@ void AddGames(Builder* builder, const MenuState& state)
     Rect anchor = options_rect;
     anchor.y0 = std::max(anchor.y0, CLIP.y0);
     anchor.x1 = std::max(anchor.x1, kGamesX0 + kGamesOptionsMenuW);
+    if (games.popup == MenuGames::Popup::Covers)
+    {
+      AddMenu(builder, anchor, kGamesOptionsMenuW, {"Box Art", "Title Screen", "Screenshot"}, -1);
+      break;
+    }
     AddMenu(builder, anchor, kGamesOptionsMenuW,
-            {game->path == games.running ? "Continue" : "Play", "Favourite"},
+            {game->path == games.running ? "Continue" : "Play", "Favourite", "Choose Another Cover",
+             "No Cover", "Use My Own Image", "Reset Cover", "Download Thumbnails"},
             game->favorite ? MenuGames::Favourite : -1);
     break;
   }
@@ -965,25 +1128,101 @@ void AddGames(Builder* builder, const MenuState& state)
     if (!game)
       break;
     const GameEntry* const running = games.FindGame(games.running);
-    constexpr Rect BOX{VrMenu::WIDTH * 0.5f - 180.0f, 180.0f, VrMenu::WIDTH * 0.5f + 280.0f, 380.0f};
-    MenuWidget& box = builder->Add(Kind::Question, MenuItem::Popup);
-    box.rect = BOX;
-    box.label = fmt::format("Start {}?", game->title);
-    box.value = fmt::format("{} will close.", running ? running->title : state.title);
+    std::vector<std::string> text{
+        fmt::format("{} will close.", running ? running->title : state.title)};
     if (games.loses_progress)
-      box.note = "Progress not saved in the game is lost.";
-    MenuWidget& start = builder->Add(Kind::Button, MenuItem::PopupOption);
-    start.index = MenuGames::Start;
-    start.rect = {BOX.x1 - 24.0f - 112.0f, BOX.y1 - 72.0f, BOX.x1 - 24.0f, BOX.y1 - 24.0f};
-    start.label = "Start";
-    start.active = true;
-    MenuWidget& cancel = builder->Add(Kind::Button, MenuItem::PopupOption);
-    cancel.index = MenuGames::Cancel;
-    cancel.rect = {BOX.x1 - 24.0f - 112.0f - 12.0f - 112.0f, BOX.y1 - 72.0f,
-                   BOX.x1 - 24.0f - 112.0f - 12.0f, BOX.y1 - 24.0f};
-    cancel.label = "Cancel";
+      text.emplace_back("Progress not saved in the game is lost.");
+    AddQuestion(builder, fmt::format("Start {}?", game->title), text,
+                {{"Cancel", MenuGames::Cancel}, {"Start", MenuGames::Start}});
     break;
   }
+  }
+}
+
+constexpr float FILE_ROW_H = 56.0f;
+constexpr float FILE_PLACE_H = 36.0f;
+constexpr Rect FILE_LIST{PANE.x0, TOP + 48.0f + 34.0f + FILE_PLACE_H + 12.0f, PANE.x1,
+                         PANE.y1 - 8.0f};
+
+int CountFileRows(const FileListing& listing)
+{
+  return static_cast<int>(listing.rows.size()) + (listing.parent.empty() ? 0 : 1);
+}
+
+// Add Folder and Use My Own Image: where it is, other places to go, what is in it.
+void AddFiles(Builder* builder, const MenuState& state)
+{
+  const MenuFiles& files = state.files;
+  const FileListing& listing = files.listing;
+  const bool folder = files.purpose == FilePurpose::Folder;
+  const bool reading = !files.wanted.empty();
+  MenuWidget& back = builder->Add(Kind::Back, MenuItem::Back);
+  back.rect = {LEFT - 4.0f, TOP, LEFT + 44.0f, TOP + 48.0f};
+  MenuWidget& headline = builder->Add(Kind::Headline, MenuItem::None);
+  headline.rect = {LEFT + 56.0f, TOP, RIGHT - 200.0f, TOP + 48.0f};
+  headline.label = folder ? "Add Folder" : "Use My Own Image";
+  if (folder)
+  {
+    MenuWidget& add = builder->Add(Kind::Button, MenuItem::FileAdd);
+    add.rect = {RIGHT - 172.0f, TOP, RIGHT, TOP + 48.0f};
+    add.label = "Add This Folder";
+    add.active = true;
+    add.disabled = reading || !listing.readable;
+  }
+  MenuWidget& path = builder->Add(Kind::FilePath, MenuItem::None);
+  path.rect = {LEFT, TOP + 52.0f, RIGHT, TOP + 76.0f};
+  path.label = reading ? files.wanted : listing.path;
+  if (reading)
+    path.value = "Reading";
+  else if (!listing.readable)
+    path.value = "Cannot Be Read";
+  else if (folder)
+    path.value = GameCount(static_cast<std::size_t>(listing.games), false);
+
+  float x = LEFT;
+  const float place_y = TOP + 82.0f;
+  for (std::size_t i = 0; i < listing.places.size(); ++i)
+  {
+    const float width =
+        std::min(220.0f, 28.0f + 8.0f * static_cast<float>(listing.places[i].first.size()));
+    if (x + width > RIGHT)
+      break;
+    MenuWidget& w = builder->Add(Kind::Choice, MenuItem::FilePlace);
+    w.index = static_cast<int>(i);
+    w.rect = {x, place_y, x + width, place_y + FILE_PLACE_H};
+    w.label = listing.places[i].first;
+    w.active = listing.places[i].second == listing.path;
+    x = w.rect.x1 + 8.0f;
+  }
+
+  const std::size_t first = builder->GetCount();
+  const int up = listing.parent.empty() ? 0 : 1;
+  for (int i = 0; i < CountFileRows(listing); ++i)
+  {
+    const float y = FILE_LIST.y0 + static_cast<float>(i) * FILE_ROW_H - files.scroll;
+    if (y + FILE_ROW_H <= FILE_LIST.y0 || y >= FILE_LIST.y1)
+      continue;
+    MenuWidget& w = builder->Add(Kind::FileRow, MenuItem::FileRow);
+    w.index = i - up;
+    w.rect = {LEFT - 12.0f, y, RIGHT, y + FILE_ROW_H};
+    w.disabled = reading;
+    if (w.index < 0)
+    {
+      w.label = "Up";
+      continue;
+    }
+    const FileRow& row = listing.rows[static_cast<std::size_t>(w.index)];
+    w.label = row.name;
+    w.icon = row.is_folder ? Icon::kFolderOpen : Icon::kPhotoCamera;
+    if (row.games > 0)
+      w.value = GameCount(static_cast<std::size_t>(row.games), false);
+  }
+  builder->Clip(first, FILE_LIST);
+  if (const std::optional<MenuList> list = VrMenu::GetList(state); list && list->bar.Valid())
+  {
+    MenuWidget& bar = builder->Add(Kind::Scrollbar, MenuItem::Scrollbar);
+    bar.rect = Scrolling::HitRect(list->bar);
+    bar.rect.x0 = RIGHT;
   }
 }
 
@@ -1090,18 +1329,42 @@ const GameEntry* MenuGames::FindGame(const std::string& path) const
 void MenuGames::UpdateShown()
 {
   chip = GameChip(list, chip);
-  shown = GamesShown(list, chip, sort, {});
+  shown = GamesShown(list, chip, sort, search);
   if (popup != Popup::Sort && !FindGame(game))
     popup = Popup::None;
 }
 
+void MenuGames::Type(char key)
+{
+  if (key == '\n')
+  {
+    typing = false;
+    return;
+  }
+  if (key == '\b')
+  {
+    if (!search.empty())
+      search.pop_back();
+  }
+  else if (search.size() < kGamesSearchMax && !(key == ' ' && search.empty()))
+  {
+    search += key;
+  }
+  scroll = 0.0f;
+  UpdateShown();
+}
+
 float& GetScroll(MenuState* state, const MenuList& list)
 {
+  if (list.files)
+    return state->files.scroll;
   return list.games ? state->games.scroll : state->scroll[static_cast<std::size_t>(list.section)];
 }
 
 float GetScroll(const MenuState& state, const MenuList& list)
 {
+  if (list.files)
+    return state.files.scroll;
   return list.games ? state.games.scroll : state.scroll[static_cast<std::size_t>(list.section)];
 }
 
@@ -1118,7 +1381,10 @@ std::vector<MenuWidget> VrMenu::Layout(const MenuState& state)
       AddSlots(&builder, state);
     break;
   case MenuTab::Games:
-    AddGames(&builder, state);
+    if (state.page == MenuPage::Files)
+      AddFiles(&builder, state);
+    else
+      AddGames(&builder, state);
     break;
   case MenuTab::Position:
     AddScreen(&builder, state);
@@ -1139,11 +1405,64 @@ std::vector<MenuWidget> VrMenu::Layout(const MenuState& state)
   return builder.Take();
 }
 
+bool VrMenu::CanFocus(const MenuWidget& w, bool popup)
+{
+  if (w.disabled)
+    return false;
+  if (popup)
+    return w.item == MenuItem::PopupOption;
+  switch (w.item)
+  {
+  case MenuItem::Back:
+  case MenuItem::GamesSearchClear:
+  case MenuItem::GamesKey:
+  case MenuItem::FilePlace:
+  case MenuItem::FileRow:
+  case MenuItem::FileAdd:
+    return true;
+  default:
+    return false;
+  }
+}
+
+const MenuWidget* VrMenu::Next(const std::vector<MenuWidget>& widgets, float x, float y, int dx,
+                               int dy)
+{
+  const bool popup = std::ranges::any_of(
+      widgets, [](const MenuWidget& w) { return w.item == MenuItem::PopupOption; });
+  const MenuWidget* best = nullptr;
+  float best_cost = 0.0f;
+  for (const MenuWidget& w : widgets)
+  {
+    if (!CanFocus(w, popup))
+      continue;
+    const float along = dx != 0 ? (w.rect.Cx() - x) * static_cast<float>(dx) :
+                                  (w.rect.Cy() - y) * static_cast<float>(dy);
+    if (along < 4.0f)
+      continue;
+    const float aside = dx != 0 ? std::max({w.rect.y0 - y, y - w.rect.y1, 0.0f}) :
+                                  std::max({w.rect.x0 - x, x - w.rect.x1, 0.0f});
+    const float cost = along + aside * 4.0f;
+    if (!best || cost < best_cost)
+    {
+      best = &w;
+      best_cost = cost;
+    }
+  }
+  return best;
+}
+
 std::optional<MenuList> VrMenu::GetList(const MenuState& state)
 {
+  if (state.tab == MenuTab::Games && state.page == MenuPage::Files)
+  {
+    const float height = FILE_ROW_H * static_cast<float>(CountFileRows(state.files.listing));
+    return MenuList{{FILE_LIST, PANE.x1, height, std::max(0.0f, height - FILE_LIST.H())},
+                    MenuSection::General, FILE_ROW_H, false, true};
+  }
   if (state.tab == MenuTab::Games)
   {
-    const Rect grid{kGamesX0, kGamesY0, kGamesX1, kGamesY1};
+    const Rect grid = GetGamesGrid(state.games);
     const int rows = (static_cast<int>(state.games.shown.size()) + kGamesColumns - 1) / kGamesColumns;
     const float content = std::max(0.0f, static_cast<float>(rows) * kGameRow - kGameGap);
     return MenuList{{grid, kGamesBarRight, content, std::max(0.0f, content - grid.H())},
@@ -1496,7 +1815,8 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
       tile.running = w.active;
       const bool on_tile = w.index == state.hover_index && (state.hover == MenuItem::GameTile ||
                                                             state.hover == MenuItem::GameOptions);
-      const bool open = state.games.popup == MenuGames::Popup::Options &&
+      const bool open = (state.games.popup == MenuGames::Popup::Options ||
+                         state.games.popup == MenuGames::Popup::Covers) &&
                         state.games.game == game->path;
       tile.pointed = open || (on_tile && state.games.popup == MenuGames::Popup::None);
       tile.tile = on_tile && look == State::Rest ? State::Hover : look;
@@ -1523,17 +1843,118 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
       kit->Fill(w.rect, kGamesRoundR, Tok::kSurfaceContainerHigh);
       kit->StateLayer(w.rect, kGamesRoundR, Tok::kOnSurfaceVariant,
                       w.active ? State::Pressed : look);
-      DrawSortGlyph(*kit, w.rect.Cx(), w.rect.Cy(), Tok::kOnSurfaceVariant);
+      if (w.item == MenuItem::GamesSearch)
+        DrawSearchGlyph(*kit, w.rect.Cx(), w.rect.Cy(), Tok::kOnSurfaceVariant);
+      else if (w.item == MenuItem::GamesAddFolder)
+        DrawAddFolderGlyph(*kit, w.rect.Cx(), w.rect.Cy(), Tok::kOnSurfaceVariant);
+      else
+        DrawSortGlyph(*kit, w.rect.Cx(), w.rect.Cy(), Tok::kOnSurfaceVariant);
+      break;
+    case Kind::FilePath:
+    {
+      const float value_w = kit->TextWidth(Type::Tooltip, w.value) + 16.0f;
+      // Its end, when it is longer than the line.
+      std::string text = w.label;
+      const float room = w.rect.W() - value_w;
+      bool cut = false;
+      while (!text.empty() && kit->TextWidth(Type::Tooltip, (cut ? "\u2026" : "") + text) > room)
+      {
+        std::size_t end = 0;
+        frame_xr::ui::NextUtf8(text, end);
+        text.erase(0, end);
+        cut = true;
+      }
+      kit->TextMid(w.rect.x0, w.rect.Cy(), Type::Tooltip, Tok::kOnSurfaceVariant,
+                   (cut ? "\u2026" : "") + text);
+      kit->TextMid(w.rect.x1, w.rect.Cy(), Type::Tooltip, Tok::kOnSurfaceVariant, w.value, 2);
+      break;
+    }
+    case Kind::FileRow:
+    {
+      const float shown = w.disabled ? kDisabledContent : 1.0f;
+      kit->StateLayer(w.rect, 12.0f, Tok::kOnSurface, look);
+      if (w.icon != 0)
+        kit->Icon(LEFT + 12.0f, w.rect.Cy(), 24.0f, w.icon, false, Tok::kOnSurfaceVariant, shown);
+      else
+        kit->Icon(LEFT + 12.0f, w.rect.Cy(), 24.0f, Icon::kArrowBack, false, Tok::kOnSurfaceVariant,
+                  shown);
+      const float value_w = w.value.empty() ? 0.0f : kit->TextWidth(Type::Body, w.value) + 16.0f;
+      kit->TextMid(LEFT + 40.0f, w.rect.Cy(), Type::Body, Tok::kOnSurface,
+                   kit->Fit(Type::Body, w.label, RIGHT - 16.0f - LEFT - 40.0f - value_w), 0, shown);
+      kit->TextMid(RIGHT - 16.0f, w.rect.Cy(), Type::Body, Tok::kOnSurfaceVariant, w.value, 2, shown);
+      break;
+    }
+    case Kind::SearchField:
+    {
+      kit->Fill(w.rect, 24.0f, Tok::kSurfaceContainerHigh);
+      DrawSearchGlyph(*kit, w.rect.x0 + 26.0f, w.rect.Cy(), Tok::kOnSurfaceVariant, 20.0f);
+      const float text_x = w.rect.x0 + 48.0f;
+      // Its end, when it is longer than the field.
+      std::string text = w.label;
+      const float room = w.rect.W() - 48.0f - 60.0f;
+      while (!text.empty() && kit->TextWidth(Type::Body, text) > room)
+        text.erase(0, 1);
+      if (text.empty())
+        kit->TextMid(text_x + 6.0f, w.rect.Cy(), Type::Body, Tok::kOnSurfaceVariant, "Search");
+      else
+        kit->TextMid(text_x, w.rect.Cy(), Type::Body, Tok::kOnSurface, text);
+      const float caret = text_x + kit->TextWidth(Type::Body, text) + 2.0f;
+      kit->Line(caret, w.rect.Cy() - 11.0f, caret, w.rect.Cy() + 11.0f, 2.0f, Tok::kPrimary);
+      break;
+    }
+    case Kind::SearchChip:
+      kit->Fill(w.rect, kGamesChipRadius, Tok::kSecondaryContainer);
+      kit->StateLayer(w.rect, kGamesChipRadius, Tok::kOnSecondaryContainer, look);
+      kit->TextMid(w.rect.x0 + 16.0f, w.rect.Cy(), Type::Label, Tok::kOnSecondaryContainer,
+                   kit->Fit(Type::Label, w.label, w.rect.W() - kGamesSearchChipRoom));
+      break;
+    case Kind::NoMatches:
+      DrawSearchGlyph(*kit, w.rect.Cx(), w.rect.Cy() - 58.0f, Tok::kOnSurfaceVariant, 48.0f);
+      kit->TextMid(w.rect.Cx(), w.rect.Cy() - 4.0f, Type::Title, Tok::kOnSurface, w.label, 1);
+      break;
+    case Kind::Key:
+      kit->Fill(w.rect, 10.0f, w.active ? Tok::kPrimary : Tok::kSurfaceContainerHigh);
+      kit->StateLayer(w.rect, 10.0f, w.active ? Tok::kOnPrimary : Tok::kOnSurface, look);
+      if (w.icon != 0)
+      {
+        kit->Icon(w.rect.Cx(), w.rect.Cy(), 22.0f, w.icon, false, Tok::kOnSurface);
+      }
+      else
+      {
+        kit->TextMid(w.rect.Cx(), w.rect.Cy(), w.label.size() > 1 ? Type::RailLabel : Type::Value,
+                     w.active ? Tok::kOnPrimary : Tok::kOnSurface, w.label, 1);
+      }
       break;
     case Kind::Question:
+    {
       kit->Fill({0.0f, 0.0f, WIDTH, HEIGHT}, 28.0f, 0x000000, 0.5f);
       kit->Fill(w.rect, 28.0f, Tok::kSurfaceContainerHigh);
-      kit->TextMid(w.rect.x0 + 24.0f, w.rect.y0 + 40.0f, Type::Headline, Tok::kOnSurface,
-                   kit->Fit(Type::Headline, w.label, w.rect.W() - 48.0f));
-      kit->TextMid(w.rect.x0 + 24.0f, w.rect.y0 + 80.0f, Type::Body, Tok::kOnSurfaceVariant,
-                   kit->Fit(Type::Body, w.value, w.rect.W() - 48.0f));
-      kit->TextMid(w.rect.x0 + 24.0f, w.rect.y0 + 106.0f, Type::Body, Tok::kOnSurfaceVariant, w.note);
+      const float room = w.rect.W() - QUESTION_EDGE * 2.0f;
+      // Smaller rather than cut.
+      const auto line = [&](const std::string& text, Type type, float size, uint32_t color, float y) {
+        if (kit->TextWidth(type, text) <= room)
+        {
+          kit->TextMid(w.rect.Cx(), y, type, color, text, 1);
+          return;
+        }
+        while (size > 9.0f && kit->TextWidthSized(size, false, text) > room)
+          size -= 0.5f;
+        kit->TextSized(w.rect.Cx(), y + kit->CapHeightSized(size, false) * 0.5f, size, false, color,
+                       text, 1);
+      };
+      float y = w.rect.y0 + QUESTION_EDGE;
+      for (std::size_t i = 0; i < w.options.size(); ++i)
+      {
+        const bool title = static_cast<int>(i) < w.selected;
+        if (static_cast<int>(i) == w.selected)
+          y += QUESTION_GAP;
+        const float h = title ? QUESTION_TITLE_H : QUESTION_TEXT_H;
+        line(w.options[i], title ? Type::Headline : Type::Body, title ? 26.0f : 18.0f,
+             title ? Tok::kOnSurface : Tok::kOnSurfaceVariant, y + h * 0.5f);
+        y += h;
+      }
       break;
+    }
     case Kind::Scrollbar:
       if (const std::optional<MenuList> list = GetList(state))
       {
@@ -1550,6 +1971,14 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
                   held ? 1.0f : wide ? 0.72f : 0.38f);
       }
       break;
+    }
+    if (state.focus && pointed == &w)
+    {
+      const float radius = w.kind == Kind::GameTile    ? 16.0f :
+                           w.kind == Kind::RoundButton ? kGamesRoundR :
+                           w.kind == Kind::Key         ? 10.0f :
+                                                         12.0f;
+      kit->Stroke(w.rect, radius, 3.0f, Tok::kPrimary);
     }
   }
   kit->ClearClip();
@@ -1570,7 +1999,9 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
     top = std::max(top, pointed->clip.y0);
   // A controller's chip is under Global and Per-Game.
   const bool above = top - 40.0f > PANE.y0 && pointed->item != MenuItem::Controller &&
-                     pointed->item != MenuItem::GamesSort;
+                     pointed->item != MenuItem::GamesSort &&
+                     pointed->item != MenuItem::GamesSearch &&
+                     pointed->item != MenuItem::GamesAddFolder;
   const float y = above ? top + (row ? 6.0f : 0.0f) : pointed->rect.y1;
   if (wrap)
     kit->TooltipWrapped(cx, y, text, above, wrap_w);

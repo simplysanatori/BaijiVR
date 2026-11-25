@@ -43,6 +43,7 @@ GameTracker::GameTracker(QObject* parent) : QFileSystemWatcher(parent)
 {
   qRegisterMetaType<std::shared_ptr<const UICommon::GameFile>>();
   qRegisterMetaType<std::string>();
+  qRegisterMetaType<UICommon::CoverKind>();
 
   connect(qApp, &QApplication::aboutToQuit, this, [this] {
     m_processing_halted = true;
@@ -128,6 +129,12 @@ GameTracker::GameTracker(QObject* parent) : QFileSystemWatcher(parent)
       {
         m_cache.Save();
       }
+      break;
+    case CommandType::DownloadAllCovers:
+      DownloadAllCoversInternal();
+      break;
+    case CommandType::DownloadCover:
+      DownloadCoverInternal(command.path.toStdString(), command.cover);
       break;
     }
     FlushNewGames();
@@ -494,10 +501,10 @@ void GameTracker::AskAboutCovers()
   box->setIcon(QMessageBox::Question);
   box->setWindowTitle(tr("Download Thumbnails?"));
   box->setText(games.size() == 1 ?
-                   tr("Covers for the 1 game found can be downloaded from libretro-thumbnails on "
-                      "GitHub. It sees your IP address and the name of the game.") :
+                   tr("A cover for the game found can be downloaded from libretro-thumbnails on "
+                      "GitHub.") :
                    tr("Covers for the %1 games found can be downloaded from libretro-thumbnails on "
-                      "GitHub. It sees your IP address and the names of the games.")
+                      "GitHub.")
                        .arg(games.size()));
   QPushButton* const download = box->addButton(tr("Download"), QMessageBox::AcceptRole);
   QPushButton* const not_now = box->addButton(tr("Not Now"), QMessageBox::RejectRole);
@@ -521,6 +528,52 @@ void GameTracker::AskAboutCovers()
       QueueOnObject(this, [this] { AskAboutCovers(); });
   });
   box->open();
+}
+
+void GameTracker::DownloadCovers()
+{
+  m_load_thread.EmplaceItem(Command{CommandType::DownloadAllCovers, {}});
+}
+
+void GameTracker::DownloadCover(const std::string& path, UICommon::CoverKind kind)
+{
+  m_load_thread.EmplaceItem(
+      Command{CommandType::DownloadCover, QString::fromStdString(path), 0, {}, kind});
+}
+
+void GameTracker::DownloadAllCoversInternal()
+{
+  std::vector<std::string> games;
+  for (auto it = m_tracked_files.cbegin(); it != m_tracked_files.cend(); ++it)
+  {
+    const auto game = m_cache.Find(it.key().toStdString());
+    if (game && UICommon::NeedsCover(game->GetCoverState()))
+      games.push_back(game->GetFilePath());
+  }
+  if (m_cache.DownloadCovers(games, [this](const auto& game) { emit GameUpdated(game); },
+                             m_processing_halted))
+  {
+    m_cache.Save();
+  }
+  int found = 0;
+  int unanswered = 0;
+  for (const std::string& path : games)
+  {
+    const auto game = m_cache.Find(path);
+    const UICommon::CoverState state = game ? game->GetCoverState() : UICommon::CoverState{};
+    found += state.has_cached ? 1 : 0;
+    unanswered += UICommon::NeedsCover(state) ? 1 : 0;
+  }
+  emit CoversDownloaded(static_cast<int>(games.size()), found, unanswered);
+}
+
+void GameTracker::DownloadCoverInternal(const std::string& path, UICommon::CoverKind kind)
+{
+  const auto game = m_cache.Find(path);
+  const bool found = game && game->DownloadCover(kind);
+  UICommon::CoverState state{.game_id = game ? game->GetGameTDBID() : std::string()};
+  UICommon::FillCoverCacheState(&state, kind);
+  emit CoverDownloaded(path, kind, found, !found && UICommon::NeedsCover(state));
 }
 
 void GameTracker::FlushNewGames()

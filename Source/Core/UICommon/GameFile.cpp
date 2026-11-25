@@ -248,17 +248,26 @@ void GameFile::DownloadDefaultCover(bool force)
   if (!COVERS_ARE_SHOWN || !HandlesCovers() || !(force || DownloadsCovers()))
     return;
 
-  if (File::Exists(GetCoverPath(m_gametdb_id)))
-    return;
+  DownloadCover(CoverKind::Box);
+}
+
+bool GameFile::DownloadCover(CoverKind kind) const
+{
+  if (m_gametdb_id.empty())
+    return false;
+  if (File::Exists(GetCoverPath(m_gametdb_id, kind)))
+    return true;
   // Built once, when the first game without a cover comes.
   static const Core::TitleDatabase title_database;
 
   const bool is_wii = DiscIO::IsWii(GetPlatform());
-  EnsureCover({.game_id = m_gametdb_id,
-               .is_wii = is_wii,
-               .region = m_region,
-               .file_name = m_file_name,
-               .title = title_database.GetTitleName(m_gametdb_id, DiscIO::Language::English)});
+  return EnsureCover(
+      {.game_id = m_gametdb_id,
+       .is_wii = is_wii,
+       .region = m_region,
+       .file_name = m_file_name,
+       .title = title_database.GetTitleName(m_gametdb_id, DiscIO::Language::English),
+       .kind = kind});
 }
 
 bool GameFile::DefaultCoverChanged()

@@ -121,6 +121,8 @@ public:
   void CustomBannerCommit();
   // The setting for automatic downloads is not looked at when force is set.
   void DownloadDefaultCover(bool force = false);
+  // True when it is in the cache. Blocks on the network.
+  bool DownloadCover(CoverKind kind) const;
   CoverState GetCoverState() const;
   bool DefaultCoverChanged();
   void DefaultCoverCommit();

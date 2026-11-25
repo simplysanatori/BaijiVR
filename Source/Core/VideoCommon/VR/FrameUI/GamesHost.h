@@ -13,11 +13,29 @@
 // list, the menu asks for what its tiles do. Without a window there is no host.
 namespace VR::UI
 {
+// What a tile's cover is to be.
+enum class CoverChoice
+{
+  Default,
+  None,
+  Box,
+  Title,
+  Snap,
+  Own,
+};
+
 struct GamesHost
 {
   // Stops the running game and starts another. Empty when it is on its way, or else why not.
   std::function<std::string(const std::string& path)> play;
   std::function<void(const std::string& path)> toggle_favourite;
+  // Box, Title and Snap are downloaded when they are not there. `image`: the file of Own.
+  std::function<void(const std::string& path, CoverChoice choice, const std::string& image)>
+      choose_cover;
+  // To the directories of games.
+  std::function<void(const std::string& path)> add_folder;
+  // For all games that lack a cover. A message says what came of it.
+  std::function<void()> download_thumbnails;
   // The list again, where something of it may have changed.
   std::function<void()> publish;
 };

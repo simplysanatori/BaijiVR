@@ -12,6 +12,7 @@
 
 #include "Common/CommonTypes.h"
 #include "Core/GameMods/GameMods.h"
+#include "VideoCommon/VR/FrameUI/FileList.h"
 #include "VideoCommon/VR/FrameUI/MenuSettings.h"
 #include "VideoCommon/VR/FrameUI/PadArt.h"
 #include "VideoCommon/VR/FrameUI/PadEdit.h"
@@ -91,6 +92,13 @@ enum class MenuItem
   GameOptions,  // its three dots
   GamesChip,    // the index is a SystemFilter
   GamesSort,
+  GamesSearch,       // the button, the field, the chip with the search
+  GamesSearchClear,
+  GamesAddFolder,
+  FilePlace,
+  FileRow,  // -1: the folder it is in
+  FileAdd,
+  GamesKey,          // the index is the letter; '\b', '\n': Backspace, Done
   Scrollbar,
   Popup,
   PopupOption,
@@ -103,6 +111,7 @@ enum class MenuPage
   Save,
   Load,
   EditControls,  // on the Controls tab
+  Files,         // on the Games tab: Add Folder, Use My Own Image
 };
 
 constexpr int NUM_SLOTS = 10;
@@ -137,6 +146,7 @@ struct MenuGames
     None,
     Sort,
     Options,
+    Covers,  // Choose Another Cover's
     Question,
   };
   // Of a tile's menu.
@@ -144,6 +154,12 @@ struct MenuGames
   {
     Play,
     Favourite,
+    AnotherCover,
+    NoCover,
+    OwnImage,
+    ResetCover,
+    Download,
+    NUM_OPTIONS,
   };
   // Of the question.
   enum Answer
@@ -158,6 +174,8 @@ struct MenuGames
   FrameXr::Menu::SystemFilter chip = FrameXr::Menu::SystemFilter::All;
   FrameXr::Menu::GamesSort sort = FrameXr::Menu::GamesSort::RecentlyPlayed;
   std::vector<int> shown;  // of the list, in this order
+  std::string search;
+  bool typing = false;  // the keyboard is open
   float scroll = 0.0f;
   Popup popup = Popup::None;
   std::string game;  // whose menu or question it is: its path
@@ -168,8 +186,22 @@ struct MenuGames
   const FrameXr::Menu::GameEntry* FindGame(const std::string& path) const;
   // After the list, the chip or the order changed.
   void UpdateShown();
+  // A key of the keyboard. Its tiles are the ones that match.
+  void Type(char key);
 
   bool operator==(const MenuGames&) const = default;
+};
+
+// The page of folders.
+struct MenuFiles
+{
+  FilePurpose purpose = FilePurpose::Folder;
+  std::string game;  // whose image: its path
+  std::string wanted;  // what is being read
+  FileListing listing;
+  float scroll = 0.0f;
+
+  bool operator==(const MenuFiles&) const = default;
 };
 
 struct MenuState
@@ -207,6 +239,9 @@ struct MenuState
   bool fast_forward = false;
 
   MenuGames games;
+  MenuFiles files;
+  // The hovered one is where the D-Pad is.
+  bool focus = false;
 
   SettingState settings;
   MenuSection section = MenuSection::General;  // of the Settings tab
@@ -265,6 +300,12 @@ struct MenuWidget
     GamesChip,
     GamesCount,
     RoundButton,
+    SearchField,
+    SearchChip,
+    NoMatches,
+    Key,
+    FilePath,
+    FileRow,
     Question,
   };
 
@@ -309,6 +350,7 @@ struct MenuList
   MenuSection section = MenuSection::General;
   float row_h = 0.0f;
   bool games = false;  // the Games tab's
+  bool files = false;  // the page of folders
 };
 
 float& GetScroll(MenuState* state, const MenuList& list);
@@ -338,6 +380,11 @@ public:
 
   static std::vector<MenuWidget> Layout(const MenuState& state);
   // The page's list, if it has one (its bar is not valid when everything fits).
+  // The nearest one from a point in a direction (dx, dy): -1, 0 or 1.
+  static const MenuWidget* Next(const std::vector<MenuWidget>& widgets, float x, float y, int dx,
+                                int dy);
+  // With the D-Pad, off the grid: what can be gone to.
+  static bool CanFocus(const MenuWidget& widget, bool popup);
   static std::optional<MenuList> GetList(const MenuState& state);
 
   // The widget at a point that does something, or null. `greyed`: also one that cannot be used now
