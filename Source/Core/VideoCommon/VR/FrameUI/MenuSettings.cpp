@@ -416,17 +416,31 @@ std::vector<SettingRow> MakeImmersiveRows()
 struct Binding
 {
   SettingId id = SettingId::None;
+  const Config::Location* location = nullptr;
+  SettingStore store = SettingStore::Global;
   std::function<float()> read;
   std::function<float()> read_base;
-  std::function<void(float)> write;
+  std::function<void(float, SettingScope, bool)> write;
+  std::function<void()> use_global;
 };
 
 template <typename T>
 Binding Bind(SettingId id, const Config::Info<T>& info)
 {
-  return {id, [&info] { return ToNumber(Config::Get(info)); },
+  const SettingStore store = GetSettingRow(id).store;
+  return {id,
+          &info.GetLocation(),
+          store,
+          [&info] { return ToNumber(Config::Get(info)); },
           [&info] { return ToNumber(Config::GetBase(info)); },
-          [&info](float value) { Config::SetBaseOrCurrent(info, FromNumber<T>(value)); }};
+          [&info, store](float number, SettingScope scope, bool save) {
+            const T value = FromNumber<T>(number);
+            if (store == SettingStore::Global || scope == SettingScope::Global)
+              GameSettingScope::SetGlobal(info, value, store);
+            else
+              GameSettingScope::SetForGame(info, value, store, save);
+          },
+          [&info, store] { GameSettingScope::UseGlobal(info, store); }};
 }
 
 // On where the setting is off.
@@ -434,15 +448,33 @@ Binding BindInverted(SettingId id, const Config::Info<bool>& info)
 {
   const auto invert = [](float value) { return value != 0.0f ? 0.0f : 1.0f; };
   const Binding plain = Bind(id, info);
-  return {id, [plain, invert] { return invert(plain.read()); },
-          [plain, invert] { return invert(plain.read_base()); },
-          [plain, invert](float value) { plain.write(invert(value)); }};
+  Binding binding = plain;
+  binding.read = [plain, invert] { return invert(plain.read()); };
+  binding.read_base = [plain, invert] { return invert(plain.read_base()); };
+  binding.write = [plain, invert](float value, SettingScope scope, bool save) {
+    plain.write(invert(value), scope, save);
+  };
+  return binding;
+}
+
+// The display that is shown stays until it is switched (QueueSwitchMode).
+Binding BindDisplay()
+{
+  Binding binding = Bind(SettingId::Display, Config::GFX_VR_PRESENTATION_MODE);
+  binding.use_global = [location = binding.location] {
+    if (GameSettingScope::IsGameRunning() &&
+        GameSettingScope::HasOwnValue(*location, SettingStore::VRFile))
+    {
+      GameSettingScope::RemoveFromVRFile(*location);
+    }
+  };
+  return binding;
 }
 
 const std::vector<Binding>& GetBindings()
 {
   static const std::vector<Binding> bindings{
-      Bind(SettingId::Display, Config::GFX_VR_PRESENTATION_MODE),
+      BindDisplay(),
       Bind(SettingId::Distance, Config::GFX_VR_SCREEN_DISTANCE),
       Bind(SettingId::Size, Config::GFX_VR_SCREEN_SIZE),
       Bind(SettingId::AspectRatio, Config::GFX_ASPECT_RATIO),
@@ -509,6 +541,22 @@ const SettingRow& GetSettingRow(SettingId id)
   return *std::ranges::find(GetSettingRows(), id, &SettingRow::id);
 }
 
+int CountOwnValues(MenuSection section, const SettingState& state)
+{
+  return static_cast<int>(
+      std::ranges::count_if(GetSettingRows(), [&](const SettingRow& row) {
+        return row.section == section && row.id != SettingId::None &&
+               state.values.own_value[Index(row.id)];
+      }));
+}
+
+std::string DescribeOwnValues(int count)
+{
+  if (count == 0)
+    return "No Per-Game Values Set";
+  return fmt::format("{} Per-Game Value{} Set", count, count == 1 ? "" : "s");
+}
+
 float SettingState::Get(SettingId id) const
 {
   return (scope == SettingScope::Global ? values.global : values.game)[Index(id)];
@@ -539,6 +587,11 @@ Lock GetLock(const SettingRow& row, const SettingState& state)
   }
   if (row.turned_on_by != SettingId::None && !state.IsOn(row.turned_on_by))
     return Lock::SwitchedOff;
+  if (row.id != SettingId::None && state.scope == SettingScope::Global &&
+      state.values.game_value[Index(row.id)])
+  {
+    return Lock::GameValue;
+  }
   return Lock::None;
 }
 
@@ -546,6 +599,8 @@ std::string ExplainLock(Lock lock, const SettingRow& row)
 {
   switch (lock)
   {
+  case Lock::GameValue:
+    return "This game has its own value: choose Per-Game to change it.";
   case Lock::ScreenOnly:
     return "Only in Stereoscopic 3D.";
   case Lock::ImmersiveOnly:
@@ -637,13 +692,26 @@ SettingValues ReadSettings()
   {
     values.game[Index(binding.id)] = binding.read();
     values.global[Index(binding.id)] = binding.read_base();
+    values.game_value[Index(binding.id)] =
+        GameSettingScope::HasGameValue(*binding.location, binding.store);
+    values.own_value[Index(binding.id)] =
+        GameSettingScope::HasOwnValue(*binding.location, binding.store);
   }
   values.aa_modes = g_backend_info.AAModes;
   return values;
 }
 
-void WriteSetting(SettingId id, float value)
+void WriteSetting(SettingId id, float value, SettingScope scope, bool save)
 {
-  std::ranges::find(GetBindings(), id, &Binding::id)->write(value);
+  std::ranges::find(GetBindings(), id, &Binding::id)->write(value, scope, save);
+}
+
+void UseGlobalValues(MenuSection section)
+{
+  for (const Binding& binding : GetBindings())
+  {
+    if (GetSettingRow(binding.id).section == section && binding.store != SettingStore::Global)
+      binding.use_global();
+  }
 }
 }  // namespace VR::UI

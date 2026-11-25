@@ -91,6 +91,17 @@ struct SConfig
   Common::IniFile LoadGameIni() const;
   void ReloadGameVRConfigOverrides();
 
+  // The running game's VR settings (GameSettingsVR), by key. It has one from any of its files, or
+  // one of its own in the player's file for this game only.
+  bool HasGameVRSetting(const std::string& key) const;
+  bool HasOwnGameVRSetting(const std::string& key) const;
+  // Its value on the CurrentRun layer is the game's from now on.
+  void MarkGameVRSetting(const std::string& key);
+  void SaveGameVRSetting(const std::string& key, const std::string& value);
+  // The value that its other files give it. Without one it is not the game's any more, and what is
+  // on the CurrentRun layer is the caller's to delete.
+  std::optional<std::string> RemoveGameVRSetting(const std::string& key);
+
   static Common::IniFile LoadDefaultGameIni(std::string_view id, std::optional<u16> revision);
   static Common::IniFile LoadLocalGameIni(std::string_view id, std::optional<u16> revision);
   static Common::IniFile LoadGameIni(std::string_view id, std::optional<u16> revision);

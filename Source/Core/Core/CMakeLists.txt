@@ -131,6 +131,8 @@ add_library(core
   GameMods/GameModsInternal.h
   GameMods/Install.cpp
   FreeLookManager.h
+  GameSettingScope.cpp
+  GameSettingScope.h
   GeckoCode.cpp
   GeckoCode.h
   GeckoCodeConfig.cpp

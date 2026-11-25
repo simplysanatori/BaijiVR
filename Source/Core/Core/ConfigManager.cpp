@@ -37,6 +37,7 @@
 #include "Core/Core.h"
 #include "Core/DolphinAnalytics.h"
 #include "Core/FifoPlayer/FifoDataFile.h"
+#include "Core/GameSettingScope.h"
 #include "Core/HLE/HLE.h"
 #include "Core/HW/DVD/DVDInterface.h"
 #include "Core/HW/EXI/EXI_Device.h"
@@ -63,27 +64,16 @@
 
 namespace
 {
-constexpr std::string_view VR_SECTION_NAME = "Graphics.VR";
-constexpr std::string_view LEGACY_VR_SECTION_NAME = "GFX.VR";
-
 using VRSettingMap = std::map<std::string, std::string, Common::CaseInsensitiveLess>;
 using VRSettingSet = std::set<std::string, Common::CaseInsensitiveLess>;
 
 static VRSettingSet s_applied_vr_settings;
+// In the player's file for the running game only.
+static VRSettingSet s_own_vr_settings;
 
 static std::string GetSysVRGameINIPath(const std::string& filename)
 {
   return File::GetSysDirectory() + GAMESETTINGSVR_DIR DIR_SEP + filename;
-}
-
-static bool IsVRSectionHeader(std::string_view line)
-{
-  if (line.size() < 3 || line.front() != '[' || line.back() != ']')
-    return false;
-
-  const std::string_view section_name = line.substr(1, line.size() - 2);
-  return Common::CaseInsensitiveEquals(section_name, VR_SECTION_NAME) ||
-         Common::CaseInsensitiveEquals(section_name, LEGACY_VR_SECTION_NAME);
 }
 
 static void MergeVRSettingsFromINIFile(VRSettingMap* values, const std::string& path)
@@ -105,7 +95,7 @@ static void MergeVRSettingsFromINIFile(VRSettingMap* values, const std::string& 
 
     if (!trimmed.empty() && trimmed.front() == '[')
     {
-      if (IsVRSectionHeader(trimmed))
+      if (GameSettingScope::IsVRSectionHeader(trimmed))
       {
         in_vr_section = true;
         continue;
@@ -161,6 +151,35 @@ static VRSettingMap LoadVRSettingsFromINI(std::string_view game_id, std::optiona
     values.insert_or_assign(key, std::move(value));
 
   return values;
+}
+
+// The player's files for this game only, the first of them the one to write to.
+static std::vector<std::string> GetOwnVRINIPaths(std::string_view game_id,
+                                                 std::optional<u16> revision)
+{
+  const std::string directory = File::GetUserPath(D_GAMESETTINGSVR_IDX);
+  std::vector<std::string> paths;
+  if (revision)
+  {
+    std::string path = fmt::format("{}{}r{}.ini", directory, game_id, *revision);
+    if (File::Exists(path))
+      paths.push_back(std::move(path));
+  }
+  paths.push_back(fmt::format("{}{}.ini", directory, game_id));
+  return paths;
+}
+
+static VRSettingSet LoadOwnVRSettingKeys(std::string_view game_id, std::optional<u16> revision)
+{
+  VRSettingSet keys;
+  if (game_id.empty() || game_id == DEFAULT_GAME_ID)
+    return keys;
+  VRSettingMap values;
+  for (const std::string& path : GetOwnVRINIPaths(game_id, revision))
+    MergeVRSettingsFromINIFile(&values, path);
+  for (const auto& [key, value] : values)
+    keys.insert(key == "ARMode" ? "Passthrough" : key);
+  return keys;
 }
 
 template <typename T>
@@ -258,6 +277,7 @@ static void ApplyGameVRConfigOverrides(std::string_view game_id, std::optional<u
 {
   const Config::ConfigChangeCallbackGuard guard;
   ClearAppliedVRSettings();
+  s_own_vr_settings = LoadOwnVRSettingKeys(game_id, revision);
   VRSettingSet bundled_only;
   VRSettingMap values = LoadVRSettingsFromINI(game_id, revision, &bundled_only);
 
@@ -580,6 +600,71 @@ void SConfig::ReloadGameVRConfigOverrides()
   std::lock_guard<std::recursive_mutex> lock(m_metadata_lock);
   ApplyGameVRConfigOverrides(m_game_id,
                              m_revision == 0 ? std::nullopt : std::make_optional(m_revision));
+}
+
+static std::optional<u16> GetVRRevision(u16 revision)
+{
+  return revision == 0 ? std::nullopt : std::make_optional(revision);
+}
+
+bool SConfig::HasGameVRSetting(const std::string& key) const
+{
+  std::lock_guard<std::recursive_mutex> lock(m_metadata_lock);
+  return s_applied_vr_settings.contains(key) ||
+         (key == "Passthrough" && s_applied_vr_settings.contains("ARMode"));
+}
+
+bool SConfig::HasOwnGameVRSetting(const std::string& key) const
+{
+  std::lock_guard<std::recursive_mutex> lock(m_metadata_lock);
+  return s_own_vr_settings.contains(key);
+}
+
+void SConfig::MarkGameVRSetting(const std::string& key)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_metadata_lock);
+  s_applied_vr_settings.insert(key);
+}
+
+void SConfig::SaveGameVRSetting(const std::string& key, const std::string& value)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_metadata_lock);
+  const std::string path = GetOwnVRINIPaths(m_game_id, GetVRRevision(m_revision)).front();
+  std::string text;
+  File::ReadFileToString(path, text);
+  File::CreateFullPath(path);
+  File::WriteStringToFile(path, GameSettingScope::EditVRSettings(text, key, value));
+  s_own_vr_settings.insert(key);
+}
+
+std::optional<std::string> SConfig::RemoveGameVRSetting(const std::string& key)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_metadata_lock);
+  const std::optional<u16> revision = GetVRRevision(m_revision);
+  for (const std::string& path : GetOwnVRINIPaths(m_game_id, revision))
+  {
+    std::string text;
+    if (!File::ReadFileToString(path, text))
+      continue;
+    text = GameSettingScope::EditVRSettings(text, key, std::nullopt);
+    if (text.empty())
+      File::Delete(path);
+    else
+      File::WriteStringToFile(path, text);
+  }
+  s_own_vr_settings.erase(key);
+  s_applied_vr_settings.erase(key);
+  if (key == "Passthrough")
+    s_applied_vr_settings.erase("ARMode");
+
+  const VRSettingMap values = LoadVRSettingsFromINI(m_game_id, revision);
+  auto it = values.find(key);
+  if (it == values.end() && key == "Passthrough")
+    it = values.find("ARMode");
+  if (it == values.end())
+    return std::nullopt;
+  s_applied_vr_settings.insert(key);
+  return it->second;
 }
 
 void SConfig::OnESTitleChanged()

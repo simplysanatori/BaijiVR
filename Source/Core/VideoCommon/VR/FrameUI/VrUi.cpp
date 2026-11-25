@@ -74,6 +74,8 @@ constexpr float TRIGGER_ON = 0.55f;
 constexpr float TRIGGER_OFF = 0.40f;
 
 constexpr s64 REFRESH_NS = 250'000'000;
+// What the menu opens on while a game runs.
+constexpr SettingScope DEFAULT_SCOPE = SettingScope::PerGame;
 // How long the pointer rests before it says what it is on.
 constexpr s64 TOOLTIP_NS = 600'000'000;
 // The autosave's picture is of the running game.
@@ -307,23 +309,29 @@ void ResumeFromMenu(Core::System& system)
     Core::SetState(system, Core::State::Running);
 }
 
-void QueueSwitchMode(bool to_immersive)
+// `keep`: it is the display from now on, too, for every game or for this one.
+void QueueSwitchMode(bool to_immersive, std::optional<SettingScope> keep = std::nullopt)
 {
-  Core::QueueHostJob([to_immersive](Core::System&) {
+  Core::QueueHostJob([to_immersive, keep](Core::System&) {
     if (!g_openxr || !g_openxr->GetSwapchain())
       return;
-    if (g_openxr->GetSwapchain()->HasFoveatedFramebuffers() ||
-        (g_framebuffer_manager && g_framebuffer_manager->IsEFBFoveated()))
+    const OpenXRPresentationMode mode = to_immersive ? OpenXRPresentationMode::Immersive :
+                                                       OpenXRPresentationMode::StereoScreen;
+    if (Config::Get(Config::GFX_VR_PRESENTATION_MODE) != mode)
     {
-      VrUi::PostToast("Turn Foveated Rendering Off to Switch", 5000);
-      return;
+      if (g_openxr->GetSwapchain()->HasFoveatedFramebuffers() ||
+          (g_framebuffer_manager && g_framebuffer_manager->IsEFBFoveated()))
+      {
+        VrUi::PostToast("Turn Foveated Rendering Off to Switch", 5000);
+        return;
+      }
+      if (!to_immersive)
+        g_openxr->RequestFlatScreenReanchor();
+      Config::SetCurrent(Config::GFX_VR_PRESENTATION_MODE, mode);
+      VrUi::PostToast(to_immersive ? "Immersive" : "Stereoscopic 3D", 2000);
     }
-    if (!to_immersive)
-      g_openxr->RequestFlatScreenReanchor();
-    Config::SetCurrent(Config::GFX_VR_PRESENTATION_MODE,
-                       to_immersive ? OpenXRPresentationMode::Immersive :
-                                      OpenXRPresentationMode::StereoScreen);
-    VrUi::PostToast(to_immersive ? "Immersive" : "Stereoscopic 3D", 2000);
+    if (keep)
+      WriteSetting(SettingId::Display, static_cast<float>(mode), *keep, true);
   });
 }
 }  // namespace
@@ -424,7 +432,7 @@ void VrUi::OnFocusLost()
     SaveScreenPlacement();
   }
   m_grip_down = {};
-  m_drag.reset();
+  EndDrag();
   m_press_down = false;
   m_press_item = MenuItem::None;
   m_menu_armed = false;
@@ -545,8 +553,9 @@ void VrUi::SaveScreenPlacement()
 {
   const ScreenPlacement placement = m_manager->GetScreenPlacement();
   QueueConfig([placement] {
-    Config::SetBaseOrCurrent(Config::GFX_VR_SCREEN_DISTANCE, placement.distance);
-    Config::SetBaseOrCurrent(Config::GFX_VR_SCREEN_SIZE, placement.height);
+    using namespace GameSettingScope;
+    SetWhereItIs(Config::GFX_VR_SCREEN_DISTANCE, placement.distance, Store::VRFile);
+    SetWhereItIs(Config::GFX_VR_SCREEN_SIZE, placement.height, Store::VRFile);
     Config::SetBaseOrCurrent(Config::GFX_VR_SCREEN_YAW, placement.yaw_deg);
     Config::SetBaseOrCurrent(Config::GFX_VR_SCREEN_PITCH, placement.pitch_deg);
   });
@@ -657,12 +666,13 @@ void VrUi::OpenMenu(const Frame& frame)
   m_menu_armed = false;
   m_press_down = false;
   m_press_item = MenuItem::None;
-  m_drag.reset();
+  EndDrag();
   m_menu.tab = MenuTab::Main;
   m_menu.page = MenuPage::Main;
   m_menu.autosave_list = false;
-  m_menu.open_setting = SettingId::None;
+  ClosePopup();
   m_menu.section = MenuSection::General;
+  m_menu.settings.scope = DEFAULT_SCOPE;
   m_menu.scroll.fill(0.0f);
   m_menu.hover = MenuItem::None;
   m_menu.show_tooltip = false;
@@ -700,7 +710,7 @@ void VrUi::CloseMenu()
   if (!m_menu_open)
     return;
   m_menu_open = false;
-  m_drag.reset();
+  EndDrag();
   m_press_item = MenuItem::None;
   UpdatePause();
 }
@@ -741,6 +751,8 @@ void VrUi::RefreshMenuState()
   const OpenXRPresentationMode mode = Config::Get(Config::GFX_VR_PRESENTATION_MODE);
   SettingState& settings = m_menu.settings;
   settings.has_game = !game_id.empty() && game_id != DEFAULT_GAME_ID;
+  if (!settings.has_game)
+    settings.scope = SettingScope::Global;
   settings.immersive = !m_frame.has_screen;
   settings.can_switch_mode =
       mode == OpenXRPresentationMode::Immersive || mode == OpenXRPresentationMode::StereoScreen;
@@ -750,23 +762,65 @@ void VrUi::RefreshMenuState()
 
 void VrUi::SetLiveSettings()
 {
-  const ScreenPlacement placement = m_manager->GetScreenPlacement();
-  SettingNumbers& game = m_menu.settings.values.game;
-  const auto set = [&game](SettingId id, float value) {
-    game[static_cast<std::size_t>(id)] = value;
+  // Global, while the game has its own, is not what is shown.
+  SettingValues& values = m_menu.settings.values;
+  const auto set = [&values](SettingId id, float value) {
+    const auto i = static_cast<std::size_t>(id);
+    values.game[i] = value;
+    if (!values.game_value[i])
+      values.global[i] = value;
   };
+  const ScreenPlacement placement = m_manager->GetScreenPlacement();
   set(SettingId::Distance, placement.distance);
   set(SettingId::Size, placement.height);
-  set(SettingId::Display,
+  values.game[static_cast<std::size_t>(SettingId::Display)] =
       static_cast<float>(m_frame.has_screen ? OpenXRPresentationMode::StereoScreen :
-                                              OpenXRPresentationMode::Immersive));
+                                              OpenXRPresentationMode::Immersive);
 }
 
-void VrUi::ChangeSetting(SettingId id, float value)
+void VrUi::ChangeSetting(SettingId id, float value, bool save)
 {
   m_menu.settings.Set(id, value);
-  QueueConfig([id, value] { WriteSetting(id, value); });
+  QueueConfig([id, value, save, scope = m_menu.settings.scope] {
+    WriteSetting(id, value, scope, save);
+  });
   QueueReadSettings(++m_settings_serial);
+}
+
+void VrUi::EndDrag()
+{
+  if (const auto slider = std::exchange(m_drag, std::nullopt); slider && m_drag_changed)
+  {
+    const auto id = static_cast<SettingId>(slider->index);
+    ChangeSetting(id, m_menu.settings.Get(id));
+  }
+}
+
+void VrUi::UseGlobalValues()
+{
+  const MenuSection section =
+      m_menu.tab == MenuTab::Screen ? MenuSection::Screen : m_menu.section;
+  QueueConfig([section] { UI::UseGlobalValues(section); });
+  if (section == MenuSection::Screen)
+  {
+    Core::QueueHostJob([](Core::System&) {
+      const OpenXRPresentationMode mode = Config::GetBase(Config::GFX_VR_PRESENTATION_MODE);
+      if (mode == OpenXRPresentationMode::Immersive || mode == OpenXRPresentationMode::StereoScreen)
+        QueueSwitchMode(mode == OpenXRPresentationMode::Immersive);
+    });
+  }
+  QueueReadSettings(++m_settings_serial);
+}
+
+bool VrUi::HasPopup() const
+{
+  return m_menu.open_setting != SettingId::None || m_menu.open_scope;
+}
+
+void VrUi::ClosePopup()
+{
+  m_menu.open_setting = SettingId::None;
+  m_menu.open_scope = false;
 }
 
 void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float dt)
@@ -826,9 +880,9 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
   else if (back_pressed)
   {
     // Menu closes it; B goes back first.
-    if (controllers[1].secondary_button && m_menu.open_setting != SettingId::None)
+    if (controllers[1].secondary_button && HasPopup())
     {
-      m_menu.open_setting = SettingId::None;
+      ClosePopup();
     }
     else if (controllers[1].secondary_button && m_menu.autosave_list)
     {
@@ -873,8 +927,7 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
 
   m_widgets = VrMenu::Layout(m_menu);
   const std::optional<MenuList> list = VrMenu::GetList(m_menu);
-  const bool can_scroll =
-      list && list->bar.Valid() && m_menu.open_setting == SettingId::None;
+  const bool can_scroll = list && list->bar.Valid() && !HasPopup();
   const bool scrolling = m_bar_press.Active() || m_list_drag.Dragging();
   const MenuWidget* const hovered =
       hit.in_bounds && !m_drag && !scrolling ? VrMenu::At(m_widgets, x, y, true) : nullptr;
@@ -890,8 +943,8 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
     hover = MenuItem::Scrollbar;
   }
   // With a menu open, what is beside it only closes it.
-  const bool beside = m_menu.open_setting != SettingId::None && hover != MenuItem::Popup &&
-                      hover != MenuItem::PopupOption;
+  const bool beside =
+      HasPopup() && hover != MenuItem::Popup && hover != MenuItem::PopupOption;
   const bool usable = hovered && !hovered->disabled && !beside;
   const int option = usable ? VrMenu::OptionAt(*hovered, x) : -1;
   if (hover != m_menu.hover || index != m_menu.hover_index)
@@ -930,6 +983,7 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
              x >= hovered->control.x0 - 12.0f && x < hovered->control.x1)
     {
       m_drag = *hovered;
+      m_drag_changed = false;
     }
     else if (scroll && hit.in_bounds && list->bar.list.Contains(x, y))
     {
@@ -957,22 +1011,16 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
     }
     else if (m_drag)
     {
-      const MenuWidget slider = *std::exchange(m_drag, std::nullopt);
-      if (slider.index == static_cast<int>(SettingId::Distance) ||
-          slider.index == static_cast<int>(SettingId::Size))
-      {
-        SaveScreenPlacement();
-      }
+      EndDrag();
     }
     else if (dragged)
     {
       // It coasts on.
     }
-    else if (m_menu.open_setting != SettingId::None && item != MenuItem::PopupOption &&
-             item != MenuItem::Popup)
+    else if (HasPopup() && item != MenuItem::PopupOption && item != MenuItem::Popup)
     {
       // Beside the menu: it closes.
-      m_menu.open_setting = SettingId::None;
+      ClosePopup();
     }
     else if (m_menu.autosave_list && item != MenuItem::AutosaveEntry &&
              item != MenuItem::AutosaveList)
@@ -1014,6 +1062,7 @@ void VrUi::SetSlider(const MenuWidget& widget, float t)
   const float value = SliderValue(GetSettingRow(id), t);
   if (value == m_menu.settings.Get(id))
     return;
+  m_drag_changed = true;
   if (id == SettingId::Distance || id == SettingId::Size)
   {
     ScreenPlacement placement = m_manager->GetScreenPlacement();
@@ -1022,7 +1071,7 @@ void VrUi::SetSlider(const MenuWidget& widget, float t)
     SetLiveSettings();
     return;
   }
-  ChangeSetting(id, value);
+  ChangeSetting(id, value, false);
 }
 
 void VrUi::ActivateSetting(const MenuWidget& widget, int option)
@@ -1054,9 +1103,15 @@ void VrUi::ChooseOption(const SettingRow& row, int option)
     return;
   const float value = options[static_cast<std::size_t>(option)].value;
   if (row.id == SettingId::Display)
-    QueueSwitchMode(value == static_cast<float>(OpenXRPresentationMode::Immersive));
+  {
+    QueueSwitchMode(value == static_cast<float>(OpenXRPresentationMode::Immersive),
+                    m_menu.settings.scope);
+    QueueReadSettings(++m_settings_serial);
+  }
   else
+  {
     ChangeSetting(row.id, value);
+  }
 }
 
 void VrUi::ChangeMod(const MenuWidget& widget)
@@ -1239,8 +1294,17 @@ void VrUi::Activate(const MenuWidget& widget, int option)
   case MenuItem::Setting:
     ActivateSetting(widget, option);
     break;
+  case MenuItem::Scope:
+    if (option >= 0)
+      m_menu.settings.scope = static_cast<SettingScope>(option);
+    break;
+  case MenuItem::ScopeMore:
+    m_menu.open_scope = true;
+    break;
   case MenuItem::PopupOption:
-    if (const SettingId id = std::exchange(m_menu.open_setting, SettingId::None);
+    if (std::exchange(m_menu.open_scope, false))
+      UseGlobalValues();
+    else if (const SettingId id = std::exchange(m_menu.open_setting, SettingId::None);
         id != SettingId::None)
     {
       ChooseOption(GetSettingRow(id), widget.index);

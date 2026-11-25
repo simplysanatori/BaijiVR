@@ -35,6 +35,11 @@ constexpr float LEFT = RAIL_W + 24.0f;
 constexpr float RIGHT = VrMenu::WIDTH - MARGIN - 24.0f;
 constexpr float TOP = PANE.y0 + 16.0f;
 constexpr float SECTIONS_W = 384.0f;
+constexpr float SCOPE_W = 252.0f;
+constexpr float MORE_W = 32.0f;
+// The dots are over the list's bar.
+constexpr float MORE_X0 = RIGHT - 26.0f;
+constexpr float SCOPE_MENU_W = 300.0f;
 
 class Builder
 {
@@ -443,13 +448,49 @@ void AddList(Builder* builder, const MenuState& state, MenuSection section)
           FindOption(options, state.settings.Get(row.id)));
 }
 
+// Global or Per-Game, and the menu of the dots (Azahar for Frame's), over a section's list.
+void AddScope(Builder* builder, const MenuState& state, MenuSection section)
+{
+  const SettingState& settings = state.settings;
+  const int own = CountOwnValues(section, settings);
+  MenuWidget& scope = builder->Add(Kind::Segmented, MenuItem::Scope);
+  scope.rect = {MORE_X0 - 2.0f - SCOPE_W, TOP, MORE_X0 - 2.0f, TOP + CONTROL_H};
+  scope.control = scope.rect;
+  scope.options = {"Global", "Per-Game"};
+  scope.selected = static_cast<int>(settings.scope);
+  scope.disabled = !settings.has_game;
+  scope.tooltip =
+      settings.has_game ? DescribeOwnValues(own) : "Per-Game values need a running game.";
+
+  MenuWidget& more = builder->Add(Kind::More, MenuItem::ScopeMore);
+  more.rect = {MORE_X0, TOP, MORE_X0 + MORE_W, TOP + CONTROL_H};
+  more.active = state.open_scope;
+  more.disabled = !settings.has_game || own == 0;
+  if (more.disabled)
+  {
+    more.tooltip = settings.has_game ? "Nothing on this tab is set for this game." :
+                                       "Per-Game values need a running game.";
+  }
+}
+
+void AddScopeMenu(Builder* builder, const MenuState& state)
+{
+  if (state.open_scope)
+  {
+    AddMenu(builder, {MORE_X0, TOP, MORE_X0 + MORE_W, TOP + CONTROL_H}, SCOPE_MENU_W,
+            {"Use Global Values for All"}, -1);
+  }
+}
+
 void AddScreen(Builder* builder, const MenuState& state)
 {
   MenuWidget& reset = builder->Add(Kind::Button, MenuItem::ResetScreen);
   reset.rect = {LEFT, TOP, LEFT + 200.0f, TOP + CONTROL_H};
   reset.icon = Icon::kRecenter;
   reset.label = state.settings.immersive ? "Reset View" : "Reset Screen";
+  AddScope(builder, state, MenuSection::Screen);
   AddList(builder, state, MenuSection::Screen);
+  AddScopeMenu(builder, state);
 }
 
 void AddControls(Builder* builder, const MenuState& state)
@@ -605,7 +646,9 @@ void AddSettings(Builder* builder, const MenuState& state)
   section.control = section.rect;
   section.options = {"General", "Graphics", "Immersive"};
   section.selected = static_cast<int>(state.section) - static_cast<int>(MenuSection::General);
+  AddScope(builder, state, state.section);
   AddList(builder, state, state.section);
+  AddScopeMenu(builder, state);
 }
 }  // namespace
 
@@ -904,6 +947,15 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
       break;
     case Kind::Option:
       break;
+    case Kind::More:
+    {
+      kit->StateLayer({w.rect.Cx() - 16.0f, w.rect.Cy() - 16.0f, w.rect.Cx() + 16.0f,
+                       w.rect.Cy() + 16.0f},
+                      16.0f, Tok::kOnSurfaceVariant, look);
+      for (const float dy : {-6.0f, 0.0f, 6.0f})
+        kit->Dot(w.rect.Cx(), w.rect.Cy() + dy, 2.0f, Tok::kOnSurfaceVariant, opacity);
+      break;
+    }
     case Kind::Scrollbar:
       if (const std::optional<MenuList> list = GetList(state))
       {

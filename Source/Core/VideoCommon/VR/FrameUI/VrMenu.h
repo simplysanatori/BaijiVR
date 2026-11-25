@@ -68,6 +68,8 @@ enum class MenuItem
   // A row's setting: the index is its SettingId.
   Setting,
   Section,
+  Scope,
+  ScopeMore,
   Scrollbar,
   Popup,
   PopupOption,
@@ -132,6 +134,7 @@ struct MenuState
   std::array<float, NUM_SECTIONS> scroll{};
   // The row with its drop-down menu open.
   SettingId open_setting = SettingId::None;
+  bool open_scope = false;  // the menu of the dots
 
   MenuItem hover = MenuItem::None;
   MenuItem pressed = MenuItem::None;
@@ -168,6 +171,7 @@ struct MenuWidget
     Menu,    // an open drop-down menu
     Option,  // of it; drawn with it
     Scrollbar,
+    More,  // three dots
   };
 
   Kind kind = Kind::Text;

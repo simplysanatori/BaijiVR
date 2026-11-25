@@ -117,7 +117,12 @@ private:
   void RefreshMenuState();
   // What the game shows now, whatever the config has.
   void SetLiveSettings();
-  void ChangeSetting(SettingId id, float value);
+  void ChangeSetting(SettingId id, float value, bool save = true);
+  // The slider is let go: what it is at is kept.
+  void EndDrag();
+  bool HasPopup() const;
+  void ClosePopup();
+  void UseGlobalValues();
   void ActivateSetting(const MenuWidget& widget, int option);
   void ChooseOption(const SettingRow& row, int option);
   void StopScrolling();
@@ -183,6 +188,7 @@ private:
   MenuItem m_press_item = MenuItem::None;
   int m_press_index = 0;
   std::optional<MenuWidget> m_drag;
+  bool m_drag_changed = false;
   s64 m_rest_since_ns = 0;
   // Counts the menu's changes of settings.
   u32 m_settings_serial = 0;

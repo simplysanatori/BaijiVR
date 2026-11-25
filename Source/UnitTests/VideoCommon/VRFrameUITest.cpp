@@ -9,13 +9,20 @@
 
 #include <gtest/gtest.h>
 
+#include "Common/Config/Config.h"
+#include "Common/FileUtil.h"
 #include "Core/Autosave.h"
+#include "Core/Config/GraphicsSettings.h"
+#include "Core/ConfigLoaders/BaseConfigLoader.h"
+#include "Core/ConfigManager.h"
+#include "Core/GameSettingScope.h"
 #include "InputCommon/ControllerInterface/OpenXR/FrameControllerNames.h"
 #include "VideoCommon/VR/FrameUI/MenuSettings.h"
 #include "VideoCommon/VR/FrameUI/PadBindings.h"
 #include "VideoCommon/VR/FrameUI/PadFilter.h"
 #include "VideoCommon/VR/FrameUI/ScreenPlacement.h"
 #include "VideoCommon/VR/FrameUI/VrMenu.h"
+#include "UICommon/UICommon.h"
 
 using namespace VR::UI;
 
@@ -730,4 +737,244 @@ TEST(VRFrameUI, AutosaveRules)
   EXPECT_EQ(Ago(1000, 8300, 1, 1, "x"), "2 Hours Ago");
   EXPECT_EQ(Ago(1000, 90000, 1, 2, "x"), "Yesterday");
   EXPECT_EQ(Ago(1000, 900000, 1, 11, "x"), "x");
+}
+
+TEST(VRFrameUI, ScopeControls)
+{
+  MenuState s;
+  s.tab = MenuTab::Screen;
+  const auto find = [&s](MenuItem item) {
+    const auto widgets = VrMenu::Layout(s);
+    return *std::ranges::find(widgets, item, &MenuWidget::item);
+  };
+  EXPECT_TRUE(find(MenuItem::Scope).disabled);
+  EXPECT_EQ(find(MenuItem::ScopeMore).tooltip, "Per-Game values need a running game.");
+
+  s.settings.has_game = true;
+  EXPECT_EQ(find(MenuItem::Scope).selected, 1);
+  EXPECT_EQ(find(MenuItem::Scope).tooltip, "No Per-Game Values Set");
+  EXPECT_EQ(find(MenuItem::ScopeMore).tooltip, "Nothing on this tab is set for this game.");
+  s.settings.values.own_value.set(static_cast<std::size_t>(SettingId::Size));
+  s.settings.values.game_value.set(static_cast<std::size_t>(SettingId::Size));
+  EXPECT_EQ(find(MenuItem::Scope).tooltip, "1 Per-Game Value Set");
+  EXPECT_FALSE(find(MenuItem::ScopeMore).disabled);
+  // Another tab has none.
+  s.tab = MenuTab::Settings;
+  EXPECT_TRUE(find(MenuItem::ScopeMore).disabled);
+
+  s.tab = MenuTab::Screen;
+  EXPECT_EQ(GetLock(GetSettingRow(SettingId::Size), s.settings), Lock::None);
+  s.settings.scope = SettingScope::Global;
+  EXPECT_EQ(GetLock(GetSettingRow(SettingId::Size), s.settings), Lock::GameValue);
+  EXPECT_EQ(GetLock(GetSettingRow(SettingId::Distance), s.settings), Lock::None);
+
+  s.settings.values.global[static_cast<std::size_t>(SettingId::Size)] = 1.5f;
+  s.settings.values.game[static_cast<std::size_t>(SettingId::Size)] = 2.5f;
+  EXPECT_EQ(s.settings.Get(SettingId::Size), 1.5f);
+  s.settings.scope = SettingScope::PerGame;
+  EXPECT_EQ(s.settings.Get(SettingId::Size), 2.5f);
+
+  s.open_scope = true;
+  const MenuWidget option = find(MenuItem::PopupOption);
+  EXPECT_LE(option.rect.x1, VrMenu::WIDTH - 16.0f);
+}
+
+TEST(VRFrameUI, EditVRSettingsKeepsTheRest)
+{
+  using GameSettingScope::EditVRSettings;
+  EXPECT_EQ(EditVRSettings("", "Gamma", "1.2"), "[Graphics.VR]\nGamma = 1.2\n");
+  EXPECT_EQ(EditVRSettings("[Graphics.VR]\nGamma = 1.2\n", "Gamma", std::nullopt), "");
+  const std::string file = "# Mine\n[Graphics.VR]\nUnitsPerMeter = 10\ngamma = 2\n\n"
+                           "[Hidden]\n$One\n";
+  EXPECT_EQ(EditVRSettings(file, "Gamma", "1.5"), "# Mine\n[Graphics.VR]\nUnitsPerMeter = 10\n"
+                                                  "Gamma = 1.5\n\n[Hidden]\n$One\n");
+  EXPECT_EQ(EditVRSettings(file, "Gamma", std::nullopt),
+            "# Mine\n[Graphics.VR]\nUnitsPerMeter = 10\n\n[Hidden]\n$One\n");
+  EXPECT_EQ(EditVRSettings("[GFX.VR]\nARMode = True\n", "Passthrough", "False"),
+            "[GFX.VR]\nPassthrough = False\n");
+  EXPECT_EQ(EditVRSettings("[Hidden]\n$One\n", "Gamma", "1.5"),
+            "[Hidden]\n$One\n\n[Graphics.VR]\nGamma = 1.5\n");
+}
+
+namespace
+{
+constexpr auto GLOBAL = SettingScope::Global;
+constexpr auto PER_GAME = SettingScope::PerGame;
+
+// A running game, with settings of its own.
+class VRFrameUISettings : public testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    m_folder = File::CreateTempDir();
+    UICommon::SetUserDirectory(m_folder);
+    UICommon::CreateDirectories();
+    Config::Init();
+    Config::AddLayer(ConfigLoaders::GenerateBaseConfigLoader());
+    SConfig::Init();
+    SConfig::GetInstance().SetRunningGameMetadata("GTST01");
+  }
+  void TearDown() override
+  {
+    EndGame();
+    SConfig::Shutdown();
+    Config::Shutdown();
+    File::DeleteDirRecursively(m_folder);
+  }
+
+  static std::string Read(const std::string& path)
+  {
+    std::string text;
+    File::ReadFileToString(path, text);
+    return text;
+  }
+  // As BootManager.
+  static void EndGame()
+  {
+    Config::ClearCurrentRunLayer();
+    Config::RemoveLayer(Config::LayerType::GlobalGame);
+    Config::RemoveLayer(Config::LayerType::LocalGame);
+    SConfig::GetInstance().ResetRunningGameMetadata();
+  }
+  static std::string VRFile()
+  {
+    return File::GetUserPath(D_GAMESETTINGSVR_IDX) + "GTST01.ini";
+  }
+  static std::string GameFile() { return File::GetUserPath(D_GAMESETTINGS_IDX) + "GTST01.ini"; }
+  static bool Has(const std::bitset<NUM_SETTINGS>& bits, SettingId id)
+  {
+    return bits[static_cast<std::size_t>(id)];
+  }
+
+  std::string m_folder;
+};
+}  // namespace
+
+TEST_F(VRFrameUISettings, EverySettingCanBeReadAndWritten)
+{
+  for (const SettingRow& row : GetSettingRows())
+  {
+    if (row.id == SettingId::None)
+      continue;
+    const auto i = static_cast<std::size_t>(row.id);
+    for (const SettingScope scope : {GLOBAL, PER_GAME})
+    {
+      const SettingValues before = ReadSettings();
+      float value = before.game[i] != 0.0f ? 0.0f : 1.0f;
+      if (row.kind == RowKind::Slider)
+        value = SliderValue(row, 0.25f) != before.game[i] ? SliderValue(row, 0.25f) :
+                                                            SliderValue(row, 0.75f);
+      else if (!row.options.empty())
+        value = row.options[0].value != before.game[i] ? row.options[0].value :
+                                                         row.options[1].value;
+      WriteSetting(row.id, value, scope, true);
+      const SettingValues after = ReadSettings();
+      EXPECT_NEAR(after.game[i], value, 1e-3f) << row.label;
+      const bool own = scope == PER_GAME && row.store != SettingStore::Global;
+      EXPECT_EQ(Has(after.own_value, row.id), own) << row.label;
+      if (own)
+      {
+        EXPECT_EQ(after.global[i], before.global[i]) << row.label;
+      }
+      else
+      {
+        EXPECT_NEAR(after.global[i], value, 1e-3f) << row.label;
+      }
+    }
+  }
+  SettingState state;
+  state.values = ReadSettings();
+  for (const MenuSection section : {MenuSection::Screen, MenuSection::General,
+                                    MenuSection::Graphics, MenuSection::Immersive})
+  {
+    EXPECT_GT(CountOwnValues(section, state), 0);
+    UseGlobalValues(section);
+    state.values = ReadSettings();
+    EXPECT_EQ(CountOwnValues(section, state), 0);
+  }
+  EXPECT_FALSE(File::Exists(VRFile()));
+}
+
+TEST_F(VRFrameUISettings, PerGameInTheVRFile)
+{
+  constexpr auto ID = SettingId::ScreenDepth;
+  constexpr auto AT = static_cast<std::size_t>(ID);
+  const float base = Config::GetBase(Config::GFX_VR_SCREEN_DEPTH);
+  // A slider that is being moved.
+  WriteSetting(ID, 40.0f, PER_GAME, false);
+  EXPECT_EQ(Config::Get(Config::GFX_VR_SCREEN_DEPTH), 40.0f);
+  EXPECT_FALSE(File::Exists(VRFile()));
+  WriteSetting(ID, 45.0f, PER_GAME, true);
+  EXPECT_NE(Read(VRFile()).find("ScreenDepth = 45"), std::string::npos);
+  EXPECT_EQ(Config::GetBase(Config::GFX_VR_SCREEN_DEPTH), base);
+  SettingValues values = ReadSettings();
+  EXPECT_EQ(values.game[AT], 45.0f);
+  EXPECT_EQ(values.global[AT], base);
+  EXPECT_TRUE(Has(values.own_value, ID));
+  EXPECT_TRUE(Has(values.game_value, ID));
+
+  // The game starts again.
+  EndGame();
+  EXPECT_EQ(Config::Get(Config::GFX_VR_SCREEN_DEPTH), base);
+  SConfig::GetInstance().SetRunningGameMetadata("GTST01");
+  EXPECT_EQ(Config::Get(Config::GFX_VR_SCREEN_DEPTH), 45.0f);
+  EXPECT_TRUE(Has(ReadSettings().own_value, ID));
+
+  WriteSetting(ID, 70.0f, GLOBAL, true);
+  EXPECT_EQ(Config::Get(Config::GFX_VR_SCREEN_DEPTH), 45.0f);
+  UseGlobalValues(MenuSection::Graphics);
+  EXPECT_EQ(Config::Get(Config::GFX_VR_SCREEN_DEPTH), 70.0f);
+  EXPECT_FALSE(File::Exists(VRFile()));
+  values = ReadSettings();
+  EXPECT_FALSE(Has(values.own_value, ID));
+  EXPECT_FALSE(Has(values.game_value, ID));
+}
+
+TEST_F(VRFrameUISettings, ValuesForSeveralGamesStay)
+{
+  // "GTS.ini" is for every region.
+  const std::string path = File::GetUserPath(D_GAMESETTINGSVR_IDX) + "GTS.ini";
+  File::CreateFullPath(path);
+  File::WriteStringToFile(path, "[Graphics.VR]\nScreenDepth = 30\n");
+  SConfig::GetInstance().ReloadGameVRConfigOverrides();
+  SettingValues values = ReadSettings();
+  EXPECT_TRUE(Has(values.game_value, SettingId::ScreenDepth));
+  EXPECT_FALSE(Has(values.own_value, SettingId::ScreenDepth));
+  WriteSetting(SettingId::ScreenDepth, 60.0f, PER_GAME, true);
+  EXPECT_EQ(Config::Get(Config::GFX_VR_SCREEN_DEPTH), 60.0f);
+  UseGlobalValues(MenuSection::Graphics);
+  EXPECT_EQ(Config::Get(Config::GFX_VR_SCREEN_DEPTH), 30.0f);
+  EXPECT_TRUE(Has(ReadSettings().game_value, SettingId::ScreenDepth));
+  EXPECT_NE(Read(path).find("ScreenDepth = 30"), std::string::npos);
+}
+
+TEST_F(VRFrameUISettings, PerGameInTheGameFile)
+{
+  const int base = Config::GetBase(Config::GFX_EFB_SCALE);
+  WriteSetting(SettingId::InternalResolution, 3.0f, PER_GAME, true);
+  EXPECT_EQ(Config::Get(Config::GFX_EFB_SCALE), 3);
+  EXPECT_EQ(Config::GetBase(Config::GFX_EFB_SCALE), base);
+  EXPECT_NE(Read(GameFile()).find("InternalResolution = 3"), std::string::npos);
+  EXPECT_TRUE(Has(ReadSettings().own_value, SettingId::InternalResolution));
+  // A hot key changes it until the game ends; the menu's value is from now on.
+  Config::SetCurrent(Config::GFX_EFB_SCALE, 1);
+  WriteSetting(SettingId::InternalResolution, 4.0f, PER_GAME, true);
+  EXPECT_EQ(Config::Get(Config::GFX_EFB_SCALE), 4);
+  UseGlobalValues(MenuSection::Graphics);
+  EXPECT_EQ(Config::Get(Config::GFX_EFB_SCALE), base);
+  EXPECT_EQ(Read(GameFile()).find("InternalResolution"), std::string::npos);
+}
+
+TEST_F(VRFrameUISettings, WhereItIs)
+{
+  using namespace GameSettingScope;
+  SetWhereItIs(Config::GFX_VR_SCREEN_SIZE, 2.0f, Store::VRFile);
+  EXPECT_EQ(Config::GetBase(Config::GFX_VR_SCREEN_SIZE), 2.0f);
+  EXPECT_FALSE(File::Exists(VRFile()));
+  SetForGame(Config::GFX_VR_SCREEN_SIZE, 3.0f, Store::VRFile);
+  SetWhereItIs(Config::GFX_VR_SCREEN_SIZE, 3.5f, Store::VRFile);
+  EXPECT_EQ(Config::GetBase(Config::GFX_VR_SCREEN_SIZE), 2.0f);
+  EXPECT_EQ(Config::Get(Config::GFX_VR_SCREEN_SIZE), 3.5f);
+  EXPECT_NE(Read(VRFile()).find("ScreenSize = 3.5"), std::string::npos);
 }

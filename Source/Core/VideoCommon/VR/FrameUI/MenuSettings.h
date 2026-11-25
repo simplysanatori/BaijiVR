@@ -11,6 +11,8 @@
 
 #include "Common/CommonTypes.h"
 
+#include "Core/GameSettingScope.h"
+
 // The settings in the VR menu as data: what rows there are, where they are, what they say and the
 // config behind them. What a setting is called here is what it is called on the settings page
 // (VRPane). No OpenXR here (unit tested).
@@ -105,13 +107,7 @@ enum class SettingScope
   PerGame,
 };
 
-// Where a setting's values are kept.
-enum class SettingStore
-{
-  Global,     // one for every game
-  VRFile,     // a game's own is in its GameSettingsVR file
-  LocalGame,  // a game's own is in its GameSettings file
-};
+using SettingStore = GameSettingScope::Store;
 
 enum class Applies
 {
@@ -194,6 +190,7 @@ struct SettingState
 enum class Lock
 {
   None,
+  GameValue,
   ScreenOnly,
   ImmersiveOnly,
   DisplayFixed,
@@ -203,6 +200,10 @@ enum class Lock
 
 const std::vector<SettingRow>& GetSettingRows();
 const SettingRow& GetSettingRow(SettingId id);
+
+// How many settings of a section the player gave a value for the running game only.
+int CountOwnValues(MenuSection section, const SettingState& state);
+std::string DescribeOwnValues(int count);
 
 Lock GetLock(const SettingRow& row, const SettingState& state);
 std::string ExplainLock(Lock lock, const SettingRow& row);
@@ -219,5 +220,8 @@ std::string FormatValue(const SettingRow& row, float value);
 
 // The config. Host thread.
 SettingValues ReadSettings();
-void WriteSetting(SettingId id, float value);
+// Without `save` (a slider that is being moved), a game's value is for now only.
+void WriteSetting(SettingId id, float value, SettingScope scope, bool save);
+// The player's values for this game go.
+void UseGlobalValues(MenuSection section);
 }  // namespace VR::UI
