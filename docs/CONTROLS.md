@@ -96,7 +96,7 @@ With the Wii Remote on its side, rolling the right controller tilts it, as turni
 | A stick's chip | **Push the Stick Up…**, then **Push the Stick Right…**. |
 | **Cancel** | Stops listening. |
 | **Reset to Default** | The Steam Frame layout of this controller. |
-| **Profile**, at the bottom right | The saved profile this game uses, or **Every Game**. They are the profiles of the mapping window. |
+| The list at the bottom right | The saved profile this game uses, or **Every Game**. They are the profiles of the mapping window. |
 
 **Global** and **Per-Game** at the top of the **Controls** tab:
 
