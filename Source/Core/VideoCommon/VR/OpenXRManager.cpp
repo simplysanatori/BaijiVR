@@ -3625,6 +3625,7 @@ void OpenXRManager::PlaceScreenLayer(const FrameXr::Input::PanelQuad& screen,
   layer->size = {screen.width_m, screen.height_m};
 }
 
+// After Azahar for Frame's MakeCylinder (frame_xr/app.cpp, GPLv3 or later).
 XrCompositionLayerCylinderKHR MakeCylinderLayer(const XrCompositionLayerQuad& quad, float radius)
 {
   const auto& [orientation, position] = quad.pose;
