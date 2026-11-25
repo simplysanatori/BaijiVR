@@ -41,7 +41,7 @@ A completely redesigned VR menu (following Material Design). Supports global and
 - **Stats**: frame rate, game speed, internal resolution, Dynamic Resolution, late frames and GPU time
 - **Controls**: custom controls for each controller, and the profiles to switch between
 - **Mods**: mods, cheats and texture packs from public repositories, many downloadable in the app
-- **Settings**
+- **Settings**, with **Report a Problem** and a support link
 
 <img src="docs/images/menu-position.png" width="49%" alt="Position"> <img src="docs/images/menu-stats.png" width="49%" alt="Stats">
 
@@ -148,10 +148,11 @@ More: [docs/USER_GUIDE.md](docs/USER_GUIDE.md#troubleshooting).
 
 ## Reporting a problem
 
-1. Choose **Help** > **Report a Problem** > **Save Report** in the window, or **Settings** > **General** > **Report a Problem** in the VR menu. A zip is saved in Downloads.
-2. Attach the zip to an [issue](https://github.com/simplysanatori/BaijiVR/issues).
+- **Send Report**: choose **Help** > **Report a Problem** in the window, write what happened and press **Send Report**.
+- **Save Report**: in the window, or **Settings** > **General** > **Report a Problem** in the VR menu. A zip is saved in Downloads. Attach it to an [issue](https://github.com/simplysanatori/BaijiVR/issues).
+- After a crash, the next start offers a report.
 
-**See What's Sent** shows all of it. Nothing is sent unless you press **Send Report**.
+**See What's Sent** shows everything in a report. Nothing is sent unless you press **Send Report**.
 
 For a more detailed log, run `touch ~/.config/baiji/debug-logging` in Konsole on the Frame and play until the problem happens. Don't report this fork's problems to Dolphin or Baiji.
 
