@@ -16,6 +16,7 @@
 #include "VideoCommon/VR/FrameUI/PadArt.h"
 #include "VideoCommon/VR/FrameUI/PadEdit.h"
 #include "VideoCommon/VR/FrameUI/Stats.h"
+#include "VideoCommon/VR/FrameUI/games_snapshot.h"
 #include "VideoCommon/VR/FrameUI/list_scroll.h"
 #include "VideoCommon/VR/FrameUI/md3.h"
 
@@ -27,6 +28,7 @@ namespace VR::UI
 enum class MenuTab
 {
   Main,
+  Games,
   Position,
   Stats,
   Controls,
@@ -38,6 +40,7 @@ enum class MenuItem
 {
   None,
   TabMain,
+  TabGames,
   TabPosition,
   TabStats,
   TabControls,
@@ -84,6 +87,10 @@ enum class MenuItem
   Section,
   Scope,
   ScopeMore,
+  GameTile,     // the index is in the list
+  GameOptions,  // its three dots
+  GamesChip,    // the index is a SystemFilter
+  GamesSort,
   Scrollbar,
   Popup,
   PopupOption,
@@ -122,6 +129,49 @@ struct MenuSaves
   bool operator==(const MenuSaves&) const = default;
 };
 
+// The Games tab.
+struct MenuGames
+{
+  enum class Popup
+  {
+    None,
+    Sort,
+    Options,
+    Question,
+  };
+  // Of a tile's menu.
+  enum Option
+  {
+    Play,
+    Favourite,
+  };
+  // Of the question.
+  enum Answer
+  {
+    Cancel,
+    Start,
+  };
+
+  FrameXr::Menu::GamesList list;
+  bool has_window = true;  // where the list is
+  std::string running;     // its path in the list
+  FrameXr::Menu::SystemFilter chip = FrameXr::Menu::SystemFilter::All;
+  FrameXr::Menu::GamesSort sort = FrameXr::Menu::GamesSort::RecentlyPlayed;
+  std::vector<int> shown;  // of the list, in this order
+  float scroll = 0.0f;
+  Popup popup = Popup::None;
+  std::string game;  // whose menu or question it is: its path
+  bool loses_progress = false;
+  float title_scroll = 0.0f;  // of the title pointed at (dp)
+
+  const FrameXr::Menu::GameEntry* Find(int index) const;
+  const FrameXr::Menu::GameEntry* FindGame(const std::string& path) const;
+  // After the list, the chip or the order changed.
+  void UpdateShown();
+
+  bool operator==(const MenuGames&) const = default;
+};
+
 struct MenuState
 {
   MenuTab tab = MenuTab::Main;
@@ -155,6 +205,8 @@ struct MenuState
   std::string title;
   bool wii = false;
   bool fast_forward = false;
+
+  MenuGames games;
 
   SettingState settings;
   MenuSection section = MenuSection::General;  // of the Settings tab
@@ -208,6 +260,12 @@ struct MenuWidget
     Guide,   // what to do, in two lines
     StatsTitle,
     Stat,
+    GameTile,
+    GameOptions,  // drawn with its tile
+    GamesChip,
+    GamesCount,
+    RoundButton,
+    Question,
   };
 
   Kind kind = Kind::Text;
@@ -250,7 +308,11 @@ struct MenuList
   FrameXr::Menu::Scrolling::Bar bar;
   MenuSection section = MenuSection::General;
   float row_h = 0.0f;
+  bool games = false;  // the Games tab's
 };
+
+float& GetScroll(MenuState* state, const MenuList& list);
+float GetScroll(const MenuState& state, const MenuList& list);
 
 // Whether the game goes on behind the menu: a page whose settings show on it.
 bool ShowsGame(MenuTab tab, MenuSection section);
@@ -287,7 +349,17 @@ public:
   // 0..1 along a slider at `x`.
   static float SliderAt(const MenuWidget& widget, float x);
 
+  // Covers for the drawing, and what it found out.
+  struct GamesDraw
+  {
+    // A game's composed cover, or null: none, or not yet.
+    std::function<const FrameXr::Menu::GameIcon*(const FrameXr::Menu::GameEntry&)> get_cover;
+    // Titles that are cut: the game's index, and how much too high it is.
+    std::vector<std::pair<int, float>> cut_titles;
+  };
+
   static void Draw(FrameXr::Menu::Kit* kit, FrameXr::Menu::Canvas* canvas,
-                   const MenuState& state, const GetPicture& get_picture);
+                   const MenuState& state, const GetPicture& get_picture,
+                   GamesDraw* games = nullptr);
 };
 }  // namespace VR::UI

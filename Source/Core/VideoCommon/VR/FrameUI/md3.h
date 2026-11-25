@@ -144,6 +144,9 @@ public:
               float opacity = 1.0f);
     /// Straight-alpha RGBA8 pixels drawn into `r`.
     void Image(const uint8_t* rgba, int w, int h, const Rect& r);
+    /// AzaharVR: the image in proportion, as large as fits, smoothed; `radius` (dp) rounds its corners.
+    Rect ImageFit(const uint8_t* rgba, int w, int h, const Rect& r, float radius,
+                  float opacity = 1.0f);
     /// A state layer of `rgb` over `r` for `state` (nothing at rest or disabled).
     void StateLayer(const Rect& r, float radius, uint32_t rgb, State state);
 

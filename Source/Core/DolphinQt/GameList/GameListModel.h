@@ -72,6 +72,8 @@ public:
   std::shared_ptr<const UICommon::GameFile> FindGame(const std::string& path) const;
   std::shared_ptr<const UICommon::GameFile> FindSecondDisc(const UICommon::GameFile& game) const;
 
+  const Core::TitleDatabase& GetTitleDatabase() const { return m_title_database; }
+
   void SetScale(float scale);
   float GetScale() const;
 

@@ -25,6 +25,10 @@
   `OpenXRInputState::SetControllers`. The screen has one placement (`GetScreenQuad`). The
   settings page (`VRPane`) and the menu use the same names. `Core/Autosave.*` has the
   autosave rules; unit tests are `VRFrameUITest`.
+- The VR menu's Games tab: `DolphinQt/VRGames.*` publishes the Qt list as a `GamesSnapshot` (`UICommon/VRGames.*` makes it;
+  `Config/VRGames.ini` has favourites, last played and cover choices) through `FrameUI/GamesHost.*`; the menu asks the host to
+  play, which stops the running game and boots the next in `MainWindow::PlayFromVR`. Covers are loaded on the draw thread.
+  Nothing is done for it while the tab is closed. Tests are `VRGamesTest`.
 - Display modes are called Stereoscopic 3D and Immersive. 3D Depth (`GFX_VR_SCREEN_DEPTH`) is a
   percentage of natural 3D: the shift at infinity is eye distance / screen width
   (`ScreenPlacement.h` `NaturalShift`), so it follows the headset's IPD and the screen's size.
@@ -229,7 +233,7 @@ is Baiji's README as it was at 75d194fd95 and is not edited.
 - The two screen options of Immersive are defaults, not locks, and bundled game profiles do not replace them.
 - Licences: Dolphin's files are GPL-2.0-or-later. Files that follow Azahar for Frame's say GPL-3.0-or-later in their
   first lines (`DynamicResolutionController.h`, `WindowFit.h`, `GameModeWindows.*`, `GameMods/Install.cpp`, `VrMenu.*`, `VrUi.cpp`,
-  `PadEdit.*`, `GrabHint.h`, `list_scroll.*`, `ipd_smoother.h`, `cylinder_layer.h`, `ListNav.h`, `GamepadNavigation.*`,
+  `games_snapshot.*`, `games_tab.*`, `cover_art.*`, `PadEdit.*`, `GrabHint.h`, `list_scroll.*`, `ipd_smoother.h`, `cylinder_layer.h`, `ListNav.h`, `GamepadNavigation.*`,
   `TheaterOverlay.h`, `TheaterDock.*`), so a build as a whole is GPL-3.0-or-later. Keep those notices when the files change.
 - Testing: unit tests (`VRFrameUITest`, `GameModsTest`, `DynamicResolutionTest`), and games on a desktop with a
   simulated headset. Headset results are the owner's to confirm.

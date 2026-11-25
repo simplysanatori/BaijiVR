@@ -161,6 +161,14 @@ void Kit::Image(const uint8_t* rgba, int w, int h, const Rect& r) {
     cv->BlitRGBA(rgba, w, h, D(r.x0), D(r.y0), D(r.x1), D(r.y1), true);
 }
 
+Rect Kit::ImageFit(const uint8_t* rgba, int w, int h, const Rect& r, float radius, float opacity) {
+    const float scale = std::min(r.W() / static_cast<float>(w), r.H() / static_cast<float>(h));
+    const float hw = static_cast<float>(w) * scale * 0.5f, hh = static_cast<float>(h) * scale * 0.5f;
+    const Rect at{r.Cx() - hw, r.Cy() - hh, r.Cx() + hw, r.Cy() + hh};
+    cv->BlitRGBA(rgba, w, h, D(at.x0), D(at.y0), D(at.x1), D(at.y1), true, D(radius), opacity);
+    return at;
+}
+
 void Kit::StateLayer(const Rect& r, float radius, uint32_t rgb, State state) {
     if (state == State::Hover) {
         Fill(r, radius, rgb, kHoverLayer);

@@ -10,6 +10,8 @@
 #include <cmath>
 #include <cstring>
 #include <ctime>
+#include <deque>
+#include <deque>
 #include <map>
 #include <string_view>
 #include <utility>
@@ -41,8 +43,11 @@
 #include "InputCommon/InputConfig.h"
 
 #include "VideoCommon/FramebufferManager.h"
+#include "VideoCommon/VR/FrameUI/GamesHost.h"
 #include "VideoCommon/VR/FrameUI/GrabHint.h"
 #include "VideoCommon/VR/FrameUI/PadBindings.h"
+#include "VideoCommon/VR/FrameUI/cover_art.h"
+#include "VideoCommon/VR/FrameUI/games_tab.h"
 #include "VideoCommon/VR/OpenXRManager.h"
 #include "VideoCommon/VR/Perf/VRPerf.h"
 #include "VideoCommon/VideoConfig.h"
@@ -143,6 +148,8 @@ struct Bindings
 std::atomic<bool> s_bindings_ready{false};
 // A state that was to be loaded is not there.
 std::atomic<bool> s_load_failed{false};
+// Another game was asked for and is on its way.
+std::atomic<bool> s_game_starts{false};
 // A download has begun.
 std::atomic<bool> s_install_started{false};
 std::mutex s_bindings_mutex;
@@ -334,6 +341,105 @@ MenuPicture ReadPicture(const std::string& path)
   return picture;
 }
 
+// The covers of the Games tab, read and composed on the drawing thread as their tiles are drawn.
+class Covers
+{
+public:
+  void BeginDraw() { m_wanted.clear(); }
+
+  const FrameXr::Menu::GameIcon* Get(const FrameXr::Menu::GameEntry& game)
+  {
+    if (game.covers.empty())
+      return nullptr;
+    const auto it = m_covers.find(game.path);
+    if (it != m_covers.end() && it->second.version == game.cover_version &&
+        it->second.files == game.covers)
+    {
+      it->second.drawn = true;
+      return it->second.icon.w > 0 ? &it->second.icon : nullptr;
+    }
+    m_wanted.push_back({game.path, game.covers, game.cover_version});
+    // The old one until the new one is there.
+    return it != m_covers.end() && it->second.icon.w > 0 ? &it->second.icon : nullptr;
+  }
+
+  void EndDraw()
+  {
+    // What was scrolled away is kept for a while.
+    if (m_covers.size() > MAX_COVERS)
+      std::erase_if(m_covers, [](const auto& cover) { return !cover.second.drawn; });
+    for (auto& [path, cover] : m_covers)
+      cover.drawn = false;
+    m_since_draw = 0;
+  }
+
+  bool IsWaiting() const { return !m_wanted.empty(); }
+
+  // True: time to draw them.
+  bool LoadNext()
+  {
+    Wanted wanted = std::move(m_wanted.front());
+    m_wanted.pop_front();
+    Cover& cover = m_covers[wanted.path];
+    cover = {};
+    cover.version = wanted.version;
+    for (const std::string& file : wanted.files)
+    {
+      cover.icon = FrameXr::Menu::ComposeCover(Read(file));
+      if (cover.icon.w > 0)
+        break;
+    }
+    cover.files = std::move(wanted.files);
+    m_found = m_found || cover.icon.w > 0;
+    if (!m_wanted.empty() && ++m_since_draw < A_FEW)
+      return false;
+    return std::exchange(m_found, false);
+  }
+
+private:
+  static constexpr std::size_t MAX_COVERS = 64;
+  static constexpr int A_FEW = 4;
+
+  struct Cover
+  {
+    std::vector<std::string> files;
+    u32 version = 0;
+    FrameXr::Menu::GameIcon icon;
+    bool drawn = false;
+  };
+  struct Wanted
+  {
+    std::string path;
+    std::vector<std::string> files;
+    u32 version = 0;
+  };
+
+  static FrameXr::Menu::GameIcon Read(const std::string& path)
+  {
+    FrameXr::Menu::GameIcon icon;
+    std::string file;
+    Common::UniqueBuffer<u8> data;
+    u32 width = 0;
+    u32 height = 0;
+    if (!File::Exists(path) || !File::ReadFileToString(path, file) ||
+        !Common::LoadPNG({reinterpret_cast<const u8*>(file.data()), file.size()}, &data, &width,
+                         &height) ||
+        width == 0 || height == 0 || width > 4096 || height > 4096)
+    {
+      return icon;
+    }
+    icon.w = static_cast<int>(width);
+    icon.h = static_cast<int>(height);
+    icon.rgba.assign(data.data(), data.data() + std::size_t{width} * height * 4);
+    return icon;
+  }
+
+  std::map<std::string, Cover> m_covers;
+  std::deque<Wanted> m_wanted;
+  int m_since_draw = 0;
+  bool m_found = false;
+};
+
 void QueueFastForward(bool on)
 {
   Core::QueueHostJob([on](Core::System&) {
@@ -414,6 +520,7 @@ VrUi::VrUi(OpenXRManager* manager, CreateOverlay create_overlay, u32 max_layers)
   m_toast_canvas.Init(static_cast<int>(TOAST_TEX_WIDTH), static_cast<int>(TOAST_TEX_HEIGHT));
   std::fill(m_toast_canvas.px.begin(), m_toast_canvas.px.end(), 0u);
   Perf::ForgetLastSecond();
+  s_game_starts = false;
   m_draw_thread = std::thread(&VrUi::DrawThread, this);
   Core::QueueHostJob([](Core::System& system) {
     ReadFlags();
@@ -882,6 +989,7 @@ void VrUi::OpenMenu(const Frame& frame)
   m_menu.tab = MenuTab::Main;
   m_menu.page = MenuPage::Main;
   m_menu.autosave_list = false;
+  m_menu.games.scroll = 0.0f;
   ClosePopup();
   m_menu.section = MenuSection::General;
   m_menu.settings.scope = DEFAULT_SCOPE;
@@ -1090,7 +1198,7 @@ void VrUi::UseGlobalValues()
 bool VrUi::HasPopup() const
 {
   return m_menu.open_setting != SettingId::None || m_menu.open_scope || m_menu.open_pad_scope ||
-         m_menu.open_pad_profile;
+         m_menu.open_pad_profile || m_menu.games.popup != MenuGames::Popup::None;
 }
 
 void VrUi::ClosePopup()
@@ -1099,6 +1207,7 @@ void VrUi::ClosePopup()
   m_menu.open_scope = false;
   m_menu.open_pad_scope = false;
   m_menu.open_pad_profile = false;
+  m_menu.games.popup = MenuGames::Popup::None;
 }
 
 void VrUi::ChoosePadProfile(int option)
@@ -1151,6 +1260,14 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
     RequestSaves();
   if (s_mods_changed.exchange(0) != 0)
     RequestMods();
+  if (s_game_starts.exchange(false))
+  {
+    // The game stays paused until it is stopped.
+    CloseMenu();
+    return;
+  }
+  if (m_menu.tab == MenuTab::Games && GetPublishedGamesSerial() != m_games_seen)
+    ReadGames();
   if (s_bindings_ready.exchange(false))
   {
     std::lock_guard lock(s_bindings_mutex);
@@ -1304,8 +1421,7 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
   m_menu.show_tooltip =
       hovered && !down && !beside && frame.time_ns - m_rest_since_ns >= TOOLTIP_NS;
 
-  float* const scroll =
-      can_scroll ? &m_menu.scroll[static_cast<std::size_t>(list->section)] : nullptr;
+  float* const scroll = can_scroll ? &GetScroll(&m_menu, *list) : nullptr;
   const float seconds = static_cast<float>(frame.time_ns % 1'000'000'000'000) * 1e-9f;
   if (pressed)
   {
@@ -1377,6 +1493,7 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
   {
     m_stick_scroll.Reset();
     m_list_drag.Stop();
+    UpdateGames(nullptr, dt);
     return;
   }
   if (!m_bar_press.Active() && !m_list_drag.Dragging() && !m_drag)
@@ -1391,6 +1508,7 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
     *scroll = m_list_drag.Coast(*scroll, list->bar.max_scroll, dt);
   }
   *scroll = std::clamp(*scroll, 0.0f, list->bar.max_scroll);
+  UpdateGames(&list->bar, dt);
 }
 
 void VrUi::SetSlider(const MenuWidget& widget, float t)
@@ -1485,6 +1603,148 @@ void VrUi::ChangeMod(const MenuWidget& widget)
   });
 }
 
+// ---- The Games tab ------------------------------------------------------------------------------
+
+void VrUi::ReadGames()
+{
+  MenuGames& games = m_menu.games;
+  PublishedGames published = GetPublishedGames();
+  m_games_seen = published.serial;
+  games.has_window = published.serial != 0;
+  games.list = std::move(published.list);
+  games.running = std::move(published.running);
+  if (!games.has_window)
+  {
+    // The running game is all that is known.
+    FrameXr::Menu::GameEntry game;
+    game.path = game.file_name = game.game_id = SConfig::GetInstance().GetGameID();
+    game.title = m_menu.title;
+    game.system = m_menu.wii ? FrameXr::Menu::GameSystem::Wii : FrameXr::Menu::GameSystem::GameCube;
+    games.running = game.path;
+    games.list = std::make_shared<const FrameXr::Menu::GamesSnapshot>(
+        FrameXr::Menu::MakeSnapshot({std::move(game)}, {}));
+  }
+  games.UpdateShown();
+}
+
+void VrUi::OpenGames()
+{
+  m_menu.tab = MenuTab::Games;
+  m_menu.page = MenuPage::Main;
+  m_menu.games.scroll = 0.0f;
+  m_game_pointed.clear();
+  ReadGames();
+  Core::QueueHostJob([](Core::System&) {
+    if (const GamesHost* const host = GetGamesHost())
+      host->publish();
+  });
+}
+
+// What is pointed at, and the list at rest.
+void VrUi::UpdateGames(const FrameXr::Menu::Scrolling::Bar* bar, float dt)
+{
+  MenuGames& games = m_menu.games;
+  if (m_menu.tab != MenuTab::Games)
+    return;
+  const bool on_game = games.popup == MenuGames::Popup::None &&
+                       (m_menu.hover == MenuItem::GameTile || m_menu.hover == MenuItem::GameOptions);
+  const FrameXr::Menu::GameEntry* const game = on_game ? games.Find(m_menu.hover_index) : nullptr;
+  const std::string path = game ? game->path : std::string();
+  m_game_pointed_s = path == m_game_pointed ? m_game_pointed_s + dt : 0.0f;
+  m_game_pointed = path;
+  float title_scroll = 0.0f;
+  if (game && m_draw_mutex.try_lock())
+  {
+    for (const auto& [cut, overflow] : m_cut_titles)
+    {
+      if (cut == path)
+        title_scroll = FrameXr::Menu::TitleScroll(m_game_pointed_s, overflow);
+    }
+    m_draw_mutex.unlock();
+    // By the picture's pixels.
+    games.title_scroll = std::round(title_scroll * MENU_PX_PER_DP) / MENU_PX_PER_DP;
+  }
+  else if (!game)
+  {
+    games.title_scroll = 0.0f;
+  }
+
+  if (bar && !m_stick_scroll.Active() && !m_list_drag.Flinging() && !m_list_drag.Dragging() &&
+      !m_bar_press.Active() && !m_press_down)
+  {
+    // Rests on a row's edge.
+    const float rest = FrameXr::Menu::GamesRestScroll(games.scroll, bar->max_scroll);
+    games.scroll += (rest - games.scroll) * std::min(1.0f, dt * 14.0f);
+    if (std::abs(rest - games.scroll) < 0.5f)
+      games.scroll = rest;
+  }
+}
+
+void VrUi::PressGame(const std::string& path)
+{
+  MenuGames& games = m_menu.games;
+  if (path == games.running)
+  {
+    CloseMenu();
+    return;
+  }
+  games.game = path;
+  games.loses_progress = !s_autosave_on;
+  games.popup = MenuGames::Popup::Question;
+}
+
+void VrUi::StartGame()
+{
+  const FrameXr::Menu::GameEntry* const game = m_menu.games.FindGame(m_menu.games.game);
+  if (!game)
+    return;
+  Core::QueueHostJob([path = game->path, title = game->title](Core::System&) {
+    const GamesHost* const host = GetGamesHost();
+    const std::string refusal = host ? host->play(path) : "Games Start in Baiji VR's Window";
+    if (!refusal.empty())
+    {
+      VrUi::PostToast(refusal, 5000);
+      return;
+    }
+    VrUi::PostToast(fmt::format("Starting {}", title), 5000);
+    // It is stopped as it is.
+    s_paused_by_menu = false;
+    s_game_starts = true;
+  });
+}
+
+void VrUi::ChooseGamesOption(MenuGames::Popup popup, int option)
+{
+  MenuGames& games = m_menu.games;
+  switch (popup)
+  {
+  case MenuGames::Popup::None:
+    break;
+  case MenuGames::Popup::Sort:
+    games.sort = static_cast<FrameXr::Menu::GamesSort>(option);
+    games.scroll = 0.0f;
+    games.UpdateShown();
+    break;
+  case MenuGames::Popup::Options:
+    if (option == MenuGames::Play)
+    {
+      PressGame(std::string(games.game));
+    }
+    else if (option == MenuGames::Favourite)
+    {
+      Core::QueueHostJob([path = games.game](Core::System&) {
+        if (const GamesHost* const host = GetGamesHost())
+          host->toggle_favourite(path);
+      });
+    }
+    break;
+  case MenuGames::Popup::Question:
+    if (option == MenuGames::Start)
+      StartGame();
+    break;
+  }
+}
+
 void VrUi::Activate(const MenuWidget& widget, int option)
 {
   PadEvents events;
@@ -1493,6 +1753,32 @@ void VrUi::Activate(const MenuWidget& widget, int option)
   case MenuItem::TabMain:
     m_menu.tab = MenuTab::Main;
     m_menu.page = MenuPage::Main;
+    break;
+  case MenuItem::TabGames:
+    OpenGames();
+    break;
+  case MenuItem::GameTile:
+  case MenuItem::GameOptions:
+    if (const FrameXr::Menu::GameEntry* const game = m_menu.games.Find(widget.index))
+    {
+      // A copy: the list may be another by then.
+      const std::string path = game->path;
+      if (widget.item == MenuItem::GameTile)
+      {
+        PressGame(path);
+        break;
+      }
+      m_menu.games.game = path;
+      m_menu.games.popup = MenuGames::Popup::Options;
+    }
+    break;
+  case MenuItem::GamesChip:
+    m_menu.games.chip = static_cast<FrameXr::Menu::SystemFilter>(widget.index);
+    m_menu.games.scroll = 0.0f;
+    m_menu.games.UpdateShown();
+    break;
+  case MenuItem::GamesSort:
+    m_menu.games.popup = MenuGames::Popup::Sort;
     break;
   case MenuItem::TabPosition:
     m_menu.tab = MenuTab::Position;
@@ -1688,6 +1974,11 @@ void VrUi::Activate(const MenuWidget& widget, int option)
       SetPadScope(SettingScope::Global);
     else if (std::exchange(m_menu.open_pad_profile, false))
       ChoosePadProfile(widget.index);
+    else if (const auto popup = std::exchange(m_menu.games.popup, MenuGames::Popup::None);
+             popup != MenuGames::Popup::None)
+    {
+      ChooseGamesOption(popup, widget.index);
+    }
     else if (const SettingId id = std::exchange(m_menu.open_setting, SettingId::None);
         id != SettingId::None)
     {
@@ -2115,13 +2406,15 @@ void VrUi::DrawThread()
   std::vector<u32> menu_scratch;
   std::vector<u32> stats_scratch;
   std::map<std::string, std::optional<MenuPicture>> pictures;
+  Covers covers;
+  MenuState last;
 
   std::unique_lock lock(m_draw_mutex);
   while (true)
   {
-    m_draw_cv.wait(lock, [this] {
+    m_draw_cv.wait(lock, [this, &covers] {
       return m_draw_exit || m_saves_request || m_mods_request || m_stats_request ||
-             m_draw_request.has_value();
+             m_draw_request.has_value() || covers.IsWaiting();
     });
     if (m_draw_exit)
       return;
@@ -2163,17 +2456,39 @@ void VrUi::DrawThread()
       m_stats_drawn_serial = stats.serial;
       continue;
     }
+    if (!m_draw_request)
+    {
+      // A cover, while there is nothing else to do. They show a few at a time.
+      lock.unlock();
+      const bool show = covers.LoadNext();
+      lock.lock();
+      if (show && !m_draw_request && !m_draw_exit)
+        m_draw_request = last;
+      continue;
+    }
     const MenuState state = std::move(*m_draw_request);
     m_draw_request.reset();
     lock.unlock();
+    VrMenu::GamesDraw games;
+    games.get_cover = [&covers](const FrameXr::Menu::GameEntry& game) { return covers.Get(game); };
+    covers.BeginDraw();
     VrMenu::Draw(&kit, &canvas, state, [&pictures](const std::string& path) {
       const auto it = pictures.try_emplace(path).first;
       if (!it->second)
         it->second = ReadPicture(path);
       return it->second->width > 0 ? &*it->second : nullptr;
-    });
+    }, &games);
+    covers.EndDraw();
+    last = state;
     menu_scratch = canvas.px;
+    std::vector<std::pair<std::string, float>> cut_titles;
+    for (const auto& [index, overflow] : games.cut_titles)
+    {
+      if (const FrameXr::Menu::GameEntry* const game = state.games.Find(index))
+        cut_titles.emplace_back(game->path, overflow);
+    }
     lock.lock();
+    m_cut_titles = std::move(cut_titles);
     m_drawn.swap(menu_scratch);
     m_drawn_ready = true;
   }

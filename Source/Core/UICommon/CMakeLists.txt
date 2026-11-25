@@ -48,6 +48,10 @@ if(UNIX AND NOT APPLE AND NOT ANDROID AND ENABLE_QT)
   target_link_libraries(uicommon PUBLIC Qt6::DBus)
 endif()
 
+if(ENABLE_VR)
+  target_sources(uicommon PRIVATE VRGames.cpp VRGames.h)
+endif()
+
 if(X11_FOUND)
   target_sources(uicommon PRIVATE X11Utils.cpp)
   target_link_libraries(uicommon PUBLIC PkgConfig::XRANDR PkgConfig::X11)

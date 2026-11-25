@@ -6,7 +6,8 @@ Baiji's own changelog is in [its README](../README.upstream.md).
 
 ### VR menu and controls
 
-- A new VR menu: **Main**, **Position**, **Stats**, **Controls**, **Mods** and **Settings**.
+- A new VR menu: **Main**, **Games**, **Position**, **Stats**, **Controls**, **Mods** and **Settings**.
+- The **Games** tab: the games of the list with covers or banners, GameCube and Wii chips, sorting and favourites. It starts another game without leaving VR.
 - **Global** and **Per-Game** settings in the menu, the same ones as in the window.
 - **Show Stats**: frame rate, the resolution in use and Dynamic Resolution's changes, in front of you or on the wrist.
 - **Screen Curve**.

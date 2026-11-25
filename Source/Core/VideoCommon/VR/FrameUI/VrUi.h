@@ -152,6 +152,13 @@ private:
   void LoadState(std::string path, std::string undo_label, s64 time);
   void RequestSaves();
   void RequestMods();
+  // ---- The Games tab ----
+  void UpdateGames(const FrameXr::Menu::Scrolling::Bar* bar, float dt);
+  void ReadGames();
+  void OpenGames();
+  void PressGame(const std::string& path);
+  void StartGame();
+  void ChooseGamesOption(MenuGames::Popup popup, int option);
   // Says when a download is done, the menu open or not.
   void WatchInstall();
   void ShowToast(std::string text, s64 duration_ns);
@@ -233,6 +240,9 @@ private:
   std::vector<MenuWidget> m_widgets;
   FrameXr::Input::Posef m_menu_pose;
   float m_menu_scale = 1.0f;
+  u32 m_games_seen = 0;  // of what is published
+  std::string m_game_pointed;
+  float m_game_pointed_s = 0.0f;
   int m_menu_hand = 1;
   bool m_press_down = false;
   MenuItem m_press_item = MenuItem::None;
@@ -289,6 +299,8 @@ private:
   StatsPicture m_stats_drawn_picture = StatsPicture::None;  // None: taken
   u32 m_stats_drawn_serial = 0;
   std::vector<u32> m_drawn;
+  // The titles that are cut, of the list as drawn.
+  std::vector<std::pair<std::string, float>> m_cut_titles;
   bool m_drawn_ready = false;
   // The pacing thread's: what it uploads.
   std::vector<u32> m_menu_upload;

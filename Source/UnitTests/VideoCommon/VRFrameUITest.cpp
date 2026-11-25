@@ -440,8 +440,8 @@ TEST(VRFrameUI, Rail)
     EXPECT_GE(w.rect.y0, 0.0f);
     EXPECT_LE(w.rect.y1, VrMenu::HEIGHT);
   }
-  EXPECT_EQ(labels, (std::vector<std::string>{"Main", "Position", "Stats", "Controls", "Mods",
-                                              "Settings"}));
+  EXPECT_EQ(labels, (std::vector<std::string>{"Main", "Games", "Position", "Stats", "Controls",
+                                              "Mods", "Settings"}));
 }
 
 TEST(VRFrameUI, TheGameGoesOnWhereItsSettingsShow)

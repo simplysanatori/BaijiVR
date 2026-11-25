@@ -131,6 +131,9 @@
 #include "DolphinQt/TAS/WiiTASInputWindow.h"
 #include "DolphinQt/TheaterDock.h"
 #include "DolphinQt/ToolBar.h"
+#ifdef ENABLE_VR
+#include "DolphinQt/VRGames.h"
+#endif
 #include "DolphinQt/VRModeSwitch.h"
 #include "DolphinQt/WiiUpdate.h"
 
@@ -254,6 +257,11 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
       m_system, this, m_menu_bar,
       {.stop = [this] { StopForModeSwitch(); },
        .boot = [this](std::unique_ptr<BootParameters> boot) { StartGame(std::move(boot)); }});
+#ifdef ENABLE_VR
+  m_vr_games = new VRGames(
+      m_game_list->GetGameListModel(), [this](const std::string& path) { return PlayFromVR(path); },
+      this);
+#endif
 
   QSettings& settings = Settings::GetQSettings();
   restoreState(settings.value(QStringLiteral("mainwindow/state")).toByteArray());
@@ -955,7 +963,7 @@ void MainWindow::OnStopComplete()
   if (m_vr_mode_switch->OnStopComplete(m_exit_requested || m_pending_boot != nullptr))
     return;
 
-  if (m_exit_requested || Settings::Instance().IsBatchModeEnabled())
+  if (m_exit_requested || (Settings::Instance().IsBatchModeEnabled() && !m_pending_from_vr))
   {
     if (m_assembler_widget->ApplicationCloseRequest())
     {
@@ -1166,6 +1174,49 @@ void MainWindow::StopForModeSwitch()
   ForceStop();
 }
 
+std::string MainWindow::PlayFromVR(const std::string& path)
+{
+  const Core::State state = Core::GetState(m_system);
+  if (m_vr_mode_switch->IsSwitching() || m_pending_boot || m_stop_requested || m_exit_requested ||
+      (state != Core::State::Running && state != Core::State::Paused))
+  {
+    return "Wait Until the Game Runs";
+  }
+  if (AchievementManager::GetInstance().IsHardcoreModeActive())
+    return "Not in Hardcore Mode. Close the Game First.";
+  if (NetPlay::IsNetPlayRunning())
+    return "Not During NetPlay";
+  if (m_system.GetMovie().IsMovieActive())
+    return "Not During a Recording";
+  // Before the running game stops, and without the boxes of a boot.
+  if (!UICommon::GameFile(path).IsValid())
+    return "Could Not Read the Game's File";
+  std::vector<std::string> paths{path};
+  if (const auto game = m_game_list->FindGame(path))
+  {
+    if (const auto second_game = m_game_list->FindSecondDisc(*game))
+      paths.push_back(second_game->GetFilePath());
+  }
+  std::unique_ptr<BootParameters> boot = BootParameters::GenerateFromFile(paths);
+  if (!boot)
+    return "Could Not Read the Game's File";
+
+  m_pending_boot = std::move(boot);
+  m_pending_from_vr = true;
+  // Out of the host job this is in: the core dispatches those as it stops. OnStopComplete starts it.
+  QueueOnObject(this, [this] { StopForPlayFromVR(); });
+  return {};
+}
+
+void MainWindow::StopForPlayFromVR()
+{
+  // Out of Host_YieldToUI, while this thread has the core locked: later.
+  if (Core::IsCPUThread())
+    QTimer::singleShot(50, this, &MainWindow::StopForPlayFromVR);
+  else
+    StopForModeSwitch();
+}
+
 void MainWindow::Reset()
 {
   auto& movie = m_system.GetMovie();
@@ -1284,8 +1335,9 @@ void MainWindow::StartGame(std::unique_ptr<BootParameters>&& parameters)
   if (m_theater_dock && m_theater_dock->IsLeaving())
     return;
 
-  // (The player has seen these as the game was started first.)
-  if (parameters && !m_vr_mode_switch->IsSwitching() &&
+  // (The player has seen these as the game was started first, or is in the headset.)
+  const bool from_vr = std::exchange(m_pending_from_vr, false);
+  if (parameters && !from_vr && !m_vr_mode_switch->IsSwitching() &&
       std::holds_alternative<BootParameters::Disc>(parameters->parameters))
   {
     if (std::get<BootParameters::Disc>(parameters->parameters).volume->IsNKit())
@@ -1353,6 +1405,13 @@ void MainWindow::BootGame(std::unique_ptr<BootParameters>&& parameters)
   // Boot up, show an error if it fails to load the game.
   if (parameters)
     m_vr_mode_switch->BeforeBoot(*parameters);
+#ifdef ENABLE_VR
+  const auto* const disc =
+      parameters ? std::get_if<BootParameters::Disc>(&parameters->parameters) : nullptr;
+  const auto* const file =
+      parameters ? std::get_if<BootParameters::Executable>(&parameters->parameters) : nullptr;
+  m_vr_games->SetRunning(disc ? disc->path : file ? file->path : std::string());
+#endif
   const bool booted = BootManager::BootCore(m_system, std::move(parameters),
                                             ::GetWindowSystemInfo(m_render_widget->windowHandle()));
   m_vr_mode_switch->AfterBoot(booted);

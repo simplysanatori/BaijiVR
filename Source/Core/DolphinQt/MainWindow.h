@@ -53,6 +53,7 @@ class SkylanderPortalWindow;
 class TheaterDock;
 class ThreadWidget;
 class ToolBar;
+class VRGames;
 class VRModeSwitch;
 class WatchWidget;
 class WiiTASInputWindow;
@@ -113,6 +114,9 @@ private:
   bool RequestStopInternal(bool from_emulation);
   void ForceStop();
   void StopForModeSwitch();
+  // The VR menu's Games tab. Empty when the game is on its way, or else why not.
+  std::string PlayFromVR(const std::string& path);
+  void StopForPlayFromVR();
   void Reset();
   void FrameAdvance();
   void StateLoad();
@@ -270,6 +274,9 @@ private:
   FreeLookWindow* m_freelook_window = nullptr;
 
   VRModeSwitch* m_vr_mode_switch = nullptr;
+  VRGames* m_vr_games = nullptr;
+  // m_pending_boot is of the VR menu: no boxes that only the window shows.
+  bool m_pending_from_vr = false;
   TheaterDock* m_theater_dock = nullptr;
   HotkeyScheduler* m_hotkey_scheduler;
   NetPlayDialog* m_netplay_dialog;

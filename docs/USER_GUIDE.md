@@ -77,6 +77,7 @@ They are in the **Mods** tab of the VR menu, and on the **Mods** page of a game'
 Hold **Menu** for 1 second. The rows of each tab are in [CONTROLS.md](CONTROLS.md#the-vr-menu).
 
 - **Main**: Continue, Quick Save, Quick Load, Save State, Load State, Screenshot, Restart, Fast Forward (**Wii Home** in a Wii game), Close Game, **Switch to Flat**
+- **Games**: the games of the window's list. Choose one to play it instead; it asks first
 - **Position**: Reset Screen or Reset View, Display, Distance, Size, **Screen Curve**, Aspect Ratio, Lock Screen, **2D Parts on a Screen**
 - **Stats**: **Show Stats** and **Stats Position**
 - **Controls**: your controller with the game's buttons, **Edit Controls** and **Shortcuts**

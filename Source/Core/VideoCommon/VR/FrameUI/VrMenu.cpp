@@ -11,6 +11,7 @@
 #include <fmt/format.h>
 
 #include "Core/VRWiiController.h"
+#include "VideoCommon/VR/FrameUI/games_tab.h"
 #include "VideoCommon/VR/FrameUI/md3_fonts.h"
 
 namespace VR::UI
@@ -22,6 +23,8 @@ using Kind = MenuWidget::Kind;
 
 constexpr float RAIL_W = 104.0f;
 constexpr float RAIL_ITEM_H = 72.0f;
+// Where Kit::RailItem has its icon.
+constexpr float RAIL_ICON_Y = RAIL_ITEM_H * 0.5f - (32.0f + 4.0f + 14.0f * 1.4f) * 0.5f + 16.0f;
 constexpr float MARGIN = 16.0f;
 constexpr float CONTROL_H = 48.0f;
 constexpr float ROW_H = 64.0f;
@@ -121,6 +124,8 @@ void AddRail(Builder* builder, const MenuState& state)
   };
   static constexpr RailItem ITEMS[] = {
       {MenuTab::Main, MenuItem::TabMain, Icon::kHome, "Main"},
+      // Its icon is drawn (DrawGamesIcon).
+      {MenuTab::Games, MenuItem::TabGames, 0, "Games"},
       {MenuTab::Position, MenuItem::TabPosition, Icon::kOpenWith, "Position"},
       {MenuTab::Stats, MenuItem::TabStats, Icon::kMonitoring, "Stats"},
       {MenuTab::Controls, MenuItem::TabControls, Icon::kStadiaController, "Controls"},
@@ -850,6 +855,138 @@ void AddStats(Builder* builder, const MenuState& state)
   }
 }
 
+// Azahar for Frame's Games tab: chips and buttons, the count, the tiles.
+void AddGames(Builder* builder, const MenuState& state)
+{
+  const MenuGames& games = state.games;
+  const std::vector<SystemFilter> chips = GameChips(games.list);
+  const SystemFilter chosen = GameChip(games.list, games.chip);
+  float x = kGamesX0;
+  for (const SystemFilter chip : chips)
+  {
+    MenuWidget& w = builder->Add(Kind::GamesChip, MenuItem::GamesChip);
+    w.index = static_cast<int>(chip);
+    w.label = ChipName(chip);
+    const float width = std::max(
+        kGamesChipMinW, std::ceil(10.7f * static_cast<float>(w.label.size()) + kGamesChipRoom));
+    w.rect = {x, kGamesTopY0, x + width, kGamesTopY1};
+    w.active = chip == chosen;
+    x = w.rect.x1 + kGamesChipGap;
+  }
+
+  const Rect sort_rect{kGamesX1 - kGamesRoundR * 2.0f, kGamesTopY0, kGamesX1, kGamesTopY1};
+  if (games.list && games.has_window)
+  {
+    MenuWidget& sort = builder->Add(Kind::RoundButton, MenuItem::GamesSort);
+    sort.rect = sort_rect;
+    sort.label = "Sort";
+    sort.tooltip = "Sort";
+    sort.active = games.popup == MenuGames::Popup::Sort;
+  }
+
+  MenuWidget& count = builder->Add(Kind::GamesCount, MenuItem::None);
+  const float cy = chips.empty() ? (kGamesTopY0 + kGamesTopY1) * 0.5f : kGamesCountCy;
+  count.rect = {kGamesX0, cy - 10.0f, kGamesX1, cy + 10.0f};
+  if (!games.has_window)
+    count.label = "The list of games is in Baiji VR's window.";
+  else if (games.list)
+    count.label = GameCount(games.shown.size(), false) + " \u00b7 " + SortName(games.sort);
+
+  const std::size_t first = builder->GetCount();
+  constexpr Rect GRID{kGamesX0, kGamesY0, kGamesX1, kGamesY1};
+  constexpr Rect CLIP{GRID.x0 - kGamesClipRoom, GRID.y0 - kGamesClipRoom, GRID.x1 + kGamesClipRoom,
+                      GRID.y1 + kGamesClipRoom};
+  Rect options_rect{};
+  for (std::size_t i = 0; i < games.shown.size(); ++i)
+  {
+    const float tile_x = GRID.x0 + static_cast<float>(i % kGamesColumns) * (kGameTileW + kGameGap);
+    const float tile_y =
+        GRID.y0 + static_cast<float>(i / kGamesColumns) * kGameRow - games.scroll;
+    const GameEntry* const game = games.Find(games.shown[i]);
+    if (!game || tile_y + kGameTileH <= CLIP.y0 || tile_y >= CLIP.y1)
+      continue;
+    const Rect rect{tile_x, tile_y, tile_x + kGameTileW, tile_y + kGameTileH};
+    const bool running = !games.running.empty() && game->path == games.running;
+    MenuWidget& tile = builder->Add(Kind::GameTile, MenuItem::GameTile);
+    tile.index = games.shown[i];
+    tile.rect = rect;
+    tile.label = game->title;
+    tile.active = running;
+    tile.tooltip = GameTooltip(*game, running);
+    if (!games.has_window)
+      continue;
+    MenuWidget& options = builder->Add(Kind::GameOptions, MenuItem::GameOptions);
+    options.index = games.shown[i];
+    options.rect = {rect.x1 - kGameOptionsTarget, rect.y0, rect.x1, rect.y0 + kGameOptionsTarget};
+    options.label = "Options: " + game->title;
+    options.tooltip = "Options";
+    options.active = games.popup == MenuGames::Popup::Options && games.game == game->path;
+    if (options.active)
+      options_rect = options.rect;
+  }
+  builder->Clip(first, CLIP);
+
+  if (const std::optional<MenuList> list = VrMenu::GetList(state); list && list->bar.Valid())
+  {
+    MenuWidget& bar = builder->Add(Kind::Scrollbar, MenuItem::Scrollbar);
+    bar.rect = Scrolling::HitRect(list->bar);
+    bar.rect.x0 = kGamesX1;
+  }
+
+  switch (games.popup)
+  {
+  case MenuGames::Popup::None:
+    break;
+  case MenuGames::Popup::Sort:
+  {
+    std::vector<std::string> options;
+    for (int i = 0; i < static_cast<int>(GamesSort::Count); ++i)
+      options.emplace_back(SortName(static_cast<GamesSort>(i)));
+    AddMenu(builder, sort_rect, kGamesSortMenuW, std::move(options),
+            static_cast<int>(games.sort));
+    break;
+  }
+  case MenuGames::Popup::Options:
+  {
+    const GameEntry* const game = games.FindGame(games.game);
+    if (!game || options_rect.W() <= 0.0f)
+      break;
+    Rect anchor = options_rect;
+    anchor.y0 = std::max(anchor.y0, CLIP.y0);
+    anchor.x1 = std::max(anchor.x1, kGamesX0 + kGamesOptionsMenuW);
+    AddMenu(builder, anchor, kGamesOptionsMenuW,
+            {game->path == games.running ? "Continue" : "Play", "Favourite"},
+            game->favorite ? MenuGames::Favourite : -1);
+    break;
+  }
+  case MenuGames::Popup::Question:
+  {
+    const GameEntry* const game = games.FindGame(games.game);
+    if (!game)
+      break;
+    const GameEntry* const running = games.FindGame(games.running);
+    constexpr Rect BOX{VrMenu::WIDTH * 0.5f - 180.0f, 180.0f, VrMenu::WIDTH * 0.5f + 280.0f, 380.0f};
+    MenuWidget& box = builder->Add(Kind::Question, MenuItem::Popup);
+    box.rect = BOX;
+    box.label = fmt::format("Start {}?", game->title);
+    box.value = fmt::format("{} will close.", running ? running->title : state.title);
+    if (games.loses_progress)
+      box.note = "Progress not saved in the game is lost.";
+    MenuWidget& start = builder->Add(Kind::Button, MenuItem::PopupOption);
+    start.index = MenuGames::Start;
+    start.rect = {BOX.x1 - 24.0f - 112.0f, BOX.y1 - 72.0f, BOX.x1 - 24.0f, BOX.y1 - 24.0f};
+    start.label = "Start";
+    start.active = true;
+    MenuWidget& cancel = builder->Add(Kind::Button, MenuItem::PopupOption);
+    cancel.index = MenuGames::Cancel;
+    cancel.rect = {BOX.x1 - 24.0f - 112.0f - 12.0f - 112.0f, BOX.y1 - 72.0f,
+                   BOX.x1 - 24.0f - 112.0f - 12.0f, BOX.y1 - 24.0f};
+    cancel.label = "Cancel";
+    break;
+  }
+  }
+}
+
 void AddSettings(Builder* builder, const MenuState& state)
 {
   MenuWidget& section = builder->Add(Kind::Segmented, MenuItem::Section);
@@ -929,12 +1066,43 @@ bool ShowsGame(MenuTab tab, MenuSection section)
   case MenuTab::Settings:
     return section != MenuSection::General;
   case MenuTab::Main:
+  case MenuTab::Games:
   case MenuTab::Stats:
   case MenuTab::Controls:
   case MenuTab::Mods:
     break;
   }
   return false;
+}
+
+const GameEntry* MenuGames::Find(int index) const
+{
+  return list && index >= 0 && index < static_cast<int>(list->games.size()) ?
+             &list->games[static_cast<std::size_t>(index)] :
+             nullptr;
+}
+
+const GameEntry* MenuGames::FindGame(const std::string& path) const
+{
+  return Find(path.empty() ? -1 : GameAt(list, path));
+}
+
+void MenuGames::UpdateShown()
+{
+  chip = GameChip(list, chip);
+  shown = GamesShown(list, chip, sort, {});
+  if (popup != Popup::Sort && !FindGame(game))
+    popup = Popup::None;
+}
+
+float& GetScroll(MenuState* state, const MenuList& list)
+{
+  return list.games ? state->games.scroll : state->scroll[static_cast<std::size_t>(list.section)];
+}
+
+float GetScroll(const MenuState& state, const MenuList& list)
+{
+  return list.games ? state.games.scroll : state.scroll[static_cast<std::size_t>(list.section)];
 }
 
 std::vector<MenuWidget> VrMenu::Layout(const MenuState& state)
@@ -948,6 +1116,9 @@ std::vector<MenuWidget> VrMenu::Layout(const MenuState& state)
       AddMain(&builder, state);
     else
       AddSlots(&builder, state);
+    break;
+  case MenuTab::Games:
+    AddGames(&builder, state);
     break;
   case MenuTab::Position:
     AddScreen(&builder, state);
@@ -970,6 +1141,14 @@ std::vector<MenuWidget> VrMenu::Layout(const MenuState& state)
 
 std::optional<MenuList> VrMenu::GetList(const MenuState& state)
 {
+  if (state.tab == MenuTab::Games)
+  {
+    const Rect grid{kGamesX0, kGamesY0, kGamesX1, kGamesY1};
+    const int rows = (static_cast<int>(state.games.shown.size()) + kGamesColumns - 1) / kGamesColumns;
+    const float content = std::max(0.0f, static_cast<float>(rows) * kGameRow - kGameGap);
+    return MenuList{{grid, kGamesBarRight, content, std::max(0.0f, content - grid.H())},
+                    MenuSection::General, kGameRow, true};
+  }
   const std::optional<MenuSection> section = GetSection(state);
   if (!section)
     return std::nullopt;
@@ -1010,7 +1189,8 @@ float VrMenu::SliderAt(const MenuWidget& widget, float x)
   return std::clamp((x - x0) / (x1 - x0), 0.0f, 1.0f);
 }
 
-void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPicture& get_picture)
+void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPicture& get_picture,
+                  GamesDraw* games)
 {
   const auto draw_picture = [&](const Rect& r, const std::string& path, u32 icon_rgb) {
     const MenuPicture* const picture = path.empty() ? nullptr : get_picture(path);
@@ -1076,6 +1256,8 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
       break;
     case Kind::Rail:
       kit->RailItem(w.rect, w.icon, w.label, w.active, look);
+      if (w.item == MenuItem::TabGames)
+        DrawGamesIcon(*kit, w.rect.Cx(), w.rect.y0 + RAIL_ICON_Y, w.active);
       break;
     case Kind::Tile:
       kit->Tile(w.rect,
@@ -1305,12 +1487,59 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
         kit->Dot(w.rect.Cx(), w.rect.Cy() + dy, 2.0f, Tok::kOnSurfaceVariant, opacity);
       break;
     }
+    case Kind::GameTile:
+    {
+      const GameEntry* const game = state.games.Find(w.index);
+      if (!game)
+        break;
+      GameTileLook tile;
+      tile.running = w.active;
+      const bool on_tile = w.index == state.hover_index && (state.hover == MenuItem::GameTile ||
+                                                            state.hover == MenuItem::GameOptions);
+      const bool open = state.games.popup == MenuGames::Popup::Options &&
+                        state.games.game == game->path;
+      tile.pointed = open || (on_tile && state.games.popup == MenuGames::Popup::None);
+      tile.tile = on_tile && look == State::Rest ? State::Hover : look;
+      if (open || (on_tile && state.pressed == MenuItem::GameOptions))
+        tile.options = State::Pressed;
+      else if (on_tile && state.hover == MenuItem::GameOptions)
+        tile.options = State::Hover;
+      tile.title_scroll = on_tile ? state.games.title_scroll : 0.0f;
+      const GameIcon* const cover = games && games->get_cover ? games->get_cover(*game) : nullptr;
+      const float overflow = DrawGameTile(*kit, *game, cover, tile, w.rect, w.clip);
+      if (games && overflow > 0.0f)
+        games->cut_titles.emplace_back(w.index, overflow);
+      break;
+    }
+    case Kind::GameOptions:
+      break;
+    case Kind::GamesChip:
+      DrawGamesChip(*kit, w.rect, w.label, w.active, look);
+      break;
+    case Kind::GamesCount:
+      kit->TextMid(w.rect.x0, w.rect.Cy(), Type::Tooltip, Tok::kOnSurfaceVariant, w.label);
+      break;
+    case Kind::RoundButton:
+      kit->Fill(w.rect, kGamesRoundR, Tok::kSurfaceContainerHigh);
+      kit->StateLayer(w.rect, kGamesRoundR, Tok::kOnSurfaceVariant,
+                      w.active ? State::Pressed : look);
+      DrawSortGlyph(*kit, w.rect.Cx(), w.rect.Cy(), Tok::kOnSurfaceVariant);
+      break;
+    case Kind::Question:
+      kit->Fill({0.0f, 0.0f, WIDTH, HEIGHT}, 28.0f, 0x000000, 0.5f);
+      kit->Fill(w.rect, 28.0f, Tok::kSurfaceContainerHigh);
+      kit->TextMid(w.rect.x0 + 24.0f, w.rect.y0 + 40.0f, Type::Headline, Tok::kOnSurface,
+                   kit->Fit(Type::Headline, w.label, w.rect.W() - 48.0f));
+      kit->TextMid(w.rect.x0 + 24.0f, w.rect.y0 + 80.0f, Type::Body, Tok::kOnSurfaceVariant,
+                   kit->Fit(Type::Body, w.value, w.rect.W() - 48.0f));
+      kit->TextMid(w.rect.x0 + 24.0f, w.rect.y0 + 106.0f, Type::Body, Tok::kOnSurfaceVariant, w.note);
+      break;
     case Kind::Scrollbar:
       if (const std::optional<MenuList> list = GetList(state))
       {
         const bool held = look == State::Pressed;
         const bool wide = held || look == State::Hover;
-        const float scroll = state.scroll[static_cast<std::size_t>(list->section)];
+        const float scroll = GetScroll(state, *list);
         if (wide)
         {
           kit->Fill(Scrolling::TrackRect(list->bar, true), Scrolling::kBarHoverW * 0.5f,
@@ -1340,7 +1569,8 @@ void VrMenu::Draw(Kit* kit, Canvas* canvas, const MenuState& state, const GetPic
   if (pointed->clipped)
     top = std::max(top, pointed->clip.y0);
   // A controller's chip is under Global and Per-Game.
-  const bool above = top - 40.0f > PANE.y0 && pointed->item != MenuItem::Controller;
+  const bool above = top - 40.0f > PANE.y0 && pointed->item != MenuItem::Controller &&
+                     pointed->item != MenuItem::GamesSort;
   const float y = above ? top + (row ? 6.0f : 0.0f) : pointed->rect.y1;
   if (wrap)
     kit->TooltipWrapped(cx, y, text, above, wrap_w);

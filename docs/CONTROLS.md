@@ -39,6 +39,7 @@ Point at it with either controller. The trigger or **A** chooses, **B** goes bac
 | Tab | What is on it |
 |---|---|
 | **Main** | **Continue**, **Quick Save**, **Quick Load**, **Save State**, **Load State**, **Screenshot**, **Restart**, **Fast Forward** (**Wii Home** in a Wii game), **Close Game**, **Switch to Flat** |
+| **Games** | The games of the window's list. A press starts one, after a question; the three dots have more |
 | **Position** | **Reset Screen** or **Reset View**, **Display**, **Distance**, **Size**, **Screen Curve**, **Aspect Ratio**, **Lock Screen**, **2D Parts on a Screen** |
 | **Stats** | **Show Stats**, **Stats Position** and the numbers of the last second |
 | **Controls** | The game's controller with what is on each control, **Edit Controls**, and **Shortcuts** with the table above |
@@ -48,6 +49,10 @@ Point at it with either controller. The trigger or **A** chooses, **B** goes bac
 The game is paused behind the menu. On **Position**, and on **Graphics** and **Immersive** of **Settings**, it runs, so a change shows at once.
 
 **Global** and **Per-Game** at the top right say whose settings the page shows and changes: every game's, or only this game's. A game's own value is in front of the global one. The three dots have **Use Global Values for All**, which removes this game's values on that page.
+
+### Games
+
+The chips show all games, **GameCube** or **Wii**; **Sort** changes their order. The right stick scrolls. Choosing a game asks before the running one closes; the running game's tile goes back to it. The three dots of a tile, or **X** with the D-Pad, have **Play**, **Favourite** and the covers.
 
 ### Stats
 
