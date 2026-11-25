@@ -17,7 +17,7 @@ Known issues:
 - A Steam Frame with about 250 MB free, plus your games
 - Your own GameCube and Wii games, dumped from your own discs
 
-Developer Mode, SSH and a PC are only needed to build it yourself.
+Developer Mode is not needed.
 
 ## Install, update and uninstall
 
@@ -25,7 +25,7 @@ The README has the download, Frametanium and FrameDrop. The program is in `~/bai
 
 ### Build and install from a PC
 
-You need a Linux PC (x86-64) with Git and Podman, and Flatpak for the first build. On the Frame, Developer Mode and SSH.
+You need a Linux PC (x86-64) with Git and Podman, and Flatpak for the first build. The steps below copy it to the Frame over SSH, which Developer Mode turns on. Without SSH, copy `state/stage-frame/home/steamos/baiji` to `~/baiji` on the Frame yourself, then run `steamos-add-to-steam ~/baiji/bin/baiji-vr` in Konsole.
 
 #### Connect to the Frame
 

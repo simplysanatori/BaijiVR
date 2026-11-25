@@ -103,7 +103,7 @@ There is no download yet; testing on the Frame is in progress. It will come as:
   bash ~/Downloads/baijivr/install.sh
   ```
 
-Building it on a Linux PC needs Developer Mode on the Frame: [user guide](docs/USER_GUIDE.md#build-and-install-from-a-pc).
+Building it yourself: [user guide](docs/USER_GUIDE.md#build-and-install-from-a-pc).
 
 ## First run
 
