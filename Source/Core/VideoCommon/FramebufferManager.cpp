@@ -1506,9 +1506,7 @@ void FramebufferManager::DoLoadState(PointerWrap& p)
   if (has_saved_coverage)
     coverage_tex = g_texture_cache->DeserializeTexture(p);
 
-  // If the stereo mode is different in the save state, throw it away.
-  if (!color_tex || !depth_tex ||
-      color_tex->texture->GetLayers() != m_efb_color_texture->GetLayers())
+  if (!color_tex || !depth_tex)
   {
     WARN_LOG_FMT(VIDEO, "Failed to deserialize EFB contents. Clearing instead.");
     g_gfx->SetAndClearFramebuffer(m_efb_framebuffer.get(), {{0.0f, 0.0f, 0.0f, 0.0f}},
@@ -1527,7 +1525,8 @@ void FramebufferManager::DoLoadState(PointerWrap& p)
   const bool rescale = color_tex->texture->GetWidth() != m_efb_color_texture->GetWidth() ||
                        color_tex->texture->GetHeight() != m_efb_color_texture->GetHeight();
 
-  // Draw the deserialized textures over the EFB.
+  // Draw the deserialized textures over the EFB. A state of another stereo mode has another number of
+  // layers: sampling clamps to the ones there are, so a mono one is in both eyes.
   g_gfx->BeginUtilityDrawing();
   g_gfx->SetAndDiscardFramebuffer(m_efb_framebuffer.get());
   g_gfx->SetViewportAndScissor(m_efb_framebuffer->GetRect());
