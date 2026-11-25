@@ -54,6 +54,7 @@ Baiji's own changelog is in [its README](../README.upstream.md).
 
 - Fire Emblem: Path of Radiance: the freeze and white screen (confirmed on the Frame).
 - Immersive: every draw has its state bound (multiview passes left it undefined).
+- A freeze when a paused game saves a state, as in **Switch to Flat** (two causes).
 - A save state loaded in VR puts each eye's picture back in its own eye.
 - No black frame after switching the display or loading a state of the other display.
 - Switching between VR and Flat makes no autosave.

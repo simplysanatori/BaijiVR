@@ -61,7 +61,7 @@ No texture pack is hosted by this project.
 ## Fixes
 
 - **Fire Emblem: Path of Radiance**: the freeze and white screen, confirmed on the Frame
-- **Save states in VR**: both eyes come back right
+- **Save states**: no freeze while saving; both eyes come back right in VR
 - **Games that change video modes**: the screen keeps one shape
 - **Immersive**: drawing errors
 - **Wii Remote**: Shake works in VR

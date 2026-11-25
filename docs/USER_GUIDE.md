@@ -119,6 +119,7 @@ Every window fits the panel. **Window Scale** in the VR settings sets the text s
 
 - Fire Emblem: Path of Radiance: the freeze and the white screen. The GPU thread no longer races a FIFO reset or a stop of the reads, and the game's own GPU watchdog is off (US version). Confirmed on the Frame.
 - Immersive: every draw has its state bound. Vulkan's validation layer found draws without it.
+- A paused game no longer freezes while it saves a state.
 - A save state loaded in VR puts each eye's picture back in its own eye, and there is no black frame after switching the display.
 - The screen keeps one shape when a game changes video modes.
 - No crash on exit after a VR game.
