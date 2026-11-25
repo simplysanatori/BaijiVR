@@ -694,7 +694,8 @@ std::optional<TextureCacheBase::TexPoolEntry> TextureCacheBase::DeserializeTextu
         return tex;
       }
 
-      tex->texture->Load(level, level_width, level_height, level_width, &texture_data[start], size);
+      tex->texture->Load(level, level_width, level_height, level_width, &texture_data[start], size,
+                         layer);
       start += size;
     }
   }
