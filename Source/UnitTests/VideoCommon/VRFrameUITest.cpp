@@ -549,6 +549,50 @@ TEST(VRFrameUI, EveryRowHasItsPlaceAndWords)
   EXPECT_EQ(seen.size(), NUM_SETTINGS);
 }
 
+TEST(VRFrameUI, AntiAliasingIsWhatTheGPUCanDo)
+{
+  SettingState s;
+  s.values.aa_modes = {1, 2, 4};
+  std::vector<std::string> labels;
+  for (const SettingOption& option : GetOptions(GetSettingRow(SettingId::AntiAliasing), s))
+    labels.push_back(option.label);
+  EXPECT_EQ(labels, (std::vector<std::string>{"None", "2x", "4x"}));
+}
+
+TEST(VRFrameUI, SliderWithASwitch)
+{
+  MenuState s;
+  s.tab = MenuTab::Settings;
+  s.section = MenuSection::Immersive;
+  s.settings.immersive = true;
+  for (const bool on : {false, true})
+  {
+    s.settings.Set(SettingId::LeanBackOn, on ? 1.0f : 0.0f);
+    const auto widgets = VrMenu::Layout(s);
+    const MenuWidget* const slider = FindSetting(widgets, SettingId::LeanBack);
+    const MenuWidget* const toggle = FindSetting(widgets, SettingId::LeanBackOn);
+    ASSERT_TRUE(slider && toggle);
+    EXPECT_EQ(slider->disabled, !on);
+    EXPECT_FALSE(toggle->disabled);
+    EXPECT_EQ(toggle->active, on);
+    EXPECT_EQ(slider->rect.Cy(), toggle->rect.Cy());
+    if (!on)
+    {
+      EXPECT_EQ(slider->tooltip, "Turn on Lean Back to change it.");
+    }
+  }
+}
+
+TEST(VRFrameUI, WorldScaleSlider)
+{
+  const SettingRow& row = GetSettingRow(SettingId::WorldScale);
+  EXPECT_NEAR(SliderValue(row, 0.0f), 0.1f, 1e-4f);
+  EXPECT_NEAR(SliderValue(row, 1.0f), 2000.0f, 1.0f);
+  EXPECT_NEAR(SliderValue(row, SliderFraction(row, 100.0f)), 100.0f, 0.1f);
+  EXPECT_EQ(FormatValue(row, 120.0f), "120");
+  EXPECT_EQ(FormatValue(row, 1.3f), "1.3");
+}
+
 TEST(VRFrameUI, SliderWithStops)
 {
   const SettingRow& every = GetSettingRow(SettingId::AutosaveEvery);

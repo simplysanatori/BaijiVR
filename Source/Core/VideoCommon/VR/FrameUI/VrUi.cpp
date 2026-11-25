@@ -707,9 +707,10 @@ void VrUi::CloseMenu()
 
 void VrUi::UpdatePause()
 {
-  // The Screen tab's settings show on the running game.
-  const bool wanted = m_menu_open && m_menu.tab != MenuTab::Screen &&
-                      m_frame.time_ns >= m_pause_after_ns;
+  // These settings show on the running game.
+  const bool shown = m_menu.tab == MenuTab::Screen ||
+                     (m_menu.tab == MenuTab::Settings && m_menu.section != MenuSection::General);
+  const bool wanted = m_menu_open && !shown && m_frame.time_ns >= m_pause_after_ns;
   if (wanted == m_pause_wanted)
     return;
   m_pause_wanted = wanted;

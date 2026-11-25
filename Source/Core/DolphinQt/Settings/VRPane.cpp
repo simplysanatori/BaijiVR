@@ -153,9 +153,9 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
        {tr("Autosave"), tr("Saves a state while you play and when you close the game. Load it in "
                            "the VR menu.")}},
       {Config::MAIN_AUTOSAVE_MINUTES.GetLocation(),
-       {tr("Autosave Every"), tr("Minutes of play between two autosaves.")}},
+       {tr("Every"), tr("Minutes of play between two autosaves.")}},
       {Config::MAIN_AUTOSAVE_KEEP.GetLocation(),
-       {tr("Autosaves to Keep"), tr("Older ones are deleted.")}},
+       {tr("Keep"), tr("Older ones are deleted.")}},
 
       // Advanced
       {Config::GFX_VR_REFERENCE_SPACE_MODE.GetLocation(),
@@ -178,8 +178,8 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
       // Performance
       {Config::GFX_VR_DYNAMIC_RESOLUTION.GetLocation(),
        {tr("Dynamic Resolution"),
-        tr("Goes up to two steps over the Internal Resolution setting while the GPU has room. "
-           "Stereoscopic 3D only.")}},
+        tr("Stereoscopic 3D: up to two steps over Internal Resolution while the GPU has room. "
+           "Immersive: steps down while the GPU is the limit.")}},
       {Config::GFX_VR_PIN_EMULATION_CORES.GetLocation(),
        {tr("Pin Emulation Threads"),
         tr("Keeps the main emulation threads on the fastest CPU cores. For the next game "
@@ -648,7 +648,7 @@ QVBoxLayout* VRSettingsPage::AddAdvanced()
   AddBool(shaders, ALL, Config::GFX_VR_LOAD_CUSTOM_SHADERS);
 
   auto* const performance = AddGroup(tr("Performance"), TWO_EYES, box_layout);
-  AddBool(performance, Screen3D, Config::GFX_VR_DYNAMIC_RESOLUTION);
+  AddBool(performance, TWO_EYES, Config::GFX_VR_DYNAMIC_RESOLUTION);
   if (!m_layer)  // not per game: these are read once, or are a log
   {
     AddBool(performance, TWO_EYES, Config::GFX_VR_PIN_EMULATION_CORES);
@@ -744,7 +744,7 @@ void VRPane::AddMenuAndPointers()
 
 void VRPane::AddAutosave()
 {
-  auto* const group_layout = m_page->AddGroup(tr("Autosave"), VRSettingsPage::ALL);
+  auto* const group_layout = m_page->AddGroup(tr("Saves"), VRSettingsPage::ALL);
   auto* const enabled =
       m_page->AddBool(group_layout, VRSettingsPage::ALL, Config::MAIN_AUTOSAVE_ENABLED);
 

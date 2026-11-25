@@ -62,6 +62,31 @@ std::string FormatMinutes(float value)
   return fmt::format("{:.0f} min", value);
 }
 
+std::string FormatPercent(float value)
+{
+  return fmt::format("{:.0f}%", value);
+}
+
+std::string FormatDegrees(float value)
+{
+  return fmt::format("{:.1f}\u00b0", value);
+}
+
+std::string FormatWorldScale(float value)
+{
+  return fmt::format("{:.4g}", value);
+}
+
+std::string FormatHudDepth(float value)
+{
+  return value <= 0.001f ? "Off" : fmt::format("{:.2f} m", value);
+}
+
+std::string FormatGamma(float value)
+{
+  return value <= 1.01f ? "Off" : fmt::format("{:.1f}", value);
+}
+
 std::string FormatDepth(float value)
 {
   if (value < 0.5f)
@@ -82,6 +107,17 @@ SettingRow MakeRow(SettingId id, MenuSection section, RowKind kind, std::string 
   row.tooltip = std::move(tooltip);
   return row;
 }
+
+// As on the settings page: on Linux, Immersive's picture is always opaque.
+#ifdef _WIN32
+constexpr RowDisplay PASSTHROUGH_DISPLAY = RowDisplay::Any;
+#else
+constexpr RowDisplay PASSTHROUGH_DISPLAY = RowDisplay::Screen;
+#endif
+
+// Under the Saves header, as Azahar for Frame's.
+constexpr const char* AUTOSAVE_EVERY = "Every";
+constexpr const char* AUTOSAVE_KEEP = "Keep";
 
 SettingRow MakeHeader(MenuSection section, std::string label)
 {
@@ -153,6 +189,9 @@ std::vector<SettingRow> MakeScreenRows()
       With(MakeRow(LockScreen, SECTION, RowKind::Switch, "Lock Screen",
                    "Keeps the grips from moving the screen."),
            SettingStore::Global, RowDisplay::Screen),
+      With(MakeRow(VirtualScreen, SECTION, RowKind::Switch, "2D Parts on a Screen",
+                   "Puts menus, videos and the HUD on a screen in front of you."),
+           SettingStore::VRFile, RowDisplay::Immersive),
   };
 }
 
@@ -160,11 +199,14 @@ std::vector<SettingRow> MakeGeneralRows()
 {
   using enum SettingId;
   constexpr MenuSection SECTION = MenuSection::General;
-  SettingRow every = MakeSlider(AutosaveEvery, SECTION, "Autosave Every",
+  SettingRow every = MakeSlider(AutosaveEvery, SECTION, AUTOSAVE_EVERY,
                                 "Minutes of play between two autosaves.", {}, FormatMinutes);
   for (const int minutes : {1, 2, 5, 10, 15})
     every.options.push_back({fmt::format("{}", minutes), ToNumber(minutes)});
   return {
+      With(MakeRow(Passthrough, SECTION, RowKind::Switch, "Passthrough",
+                   "Shows your room around the game, if the headset can."),
+           SettingStore::VRFile, PASSTHROUGH_DISPLAY),
       MakeRow(PointerBeams, SECTION, RowKind::Switch, "Pointer Beams",
               "Shows where the controllers point during a game. The menu always shows them."),
       MakeRow(Messages, SECTION, RowKind::Switch, "Messages",
@@ -174,12 +216,21 @@ std::vector<SettingRow> MakeGeneralRows()
                       "shows one for each frame of the game.",
                       {{"Every Refresh", 1.0f}, {"Match Game", 0.0f}}),
            SettingStore::VRFile),
+      With(MakeChoice(RefreshRate, SECTION, RowKind::Dropdown, "Refresh Rate",
+                      "The headset's refresh rate. Auto leaves it as it is. A multiple of the "
+                      "game's frame rate is smoothest.",
+                      {{"Auto", ToNumber(Config::GFX_VR_REQUESTED_REFRESH_RATE_AUTO)},
+                       {"60 Hz", ToNumber(Config::GFX_VR_REQUESTED_REFRESH_RATE_60)},
+                       {"72 Hz", ToNumber(Config::GFX_VR_REQUESTED_REFRESH_RATE_72)},
+                       {"90 Hz", ToNumber(Config::GFX_VR_REQUESTED_REFRESH_RATE_90)},
+                       {"120 Hz", ToNumber(Config::GFX_VR_REQUESTED_REFRESH_RATE_120)}}),
+           SettingStore::VRFile, RowDisplay::Any, Applies::NextGame),
       MakeHeader(SECTION, "Saves"),
       With(MakeRow(Autosave, SECTION, RowKind::Switch, "Autosave",
                    "Saves a state while you play and when you close the game."),
            SettingStore::LocalGame),
       With(std::move(every), SettingStore::LocalGame),
-      With(MakeSlider(AutosaveKeep, SECTION, "Autosaves to Keep", "Older ones are deleted.",
+      With(MakeSlider(AutosaveKeep, SECTION, AUTOSAVE_KEEP, "Older ones are deleted.",
                       {1.0f, 10.0f, 1.0f}, FormatNumber),
            SettingStore::LocalGame),
   };
@@ -202,7 +253,162 @@ std::vector<SettingRow> MakeGraphicsRows()
                       "How sharp the game is drawn. Higher needs more of the GPU.",
                       {{"Auto", 0.0f}, {"1x", 1.0f}, {"2x", 2.0f}, {"3x", 3.0f}, {"4x", 4.0f}}),
            SettingStore::LocalGame),
+      With(MakeRow(DynamicResolution, SECTION, RowKind::Switch, "Dynamic Resolution",
+                   "Stereoscopic 3D: up to two steps over Internal Resolution while the GPU has "
+                   "room. Immersive: steps down while the GPU is the limit."),
+           SettingStore::VRFile),
+      With(MakeChoice(TextureFiltering, SECTION, RowKind::Dropdown, "Texture Filtering",
+                      "Default is the game's own. Nearest shows pixels, Linear smooths.",
+                      {{"Default", ToNumber(TextureFilteringMode::Default)},
+                       {"Nearest", ToNumber(TextureFilteringMode::Nearest)},
+                       {"Linear", ToNumber(TextureFilteringMode::Linear)}}),
+           SettingStore::LocalGame),
+      With(MakeChoice(AnisotropicFiltering, SECTION, RowKind::Dropdown, "Anisotropic Filtering",
+                      "Sharpens textures seen at a slant.",
+                      {{"Default", ToNumber(AnisotropicFilteringMode::Default)},
+                       {"1x", ToNumber(AnisotropicFilteringMode::Force1x)},
+                       {"2x", ToNumber(AnisotropicFilteringMode::Force2x)},
+                       {"4x", ToNumber(AnisotropicFilteringMode::Force4x)},
+                       {"8x", ToNumber(AnisotropicFilteringMode::Force8x)},
+                       {"16x", ToNumber(AnisotropicFilteringMode::Force16x)}}),
+           SettingStore::LocalGame),
+      With(MakeChoice(AntiAliasing, SECTION, RowKind::Dropdown, "Anti-Aliasing",
+                      "Smooths edges. Needs more of the GPU.",
+                      {{"None", 1.0f}, {"2x", 2.0f}, {"4x", 4.0f}, {"8x", 8.0f}}),
+           SettingStore::LocalGame),
+      With(MakeChoice(ShaderCompilation, SECTION, RowKind::Dropdown, "Shader Compilation",
+                      "Ubershaders stutter less. Exclusive and Hybrid need more of the GPU.",
+                      {{"Specialized", ToNumber(ShaderCompilationMode::Synchronous)},
+                       {"Exclusive Ubershaders",
+                        ToNumber(ShaderCompilationMode::SynchronousUberShaders)},
+                       {"Hybrid Ubershaders",
+                        ToNumber(ShaderCompilationMode::AsynchronousUberShaders)},
+                       {"Skip Drawing",
+                        ToNumber(ShaderCompilationMode::AsynchronousSkipRendering)}}),
+           SettingStore::LocalGame),
+      With(MakeRow(WidescreenHack, SECTION, RowKind::Switch, "Widescreen Hack",
+                   "Shows more at the sides in games without widescreen. Objects can be missing "
+                   "there."),
+           SettingStore::LocalGame),
+      With(MakeRow(SkipEFBAccess, SECTION, RowKind::Switch, "Skip EFB Access from CPU",
+                   "Faster. Some effects and game logic need it off."),
+           SettingStore::LocalGame),
+      With(MakeRow(EFBCopiesToTexture, SECTION, RowKind::Switch, "Store EFB Copies to Texture Only",
+                   "Faster. Some effects need it off."),
+           SettingStore::LocalGame),
+      With(MakeRow(XFBCopiesToTexture, SECTION, RowKind::Switch, "Store XFB Copies to Texture Only",
+                   "Faster. Some videos and loading screens need it off."),
+           SettingStore::LocalGame),
+      With(MakeChoice(FoveatedRendering, SECTION, RowKind::Dropdown, "Foveated Rendering",
+                      "Less detail at the edges of the view, for speed. Has to be off to change "
+                      "Display in the headset.",
+                      {{"Off", 0.0f}, {"Low", 1.0f}, {"Medium", 2.0f}, {"High", 3.0f}}),
+           SettingStore::VRFile, RowDisplay::Immersive, Applies::NextGame),
+      With(MakeSlider(Gamma, SECTION, "Gamma", "Darkens a picture that is too bright.",
+                      {Config::GFX_VR_GAMMA_MIN, Config::GFX_VR_GAMMA_MAX,
+                       Config::GFX_VR_GAMMA_STEP},
+                      FormatGamma),
+           SettingStore::VRFile),
+      MakeHeader(SECTION, "Performance"),
+      With(MakeRow(NonBlockingEFBCopies, SECTION, RowKind::Switch, "Non-Blocking EFB Copies",
+                   "Does not wait for the GPU when the game copies the picture to memory."),
+           SettingStore::VRFile),
+      With(MakeRow(NonBlockingPerfQueries, SECTION, RowKind::Switch, "Non-Blocking Perf Queries",
+                   "Does not wait for the GPU to answer the game's questions about what was "
+                   "drawn."),
+           SettingStore::VRFile),
+      With(MakeRow(SkipOverwrittenClears, SECTION, RowKind::Switch, "Skip Overwritten Clears",
+                   "Leaves out clears of the picture that are drawn over anyway."),
+           SettingStore::VRFile, RowDisplay::Immersive),
+      With(MakeRow(PinEmulationThreads, SECTION, RowKind::Switch, "Pin Emulation Threads",
+                   "Keeps the main emulation threads on the fastest CPU cores."),
+           SettingStore::Global, RowDisplay::Any, Applies::NextGame),
+      With(MakeRow(PerformanceHint, SECTION, RowKind::Switch, "Performance Hint",
+                   "Asks the VR runtime for high CPU and GPU speed, if it offers that."),
+           SettingStore::Global, RowDisplay::Any, Applies::NextGame),
+      MakeRow(PerformanceLog, SECTION, RowKind::Switch, "Performance Log",
+              "Writes a line a second to perf.csv in the Logs folder."),
   };
+}
+
+// A slider with its switch in front of it in the table and at the end of its row in the menu.
+void AddOptionalSlider(std::vector<SettingRow>* rows, SettingId on, SettingRow slider,
+                       std::string tooltip)
+{
+  SettingRow enable =
+      MakeRow(on, slider.section, RowKind::Switch, slider.label, std::move(tooltip));
+  enable.store = slider.store;
+  enable.display = slider.display;
+  enable.in_next_row = true;
+  slider.turned_on_by = on;
+  rows->push_back(std::move(enable));
+  rows->push_back(std::move(slider));
+}
+
+std::vector<SettingRow> MakeImmersiveRows()
+{
+  using enum SettingId;
+  constexpr MenuSection SECTION = MenuSection::Immersive;
+  constexpr RowDisplay DISPLAY = RowDisplay::Immersive;
+  std::vector<SettingRow> rows;
+  SettingRow world = With(
+      MakeSlider(WorldScale, SECTION, "World Scale",
+                 "Game units per meter. Higher makes the world smaller, lower makes it bigger.",
+                 {Config::GFX_VR_UNITS_PER_METER_MIN, Config::GFX_VR_UNITS_PER_METER_MAX,
+                  Config::GFX_VR_UNITS_PER_METER_STEP},
+                 FormatWorldScale),
+      SettingStore::VRFile, DISPLAY);
+  world.exponential = true;
+  rows.push_back(std::move(world));
+  rows.push_back(
+      With(MakeSlider(Strength3D, SECTION, "3D Strength",
+                      "How deep the world looks. 100% is natural. Lower is easier on the eyes.",
+                      {Config::GFX_VR_STEREO_SEPARATION_MIN, Config::GFX_VR_STEREO_SEPARATION_MAX,
+                       Config::GFX_VR_STEREO_SEPARATION_STEP},
+                      FormatPercent),
+           SettingStore::VRFile, DISPLAY));
+  AddOptionalSlider(
+      &rows, LeanBackOn,
+      With(MakeSlider(LeanBack, SECTION, "Lean Back", "Above 0 leans back, below 0 leans forward.",
+                      {Config::GFX_VR_LEAN_BACK_ANGLE_MIN, Config::GFX_VR_LEAN_BACK_ANGLE_MAX,
+                       Config::GFX_VR_LEAN_BACK_ANGLE_STEP},
+                      FormatDegrees),
+           SettingStore::VRFile, DISPLAY),
+      "Tilts the camera, for games with a tilted view.");
+  AddOptionalSlider(
+      &rows, CameraForwardOn,
+      With(MakeSlider(CameraForward, SECTION, "Camera Forward",
+                      "Above 0 is forward, below 0 is back.",
+                      {Config::GFX_VR_CAMERA_FORWARD_MIN, Config::GFX_VR_CAMERA_FORWARD_MAX,
+                       Config::GFX_VR_CAMERA_FORWARD_STEP},
+                      FormatMeters),
+           SettingStore::VRFile, DISPLAY),
+      "Moves the camera forward or back.");
+  AddOptionalSlider(
+      &rows, CameraHeightOn,
+      With(MakeSlider(CameraHeight, SECTION, "Camera Height", "Above 0 is up, below 0 is down.",
+                      {Config::GFX_VR_CAMERA_HEIGHT_MIN, Config::GFX_VR_CAMERA_HEIGHT_MAX,
+                       Config::GFX_VR_CAMERA_HEIGHT_STEP},
+                      FormatMeters),
+           SettingStore::VRFile, DISPLAY),
+      "Moves the camera up or down.");
+  rows.push_back(With(MakeChoice(HeadTracking, SECTION, RowKind::Dropdown, "Head Tracking",
+                                 "Which head movements move the camera.",
+                                 {{"Turn and Move", ToNumber(OpenXRTrackingMode::Full6DoF)},
+                                  {"Turn Only", ToNumber(OpenXRTrackingMode::Rotation3DoF)},
+                                  {"Off", ToNumber(OpenXRTrackingMode::None)}}),
+                      SettingStore::VRFile, DISPLAY));
+  rows.push_back(With(
+      MakeSlider(HudDepth, SECTION, "HUD Depth",
+                 "Spreads the layers of the HUD apart in depth. Flat menus and videos stay flat.",
+                 {Config::GFX_VR_HUD_THICKNESS_MIN, Config::GFX_VR_HUD_THICKNESS_MAX,
+                  Config::GFX_VR_HUD_THICKNESS_STEP},
+                 FormatHudDepth),
+      SettingStore::VRFile, DISPLAY));
+  rows.push_back(With(MakeRow(RemoveBars, SECTION, RowKind::Switch, "Remove Cinematic Bars",
+                              "Removes the black bars at the top and bottom."),
+                      SettingStore::VRFile, DISPLAY));
+  return rows;
 }
 
 // ---- The config behind them ----
@@ -223,6 +429,16 @@ Binding Bind(SettingId id, const Config::Info<T>& info)
           [&info](float value) { Config::SetBaseOrCurrent(info, FromNumber<T>(value)); }};
 }
 
+// On where the setting is off.
+Binding BindInverted(SettingId id, const Config::Info<bool>& info)
+{
+  const auto invert = [](float value) { return value != 0.0f ? 0.0f : 1.0f; };
+  const Binding plain = Bind(id, info);
+  return {id, [plain, invert] { return invert(plain.read()); },
+          [plain, invert] { return invert(plain.read_base()); },
+          [plain, invert](float value) { plain.write(invert(value)); }};
+}
+
 const std::vector<Binding>& GetBindings()
 {
   static const std::vector<Binding> bindings{
@@ -231,15 +447,46 @@ const std::vector<Binding>& GetBindings()
       Bind(SettingId::Size, Config::GFX_VR_SCREEN_SIZE),
       Bind(SettingId::AspectRatio, Config::GFX_ASPECT_RATIO),
       Bind(SettingId::LockScreen, Config::GFX_VR_LOCK_SCREEN),
+      Bind(SettingId::VirtualScreen, Config::GFX_VR_VIRTUAL_SCREEN),
+      Bind(SettingId::Passthrough, Config::GFX_VR_PASSTHROUGH),
       Bind(SettingId::PointerBeams, Config::GFX_VR_POINTER_BEAMS),
       Bind(SettingId::Messages, Config::GFX_VR_TOASTS),
       Bind(SettingId::FramePacing, Config::GFX_VR_EAGER_HEARTBEAT),
+      Bind(SettingId::RefreshRate, Config::GFX_VR_REQUESTED_REFRESH_RATE),
       Bind(SettingId::Autosave, Config::MAIN_AUTOSAVE_ENABLED),
       Bind(SettingId::AutosaveEvery, Config::MAIN_AUTOSAVE_MINUTES),
       Bind(SettingId::AutosaveKeep, Config::MAIN_AUTOSAVE_KEEP),
       Bind(SettingId::ScreenDepth, Config::GFX_VR_SCREEN_DEPTH),
       Bind(SettingId::Convergence, Config::GFX_STEREO_CONVERGENCE),
       Bind(SettingId::InternalResolution, Config::GFX_EFB_SCALE),
+      Bind(SettingId::DynamicResolution, Config::GFX_VR_DYNAMIC_RESOLUTION),
+      Bind(SettingId::TextureFiltering, Config::GFX_ENHANCE_FORCE_TEXTURE_FILTERING),
+      Bind(SettingId::AnisotropicFiltering, Config::GFX_ENHANCE_MAX_ANISOTROPY),
+      Bind(SettingId::AntiAliasing, Config::GFX_MSAA),
+      Bind(SettingId::ShaderCompilation, Config::GFX_SHADER_COMPILATION_MODE),
+      Bind(SettingId::WidescreenHack, Config::GFX_WIDESCREEN_HACK),
+      BindInverted(SettingId::SkipEFBAccess, Config::GFX_HACK_EFB_ACCESS_ENABLE),
+      Bind(SettingId::EFBCopiesToTexture, Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM),
+      Bind(SettingId::XFBCopiesToTexture, Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM),
+      Bind(SettingId::FoveatedRendering, Config::GFX_VR_FOVEATION_LEVEL),
+      Bind(SettingId::Gamma, Config::GFX_VR_GAMMA),
+      Bind(SettingId::NonBlockingEFBCopies, Config::GFX_VR_ASYNC_EFB_COPIES),
+      Bind(SettingId::NonBlockingPerfQueries, Config::GFX_VR_NON_BLOCKING_PERF_QUERIES),
+      Bind(SettingId::SkipOverwrittenClears, Config::GFX_VR_SKIP_OVERWRITTEN_CLEARS),
+      Bind(SettingId::PinEmulationThreads, Config::GFX_VR_PIN_EMULATION_CORES),
+      Bind(SettingId::PerformanceHint, Config::GFX_VR_PERFORMANCE_HINT),
+      Bind(SettingId::PerformanceLog, Config::GFX_VR_PERF_LOG),
+      Bind(SettingId::WorldScale, Config::GFX_VR_UNITS_PER_METER),
+      Bind(SettingId::Strength3D, Config::GFX_VR_STEREO_SEPARATION),
+      Bind(SettingId::LeanBackOn, Config::GFX_VR_ENABLE_LEAN_BACK_ANGLE),
+      Bind(SettingId::LeanBack, Config::GFX_VR_LEAN_BACK_ANGLE),
+      Bind(SettingId::CameraForwardOn, Config::GFX_VR_ENABLE_CAMERA_FORWARD),
+      Bind(SettingId::CameraForward, Config::GFX_VR_CAMERA_FORWARD),
+      Bind(SettingId::CameraHeightOn, Config::GFX_VR_ENABLE_CAMERA_HEIGHT),
+      Bind(SettingId::CameraHeight, Config::GFX_VR_CAMERA_HEIGHT),
+      Bind(SettingId::HeadTracking, Config::GFX_VR_TRACKING_MODE),
+      Bind(SettingId::HudDepth, Config::GFX_VR_HUD_THICKNESS),
+      Bind(SettingId::RemoveBars, Config::GFX_VR_REMOVE_BARS),
   };
   return bindings;
 }
@@ -249,7 +496,8 @@ const std::vector<SettingRow>& GetSettingRows()
 {
   static const std::vector<SettingRow> rows = [] {
     std::vector<SettingRow> all;
-    for (const auto& part : {MakeScreenRows(), MakeGeneralRows(), MakeGraphicsRows()})
+    for (const auto& part :
+         {MakeScreenRows(), MakeGeneralRows(), MakeGraphicsRows(), MakeImmersiveRows()})
       all.insert(all.end(), part.begin(), part.end());
     return all;
   }();
@@ -316,7 +564,18 @@ std::string ExplainLock(Lock lock, const SettingRow& row)
 
 std::vector<SettingOption> GetOptions(const SettingRow& row, const SettingState& state)
 {
-  return row.options;
+  if (row.id != SettingId::AntiAliasing)
+    return row.options;
+  std::vector<SettingOption> options;
+  for (const SettingOption& option : row.options)
+  {
+    if (option.value <= 1.0f ||
+        std::ranges::contains(state.values.aa_modes, static_cast<u32>(option.value)))
+    {
+      options.push_back(option);
+    }
+  }
+  return options;
 }
 
 int FindOption(const std::vector<SettingOption>& options, float value)
