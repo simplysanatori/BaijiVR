@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <ctime>
 #include <mutex>
 #include <utility>
 #include <variant>
@@ -26,6 +27,7 @@
 #include "Common/Logging/Log.h"
 
 #include "Core/AchievementManager.h"
+#include "Core/Autosave.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
@@ -113,12 +115,23 @@ bool IsOpenXRAtHand()
 
 std::string GetStatePath(const std::string& game_id)
 {
-  return fmt::format("{}{}.mode-switch.sav", File::GetUserPath(D_STATESAVES_IDX), game_id);
+  return ModeSwitch::GetStatePath(File::GetUserPath(D_STATESAVES_IDX), game_id);
 }
 
 std::string GetFileName(const std::string& path)
 {
   return path.substr(path.find_last_of('/') + 1);
+}
+
+// Not while a switch needs one.
+void CleanStates()
+{
+  for (const std::string& path :
+       ModeSwitch::GetStatesToDelete(File::GetUserPath(D_STATESAVES_IDX), std::time(nullptr)))
+  {
+    INFO_LOG_FMT(CORE, "Switch: deleting the kept state {}", GetFileName(path));
+    File::Delete(path);
+  }
 }
 
 s64 Now()
@@ -400,7 +413,8 @@ bool VRModeSwitch::SaveState()
   File::CreateFullPath(m_state_path);
   // Not moved to the "undo save state" file. One that was kept is the player's.
   if (File::Exists(m_state_path) &&
-      !File::Rename(m_state_path, m_state_path.substr(0, m_state_path.size() - 4) + ".old.sav"))
+      !File::Rename(m_state_path, ModeSwitch::GetOldStatePath(
+                                      File::GetUserPath(D_STATESAVES_IDX), m_recipe.game_id)))
   {
     return false;  // else it would pass for this one
   }
@@ -477,6 +491,8 @@ void VRModeSwitch::Request(Mode mode)
   }
   m_phase = Phase::Stopping;
   UpdateButton();
+  // The game is saved. A few switches are not to push out the autosaves.
+  Autosave::End();
   m_actions.stop();
 }
 
@@ -531,6 +547,8 @@ void VRModeSwitch::OnRunning(u64 ticks, bool in_vr)
 
   if (m_phase != Phase::Booting)
   {
+    if (!IsSwitching())
+      CleanStates();
     if (const std::string path = GetStatePath(m_recipe.game_id); File::Exists(path))
     {
       OSD::AddMessage(fmt::format("A switch did not end. The game's state from before it is {}",
@@ -571,6 +589,7 @@ void VRModeSwitch::Fail(const std::string& message)
 {
   m_phase = Phase::Idle;
   UpdateButton();
+  CleanStates();
   const std::string text =
       File::Exists(m_state_path) ?
           fmt::format("{} It is kept as {}", message, GetFileName(m_state_path)) :

@@ -72,6 +72,8 @@ void OnField(Core::System& system);
 bool Request(Core::System& system, Reason reason);
 // Host thread, as the game is about to stop: the autosave of a clean stop, and the end of the timer.
 void BeforeStop(Core::System& system);
+// Host thread. The paused game was saved elsewhere just now and stops: BeforeStop makes no autosave.
+void End();
 
 // A game's autosaves, newest first: the menu's and the newest few.
 std::vector<Entry> List(const std::string& game_id);

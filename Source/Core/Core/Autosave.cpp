@@ -227,6 +227,11 @@ bool Request(Core::System& system, Reason reason)
 void BeforeStop(Core::System& system)
 {
   Request(system, Reason::Quit);
+  End();
+}
+
+void End()
+{
   std::lock_guard lock(s_mutex);
   s_scheduler.Stop();
 }

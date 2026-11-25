@@ -9,13 +9,20 @@
 
 #pragma once
 
+#include <chrono>
+#include <filesystem>
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
+#include <vector>
 
 #include "Common/CommonTypes.h"
+#include "Common/FileUtil.h"
 #include "Common/IOFile.h"
+#include "Common/StringUtil.h"
 #include "Core/State.h"
 #include "VideoCommon/VideoConfig.h"
 
@@ -135,6 +142,57 @@ inline bool IsWholeState(const std::string& path)
     return false;
   }
   return file.Tell() + base.payload_offset + base.uncompressed_size == file.GetSize();
+}
+
+// The state of a switch, in StateSaves. One whose switch did not end is kept; the next switch moves it
+// to OLD_STATE_SUFFIX. A game keeps one, for KEPT_SECONDS.
+inline constexpr std::string_view STATE_SUFFIX = ".mode-switch.sav";
+inline constexpr std::string_view OLD_STATE_SUFFIX = ".mode-switch.old.sav";
+inline constexpr s64 KEPT_SECONDS = 14 * 24 * 60 * 60;
+
+inline std::string GetStatePath(const std::string& directory, const std::string& game_id)
+{
+  return directory + game_id + std::string(STATE_SUFFIX);
+}
+
+inline std::string GetOldStatePath(const std::string& directory, const std::string& game_id)
+{
+  return directory + game_id + std::string(OLD_STATE_SUFFIX);
+}
+
+// The kept states that are too many or too old, of all games. Not while a switch needs one. `now`: Unix
+// seconds.
+inline std::vector<std::string> GetStatesToDelete(const std::string& directory, s64 now)
+{
+  std::vector<std::string> paths;
+  std::error_code error;
+  for (const auto& file : std::filesystem::directory_iterator(StringToPath(directory), error))
+  {
+    const std::string name = PathToString(file.path().filename());
+    const bool old = name.ends_with(OLD_STATE_SUFFIX);
+    const std::string_view suffix = old ? OLD_STATE_SUFFIX : STATE_SUFFIX;
+    if (!name.ends_with(suffix) || name.size() == suffix.size() ||
+        !file.is_regular_file(error) || error)
+    {
+      continue;
+    }
+    const auto written = file.last_write_time(error);
+    if (error)
+      continue;
+    const s64 time = std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::file_clock::to_sys(written).time_since_epoch())
+                         .count();
+
+    // Of two, the newer one stays, unless it was not written to its end.
+    const std::string game_id = name.substr(0, name.size() - suffix.size());
+    const std::string state = GetStatePath(directory, game_id);
+    const bool other_stays =
+        old ? File::Exists(state) && IsWholeState(state) :
+              File::Exists(GetOldStatePath(directory, game_id)) && !IsWholeState(state);
+    if (other_stays || now - time > KEPT_SECONDS)
+      paths.push_back(directory + name);
+  }
+  return paths;
 }
 
 // Menu held 3 s in Flat asks Switch to VR? Counts only a press that starts after Menu was seen up,
