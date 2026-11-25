@@ -74,11 +74,56 @@ They are in the **Mods** tab of the VR menu, and on the **Mods** page of a game'
 
 ## The VR menu
 
-- **Main**: Continue, Quick Save, Quick Load, Save State, Load State, Screenshot, Reset View, Fast Forward, Restart, Close Game
-- **Screen**: Distance, Size, 3D Depth, Convergence, Aspect Ratio, Lock Screen, Reset Screen
-- **Controls**: your controller with the game's buttons, and the shortcuts
-- **Mods**: Mods and Cheats, and Textures
-- **Settings**: Internal Resolution, Frame Pacing, Autosave, Pointer Beams, Messages and more
+Hold **Menu** for 1 second. The rows of each tab are in [CONTROLS.md](CONTROLS.md#the-vr-menu).
+
+- **Main**: Continue, Quick Save, Quick Load, Save State, Load State, Screenshot, Restart, Fast Forward (**Wii Home** in a Wii game), Close Game, **Switch to Flat**
+- **Position**: Reset Screen or Reset View, Display, Distance, Size, **Screen Curve**, Aspect Ratio, Lock Screen, **2D Parts on a Screen**
+- **Stats**: **Show Stats** and **Stats Position**
+- **Controls**: your controller with the game's buttons, **Edit Controls** and **Shortcuts**
+- **Mods**: **Mods and Cheats** and **Textures**
+- **Settings**: **General**, **Graphics** and **Immersive**: Internal Resolution, Frame Pacing, Autosave, Pointer Beams, Messages, **World Scale** and more
+
+**Global** and **Per-Game** at the top right say whose settings the page shows: every game's, or only this game's. The settings and the saved profiles are the same as in the window. The three dots have **Use Global Values for All**.
+
+### Position and 3D
+
+- **3D Depth** is a percentage of natural 3D. It follows your IPD and the screen's size; at 100% distant scenery sits at infinity.
+- **Screen Curve** goes from Off to 90° in steps of 15°. It is greyed where the VR runtime cannot curve a screen.
+- **World Scale** (Immersive): higher makes the world smaller.
+
+### Immersive resolution
+
+Immersive draws two steps over **Internal Resolution**, up to the size that covers the eye image. **Dynamic Resolution** (experimental) steps it down to the setting while the GPU is the limit.
+
+### Stats
+
+**Show Stats** keeps the numbers in view. **Stats Position** is **In Front**, a window you can move with a grip, or **On Wrist**, on the left controller while the back of that hand faces you. **Internal Resolution** shows the one in use. With **Dynamic Resolution** on, the row lights for a few seconds when it changes, and **Last Change** says from what to what. The **Stats** tab shows the last second with **Show Stats** off, too.
+
+### Edit Controls
+
+The **Controls** tab has a chip for each controller of a Wii game: **GameCube**, **Wii Remote**, **+ Nunchuk**, **Sideways** and **Classic**, each with its own mapping. Well-known games start with the right one and a message says which. **Edit Controls** shows the drawing: choose a control, then press the Frame button for it. **Profile** lists the mapping window's saved profiles. With **Per-Game**, the game gets its own copy. Face buttons are by position: the Frame's **B** is A, **A** is B, **Y** is X and **X** is Y. Tables are in [CONTROLS.md](CONTROLS.md#editing-the-controls).
+
+### Messages
+
+Short messages show in the headset. In Stereoscopic 3D the answer to a press is in the screen's corner. Warnings and internal errors show there, not in a dialog.
+
+## Save states
+
+**Quick Save** and **Quick Load** are on **View** and a bumper. **Save State** and **Load State** in the VR menu use slots with pictures. [Autosave](#autosave) keeps the last few.
+
+## The window in Game Mode
+
+Every window fits the panel. **Window Scale** in the VR settings sets the text size: 100, 150 or 200 percent, read at the start. The left stick or D-Pad moves, **A** twice starts a game, **B** goes back, the right stick scrolls. During a VR game the window docks in SteamVR's theater (`TheaterDock`, see [SETTINGS.md](SETTINGS.md#the-window-in-steamvr)). Mods and texture packs download on the Frame.
+
+## Fixes
+
+- Fire Emblem: Path of Radiance: the freeze and the white screen. The GPU thread no longer races a FIFO reset or a stop of the reads, and the game's own GPU watchdog is off (US version). Confirmed on the Frame.
+- Immersive: draws are bound again after a multiview pass.
+- A state loaded in VR keeps both eyes.
+- The screen keeps one shape when a game changes video modes.
+- No crash on exit after a VR game.
+- A Wii Remote's Shake works in VR.
+- Downloads work on the Frame (the system's CA certificates).
 
 ## VR and Flat
 
@@ -118,7 +163,6 @@ Copy [perf-test.example.txt](perf-test.example.txt) to `~/.config/baiji/perf-tes
 - Objects are missing in Immersive: turn on **Show Missing Objects**.
 - One eye looks wrong: turn off **Draw Both Eyes at Once**.
 - **Display** cannot be changed in the headset: turn off **Foveated Rendering**.
-- Fire Emblem: Path of Radiance goes white: turn off **Enable Dual Core** for that game.
 - A game's effects look wrong: turn off **Non-Blocking EFB Copies**.
 - A game is too slow: lower **Internal Resolution**. Some GameCube games are heavy for the Frame.
 - Sound comes from the window's place: a SteamOS limit.

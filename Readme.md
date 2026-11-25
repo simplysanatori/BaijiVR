@@ -5,53 +5,65 @@ It is my unofficial fork of [Baiji](https://github.com/thejerf/baijiSteamVR), th
 
 ![Baiji VR](docs/images/cover.jpg)
 
-This is my testing area for fixes and optimizations, and I plan to bring all of them upstream. You're welcome to use it. The new work is desktop-tested; testing on the Frame is in progress.
+This is my testing area for fixes and optimizations, and I plan to bring all of them upstream. New work is desktop-tested; testing on the Frame is in progress.
 
 ## Features
 
-- Stereoscopic 3D on a big screen, or Immersive inside the game
-- Switch between the two mid-game
-- Natural 3D, matched to your IPD
-- A redesigned VR menu with save states and autosave
-- In-app mods, patches, cheats and texture packs
-- Box art, a dark style, and windows that fit Game Mode
-- Dynamic Resolution and other performance switches (experimental)
+- Stereoscopic 3D or Immersive, switched mid-game
+- A new VR menu with controls, stats, mods and settings
+- Natural 3D, **Screen Curve**, Quick Save and Autosave
+- Game Mode window that works with the controller
+- Fixes for crashes and Path of Radiance
 
 ## 3D and immersion
 
-- **Stereoscopic 3D or Immersive, any time**: press both bumpers, then **View** and **Menu**.
-- **Immersive**: **World Scale** sets how big the game world feels.
-- **Natural 3D**: at 100% **3D Depth**, distant scenery sits at essentially infinity.
+- **Stereoscopic 3D or Immersive, any time**: press both bumpers, then **View** and **Menu**. **Switch to Flat** shows the game in the window.
+- **Natural 3D**: at 100% **3D Depth**, distant scenery sits at infinity for your IPD.
+- **Immersive**: **World Scale** sets the world's size. It draws two steps over **Internal Resolution**; **Dynamic Resolution** lowers that when the GPU is short.
 
 ## The VR menu
 
-Hold **Menu** for 1 second to open the completely redesigned VR menu. Its **Mods** tab has:
+Hold **Menu** for 1 second. Tabs: **Main**, **Position**, **Stats**, **Controls**, **Mods**, **Settings**.
+
+- **Global** or **Per-Game**: the same settings and profiles as the window.
+- **Edit Controls**: pick a control on the drawing, press the button for it.
+- Chips for a Wii game's controller: GameCube, Wii Remote, + Nunchuk, Sideways, Classic.
+- **Stats**: frame rate and resolution in use, in front or on your wrist.
+- **Save State**, **Load State** and **Autosave**. Messages show in the screen's corner.
+- **Screen Curve** bends the screen. Face buttons are by position.
+
+<img src="docs/images/menu-main.png" width="48%" alt="Main page"> <img src="docs/images/controls.png" width="48%" alt="Controls">
+
+## Mods, patches, cheats and textures
+
+In the **Mods** tab and the window's **Mods** page:
 
 - **Mods and Cheats**: 37 cheats, patches and game settings, and 3 mods, for 23 games
-- **Textures**: 24 texture packs, from their creators' own pages
+- **Textures**: 24 texture packs, from their creators' pages. None is hosted here.
 
-<img src="docs/images/menu-main.png" width="48%" alt="VR menu"> <img src="docs/images/menu-mods.png" width="48%" alt="Mods and Cheats">
+<img src="docs/images/menu-mods.png" width="48%" alt="Mods and Cheats">
 
-No texture pack is hosted by this project.
+## The window in Game Mode
+
+Fits the panel, with **Window Scale** for the text. Left stick moves, **A** twice starts a game, **B** goes back. It docks in SteamVR's theater during a VR game.
 
 ## Game-specific fixes
 
-- **Fire Emblem: Path of Radiance**: the freeze and white screen. Desktop-tested; not confirmed on the Frame yet.
-- **Games that change video modes**: the screen keeps one shape.
-- **All VR games**: no crash on exit, and errors show in the headset.
+- **Fire Emblem: Path of Radiance**: the freeze and white screen, confirmed on the Frame.
+- **Immersive**: nothing goes missing after a multiview pass.
+- **VR states** keep both eyes when loaded.
+- **Video mode changes**: the screen keeps one shape.
+- **All VR games**: no crash on exit, Shake works, errors show in the headset. Mods and textures download.
 
 ## Experimental
 
-All are off by default, in the **VR** settings under **Advanced**.
-
-- **Dynamic Resolution**: up to two steps over **Internal Resolution** while the GPU has room.
-- **Pin Emulation Threads**, **Performance Hint** and [more](docs/SETTINGS.md#performance), with a [performance test](docs/USER_GUIDE.md#performance-test).
+Off by default, in the **VR** settings under **Advanced**: **Dynamic Resolution**, **Pin Emulation Threads**, **Performance Hint** and [more](docs/SETTINGS.md#performance), with a [performance test](docs/USER_GUIDE.md#performance-test).
 
 ## Requirements
 
-- A Steam Frame with Developer Mode, SSH and about 250 MB of free storage
-- A Linux PC (x86-64) with Git, Podman and Flatpak, to build it
-- Your own GameCube and Wii games, dumped from your own discs
+- A Steam Frame with Developer Mode, SSH and about 250 MB free
+- A Linux PC (x86-64) with Git, Podman and Flatpak
+- Your own GameCube and Wii games
 
 ## Install
 
@@ -78,17 +90,13 @@ This fork has no download yet; [upstream Baiji](https://github.com/thejerf/baiji
 
 ## First run
 
-1. Add the folder with your games in the settings, under **Paths**.
-2. Double-click a game to start it.
+Add your games' folder in the settings, under **Paths**, then double-click a game.
 
 ## Controls
-
-![What each Frame button does in a game](docs/images/controls.png)
 
 | Steam Frame | What it does |
 |---|---|
 | Hold **Menu** for 1 second | VR menu |
-| Hold **View** for 1.5 seconds | Stop the game |
 | **View**, then right or left bumper | Quick Save or Quick Load (hold the left bumper) |
 | **View**, then right trigger | Fast Forward on or off |
 | Both bumpers, then **View** and **Menu** | Stereoscopic 3D or Immersive |
@@ -98,7 +106,7 @@ Full list: [docs/CONTROLS.md](docs/CONTROLS.md).
 
 ## Update
 
-Quit the emulator, then run this in the `baijiSteamVR` folder.
+Quit the emulator, then in the `baijiSteamVR` folder:
 
 ```sh
 git pull
@@ -109,19 +117,16 @@ git submodule update --init --recursive
 
 ## Uninstall
 
-Run this on the Frame. Add `--purge` to also delete your settings and saves. Your games are never touched.
+Run this on the Frame. `--purge` also deletes your settings and saves; moving saves to Dolphin is in the [user guide](docs/USER_GUIDE.md#uninstall).
 
 ```sh
 ~/baiji/bin/baiji-uninstall
 ```
 
-Moving your saves to Dolphin: [user guide](docs/USER_GUIDE.md#uninstall).
 
 ## Troubleshooting
 
 - The pointer is off in Stereoscopic 3D: recenter once.
-- A game looks wrong in Immersive: switch to Stereoscopic 3D.
-- Fire Emblem: Path of Radiance goes white: turn off **Enable Dual Core** for that game.
 
 More: [docs/USER_GUIDE.md](docs/USER_GUIDE.md#troubleshooting).
 
@@ -133,16 +138,11 @@ Turn on the detailed log, then play until the problem happens:
 ssh frame "touch ~/.config/baiji/debug-logging"
 ```
 
-The logs are in `~/.local/share/baiji/Logs`; check them before sharing. Please don't report this fork's problems to Dolphin or Baiji.
-
-## Roadmap (planned)
-
-- **Upstream**: bring all of the fixes and features here upstream.
+The logs are in `~/.local/share/baiji/Logs`; check them before sharing. Don't report this fork's problems to Dolphin or Baiji.
 
 ## More
 
 - [User guide](docs/USER_GUIDE.md)
-- [Settings](docs/SETTINGS.md)
 - [AGENTS.md](AGENTS.md): for developers and AI agents
 - [Building from source](docs/build-runbook.md)
 - [Changelog](docs/CHANGELOG.md)

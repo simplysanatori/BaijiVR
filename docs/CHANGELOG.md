@@ -39,6 +39,8 @@ Baiji's own changelog is in [its README](../README.upstream.md).
 
 - One page for the VR settings, in plain words.
 - Windows that fit the screen in Game Mode, and a dark style.
+- **Window Scale** for the windows in Game Mode. The left stick or D-Pad moves, **A** twice starts a game, **B** goes back.
+- The window docks in SteamVR's theater during a VR game.
 - The Wii Remote's extension can be chosen without the mapping window.
 - **3D Depth** on a game's own VR page. A game's VR page shows what the VR menu changes, and saves only what is changed on it.
 - `baiji-uninstall`, which can also move your saves to Dolphin.
@@ -50,8 +52,11 @@ Baiji's own changelog is in [its README](../README.upstream.md).
 
 ### Fixes
 
-- Fire Emblem: Path of Radiance: the freeze and white screen (tested on a desktop).
+- Fire Emblem: Path of Radiance: the freeze and white screen (confirmed on the Frame).
+- Immersive: draws are bound again after a multiview pass.
+- A state loaded in VR keeps both eyes.
 - A crash on exit after a VR game.
 - Settings changed in the VR menu are saved at once.
 - A Wii Remote's Shake works in VR.
 - Warnings and internal errors show in the headset.
+- Mods and texture packs download on the Frame (the system's CA certificates).
