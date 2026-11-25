@@ -70,7 +70,7 @@ Covers come from GameTDB, or else libretro-thumbnails. **View** > **Grid View** 
 
 ### Mods and texture packs
 
-They are in the **Mods** tab of the VR menu, and on the **Mods** page of a game's properties. The list has 38 cheats, patches and game settings, 3 mods, and 23 texture packs. Some can be downloaded on the page; the others open their own page. Changes are for the game's next start.
+They are in the **Mods** tab of the VR menu, and on the **Mods** page of a game's properties. The list has 37 cheats, patches and game settings, 3 mods, and 24 texture packs. Some can be downloaded on the page; the others open their own page. Changes are for the game's next start.
 
 ## The VR menu
 

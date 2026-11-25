@@ -324,34 +324,6 @@
    "notes": "Dolphin's own patch, shipped in its game settings file. Fixes a hang at startup."
   },
   {
-   "id": "path-of-radiance-us-force-16-9",
-   "name": "16:9 Widescreen (Force 16:9)",
-   "title": "Fire Emblem: Path of Radiance",
-   "game_ids": [
-    "GFEE01"
-   ],
-   "kind": "settings",
-   "category": "widescreen",
-   "aspect": "16:9",
-   "settings": [
-    {
-     "section": "Video_Settings",
-     "key": "wideScreenHack",
-     "value": "True"
-    },
-    {
-     "section": "Video_Settings",
-     "key": "SuggestedAspectRatio",
-     "value": "1"
-    }
-   ],
-   "author": "Not stated",
-   "licence": "Not stated",
-   "homepage": "https://wiki.dolphin-emu.org/index.php?title=Fire_Emblem:_Path_of_Radiance",
-   "updated": "2026-11-24",
-   "notes": "The Dolphin wiki has no 16:9 code for the US disc (its code is for the PAL disc). Uses Dolphin's wideScreenHack instead. Not tested here."
-  },
-  {
    "id": "fzero-gx-ax-mode",
    "name": "AX Mode",
    "title": "F-Zero GX",
