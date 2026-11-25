@@ -32,6 +32,7 @@ enum class SettingId : int
   VirtualScreen,
 
   // General
+  WindowScale,
   Passthrough,
   PointerBeams,
   Messages,

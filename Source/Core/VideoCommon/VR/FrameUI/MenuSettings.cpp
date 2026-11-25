@@ -217,6 +217,10 @@ std::vector<SettingRow> MakeGeneralRows()
   for (const int minutes : {1, 2, 5, 10, 15})
     every.options.push_back({fmt::format("{}", minutes), ToNumber(minutes)});
   return {
+      With(MakeChoice(WindowScale, SECTION, RowKind::Segmented, "Window Scale",
+                      "The size of text and buttons in Baiji VR's window.",
+                      {{"100%", 100.0f}, {"150%", 150.0f}, {"200%", 200.0f}}),
+           SettingStore::Global, RowDisplay::Any, Applies::NextStart),
       With(MakeRow(Passthrough, SECTION, RowKind::Switch, "Passthrough",
                    "Shows your room around the game, if the headset can."),
            SettingStore::VRFile, PASSTHROUGH_DISPLAY),
@@ -497,6 +501,7 @@ const std::vector<Binding>& GetBindings()
       Bind(SettingId::AspectRatio, Config::GFX_ASPECT_RATIO),
       Bind(SettingId::LockScreen, Config::GFX_VR_LOCK_SCREEN),
       Bind(SettingId::VirtualScreen, Config::GFX_VR_VIRTUAL_SCREEN),
+      Bind(SettingId::WindowScale, Config::MAIN_INTERFACE_WINDOW_SCALE),
       Bind(SettingId::Passthrough, Config::GFX_VR_PASSTHROUGH),
       Bind(SettingId::PointerBeams, Config::GFX_VR_POINTER_BEAMS),
       Bind(SettingId::Messages, Config::GFX_VR_TOASTS),

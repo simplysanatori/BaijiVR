@@ -146,6 +146,9 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
        {tr("Dynamic Foveation"), tr("Less detail only when the headset is busy.")}},
 
       // Menu and Pointers
+      {Config::MAIN_INTERFACE_WINDOW_SCALE.GetLocation(),
+       {tr("Window Scale"), tr("The size of text and buttons in Baiji VR's window. Applies from "
+                               "the next start.")}},
       {Config::GFX_VR_POINTER_BEAMS.GetLocation(),
        {tr("Pointer Beams"), tr("Shows where the controllers point during a game. The VR menu always shows them.")}},
       {Config::GFX_VR_TOASTS.GetLocation(),
@@ -749,6 +752,8 @@ void VRPane::AddScreenRows(QGridLayout* layout)
 void VRPane::AddMenuAndPointers()
 {
   auto* const layout = m_page->AddGroup(tr("Menu and Pointers"), VRSettingsPage::HEADSET);
+  m_page->AddChoice<int>(layout, VRSettingsPage::ALL, Config::MAIN_INTERFACE_WINDOW_SCALE,
+                         {{tr("100%"), 100}, {tr("150%"), 150}, {tr("200%"), 200}});
   m_page->AddBool(layout, VRSettingsPage::ALL, Config::GFX_VR_POINTER_BEAMS);
   m_page->AddBool(layout, VRSettingsPage::ALL, Config::GFX_VR_TOASTS);
 }
