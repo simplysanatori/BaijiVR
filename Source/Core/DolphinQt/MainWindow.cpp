@@ -37,6 +37,7 @@
 #endif
 
 #include "Common/Config/Config.h"
+#include "Common/Config/Layer.h"
 #include "Common/FileUtil.h"
 #include "Common/ScopeGuard.h"
 #include "Common/Version.h"
@@ -52,6 +53,7 @@
 #include "Core/Config/NetplaySettings.h"
 #include "Core/Config/UISettings.h"
 #include "Core/Config/WiimoteSettings.h"
+#include "Core/ConfigLoaders/GameConfigLoader.h"
 #include "Core/Core.h"
 #include "Core/FreeLookManager.h"
 #include "Core/HW/DVD/DVDInterface.h"
@@ -127,6 +129,7 @@
 #include "DolphinQt/TAS/GBATASInputWindow.h"
 #include "DolphinQt/TAS/GCTASInputWindow.h"
 #include "DolphinQt/TAS/WiiTASInputWindow.h"
+#include "DolphinQt/TheaterDock.h"
 #include "DolphinQt/ToolBar.h"
 #include "DolphinQt/VRModeSwitch.h"
 #include "DolphinQt/WiiUpdate.h"
@@ -264,6 +267,9 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
       showFullScreen();
       GameModeWindows::Install(this);
       GamepadNavigation::Install(this, m_game_list);
+      m_theater_dock = TheaterDock::Install(this);
+      if (m_theater_dock)
+        m_theater_dock->Show();
     }
     else
       show();
@@ -935,6 +941,8 @@ void MainWindow::TogglePause()
 void MainWindow::OnStopComplete()
 {
   m_stop_requested = false;
+  if (m_theater_dock)
+    m_theater_dock->CancelLeave();
   HideRenderWidget(!m_exit_requested, m_exit_requested);
 #ifdef USE_DISCORD_PRESENCE
   if (!m_netplay_dialog->isVisible())
@@ -964,6 +972,10 @@ void MainWindow::OnStopComplete()
   {
     StartGame(std::move(m_pending_boot));
     m_pending_boot.reset();
+  }
+  else if (m_theater_dock && !m_exit_requested)
+  {
+    m_theater_dock->Show();
   }
 }
 
@@ -1243,8 +1255,35 @@ void MainWindow::StartGame(const std::vector<std::string>& paths,
       paths, boot_session_data ? std::move(*boot_session_data) : BootSessionData()));
 }
 
+// Whether the game is for the headset, also before its own settings are loaded.
+static bool IsForVR(const BootParameters* parameters)
+{
+  const auto& setting = Config::GFX_VR_PRESENTATION_MODE;
+  OpenXRPresentationMode mode = Config::Get(setting);
+  const auto* const disc =
+      parameters ? std::get_if<BootParameters::Disc>(&parameters->parameters) : nullptr;
+  if (disc && disc->volume && Config::GetActiveLayerForConfig(setting) == Config::LayerType::Base)
+  {
+    const std::string id = disc->volume->GetGameID();
+    const u16 revision = disc->volume->GetRevision().value_or(0);
+    const Config::Layer global(ConfigLoaders::GenerateGlobalGameConfigLoader(id, revision));
+    const Config::Layer local(ConfigLoaders::GenerateLocalGameConfigLoader(id, revision));
+    if (const auto own = local.Get<OpenXRPresentationMode>(setting.GetLocation()))
+      mode = *own;
+    else if (const auto bundled = global.Get<OpenXRPresentationMode>(setting.GetLocation()))
+      mode = *bundled;
+  }
+  if (mode == OpenXRPresentationMode::Legacy)
+    return Config::Get(Config::GFX_VR_ENABLE_OPENXR);
+  return mode != OpenXRPresentationMode::Vulkan;
+}
+
 void MainWindow::StartGame(std::unique_ptr<BootParameters>&& parameters)
 {
+  // (A VR game is about to start.)
+  if (m_theater_dock && m_theater_dock->IsLeaving())
+    return;
+
   // (The player has seen these as the game was started first.)
   if (parameters && !m_vr_mode_switch->IsSwitching() &&
       std::holds_alternative<BootParameters::Disc>(parameters->parameters))
@@ -1293,6 +1332,21 @@ void MainWindow::StartGame(std::unique_ptr<BootParameters>&& parameters)
     return;
   }
 
+  // The window leaves SteamVR's theater before there is a VR session. (NetPlay's players start
+  // together.)
+  if (m_theater_dock && parameters && IsForVR(parameters.get()) && !NetPlay::IsNetPlayRunning())
+  {
+    const auto held = std::make_shared<std::unique_ptr<BootParameters>>(std::move(parameters));
+    if (m_theater_dock->Leave([this, held] { BootGame(std::move(*held)); }))
+      return;
+    BootGame(std::move(*held));
+    return;
+  }
+  BootGame(std::move(parameters));
+}
+
+void MainWindow::BootGame(std::unique_ptr<BootParameters>&& parameters)
+{
   // We need the render widget before booting.
   ShowRenderWidget();
 
@@ -1306,7 +1360,17 @@ void MainWindow::StartGame(std::unique_ptr<BootParameters>&& parameters)
   {
     ModalMessageBox::critical(this, tr("Error"), tr("Failed to init core"), QMessageBox::Ok);
     HideRenderWidget();
+    if (m_theater_dock)
+      m_theater_dock->Show();
     return;
+  }
+
+  if (m_theater_dock)
+  {
+    if (IsForVR(nullptr))
+      m_theater_dock->OnVRGame();
+    else
+      m_theater_dock->Show();
   }
 
 #ifdef BAIJI_STEAMVR

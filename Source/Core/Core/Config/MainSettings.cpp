@@ -437,6 +437,9 @@ const Info<std::string> MAIN_INTERFACE_LANGUAGE{{System::Main, "Interface", "Lan
 // Window Scale: how large the Qt windows are in Game Mode, in percent (100, 150 or 200). Read once,
 // before Qt starts (DolphinQt/Main.cpp).
 const Info<int> MAIN_INTERFACE_WINDOW_SCALE{{System::Main, "Interface", "WindowScale"}, 150};
+// Game Mode: 1 docks the window in SteamVR's theater, and back into the dashboard before a VR game. 2
+// leaves it there. 0 does not move it (DolphinQt/TheaterDock.cpp). Read once, at the start.
+const Info<int> MAIN_INTERFACE_THEATER_DOCK{{System::Main, "Interface", "TheaterDock"}, 1};
 const Info<bool> MAIN_SHOW_ACTIVE_TITLE{{System::Main, "Interface", "ShowActiveTitle"}, true};
 const Info<bool> MAIN_USE_BUILT_IN_TITLE_DATABASE{
     {System::Main, "Interface", "UseBuiltinTitleDatabase"}, true};

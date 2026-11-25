@@ -453,6 +453,8 @@ add_executable(dolphin-emu
   TAS/TASSpinBox.h
   TAS/WiiTASInputWindow.cpp
   TAS/WiiTASInputWindow.h
+  TheaterDock.cpp
+  TheaterDock.h
   ToolBar.cpp
   ToolBar.h
   Translation.cpp

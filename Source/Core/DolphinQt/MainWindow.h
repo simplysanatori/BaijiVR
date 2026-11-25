@@ -50,6 +50,7 @@ class RenderWidget;
 class SearchBar;
 class SettingsWindow;
 class SkylanderPortalWindow;
+class TheaterDock;
 class ThreadWidget;
 class ToolBar;
 class VRModeSwitch;
@@ -167,6 +168,7 @@ private:
   void StartGame(const std::vector<std::string>& paths,
                  std::unique_ptr<BootSessionData> boot_session_data = nullptr);
   void StartGame(std::unique_ptr<BootParameters>&& parameters);
+  void BootGame(std::unique_ptr<BootParameters>&& parameters);
   void ShowRenderWidget();
   void HideRenderWidget(bool reinit = true, bool is_exit = false);
 
@@ -268,6 +270,7 @@ private:
   FreeLookWindow* m_freelook_window = nullptr;
 
   VRModeSwitch* m_vr_mode_switch = nullptr;
+  TheaterDock* m_theater_dock = nullptr;
   HotkeyScheduler* m_hotkey_scheduler;
   NetPlayDialog* m_netplay_dialog;
   DiscordHandler* m_netplay_discord;

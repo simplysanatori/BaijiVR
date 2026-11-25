@@ -146,6 +146,7 @@ add_library(common
   StringUtil.h
   SymbolDB.cpp
   SymbolDB.h
+  TheaterOverlay.h
   Thread.cpp
   Thread.h
   Timer.cpp
