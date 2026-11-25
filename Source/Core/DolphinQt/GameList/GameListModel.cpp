@@ -5,6 +5,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QImage>
 #include <QPainter>
 #include <QPixmap>
@@ -108,6 +109,14 @@ QVariant GameListModel::data(const QModelIndex& index, int role) const
         banner = CoverBanner(game.GetCoverImage().buffer);
       if (banner.isNull())
         banner = Resources::GetMisc(Resources::MiscID::BannerMissing).pixmap(GAMECUBE_BANNER_SIZE);
+
+      // A scaled screen would draw the pixels of a banner as blocks.
+      const qreal ratio = qGuiApp->devicePixelRatio();
+      if (ratio > 1)
+      {
+        banner = banner.scaled((QSizeF(GAMECUBE_BANNER_SIZE) * ratio).toSize(), Qt::KeepAspectRatio,
+                               Qt::SmoothTransformation);
+      }
 
       banner.setDevicePixelRatio(
           std::max(static_cast<qreal>(banner.width()) / GAMECUBE_BANNER_SIZE.width(),
