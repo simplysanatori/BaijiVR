@@ -169,10 +169,33 @@ Common::Quaternion GetMotionOrientation(const Common::VR::OpenXRControllerState&
       .Normalized();
 }
 
+// dolphinXR Wii Remote Motion (GFX_VR_WIIMOTE_MOTION_MODEL): gyroscope from pose changes,
+// accelerometer lever, fixed pointer range and a timed off-screen hide. Off: Baiji 0.9.1's motion.
+bool MotionModelOn()
+{
+  return Config::Get(Config::GFX_VR_WIIMOTE_MOTION_MODEL);
+}
+
+// Wii Remote Pitch only applies with dolphinXR Wii Remote Motion.
 float MotionPitchDegrees()
 {
-  return Config::Get(Config::GFX_VR_WIIMOTE_MOTION_PITCH);
+  return MotionModelOn() ? Config::Get(Config::GFX_VR_WIIMOTE_MOTION_PITCH) : 0.0f;
 }
+
+// Baiji 0.9.1's motion (dolphinXR Wii Remote Motion off).
+struct OpenXRVelocityHistory
+{
+  bool has_pose_sample = false;
+  bool has_velocity_sample = false;
+  Common::Vec3 previous_position{};
+  Common::Vec3 previous_velocity{};
+  s64 previous_time_ns = 0;
+};
+
+// An off-screen excursion must persist this many input snapshots (~100ms at 72-90Hz)
+// before the pointer is hidden. Runtime pose spikes during fast controller motion produce
+// brief excursions; without the debounce every spike dropped IR tracking entirely.
+constexpr int OPENXR_IR_HIDE_DELAY_SNAPSHOTS = 9;
 
 // Nanosecond timestamp used for velocity differentiation: the XR pose sample time when
 // available (jitter-free), wall clock otherwise.
@@ -183,6 +206,130 @@ s64 OpenXRSampleTimeNs(const Common::VR::OpenXRInputSnapshot& snapshot)
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
+}
+
+OpenXRWiimoteState BuildOpenXRState091(const Common::VR::OpenXRControllerState& controller,
+                                    OpenXRVelocityHistory* velocity_history, s64 sample_time_ns)
+{
+  OpenXRWiimoteState out;
+
+  const bool has_grip_pose = controller.grip_pose.valid;
+  const bool has_aim_pose = controller.aim_pose.valid;
+  if (!has_grip_pose && !has_aim_pose)
+    return out;
+
+  // Use aim pose for the motion reference frame. The aim pose orientation determines how
+  // world-space gravity maps to Wiimote-local accelerometer axes. Using grip would produce
+  // wrong accel values because grip/aim can differ by 30-60 degrees on many controllers.
+  const Common::Quaternion reference_orientation =
+      (has_aim_pose ? ToQuaternion(controller.aim_pose.orientation) :
+                      ToQuaternion(controller.grip_pose.orientation))
+          .Normalized();
+  const Common::Matrix33 world_to_local =
+      Common::Matrix33::FromQuaternion(reference_orientation).Transposed();
+
+  const auto get_matrix = [&world_to_local](int row, int col) {
+    return world_to_local.data[row * 3 + col];
+  };
+
+  Common::Vec3 relative_acceleration{};
+  const float dt =
+      velocity_history->has_pose_sample ?
+          float(sample_time_ns - velocity_history->previous_time_ns) * 1e-9f :
+          0.0f;
+
+  Common::Vec3 current_position{};
+  std::optional<Common::Vec3> pose_velocity;
+  if (has_grip_pose)
+  {
+    current_position = ToVec3(controller.grip_pose.position);
+    if (velocity_history->has_pose_sample && dt > 0.001f)
+      pose_velocity = (current_position - velocity_history->previous_position) / dt;
+  }
+
+  std::optional<Common::Vec3> current_velocity;
+  if (controller.grip_velocity.linear_valid)
+    current_velocity = ToVec3(controller.grip_velocity.linear);
+
+  if (pose_velocity)
+  {
+    // Blend runtime velocity with pose-derived velocity to improve push/pull response on
+    // runtimes that heavily smooth linear velocity.
+    if (current_velocity)
+      current_velocity = (*current_velocity + *pose_velocity) * 0.5f;
+    else
+      current_velocity = *pose_velocity;
+  }
+
+  if (current_velocity && velocity_history->has_velocity_sample && dt > 0.001f)
+  {
+    const Common::Vec3 world_accel = (*current_velocity - velocity_history->previous_velocity) / dt;
+    relative_acceleration = world_to_local * world_accel;
+  }
+
+  if (has_grip_pose)
+  {
+    velocity_history->previous_position = current_position;
+    velocity_history->previous_time_ns = sample_time_ns;
+    velocity_history->has_pose_sample = true;
+  }
+  else
+  {
+    velocity_history->has_pose_sample = false;
+    velocity_history->has_velocity_sample = false;
+  }
+
+  if (current_velocity)
+  {
+    velocity_history->previous_velocity = *current_velocity;
+    velocity_history->has_velocity_sample = true;
+  }
+  else if (!velocity_history->has_pose_sample)
+  {
+    velocity_history->has_velocity_sample = false;
+  }
+
+  float gx = -get_matrix(0, 1);
+  float gz = get_matrix(1, 1);
+  float gy = get_matrix(2, 1);
+
+  gx -= relative_acceleration.x / float(MathUtil::GRAVITY_ACCELERATION);
+  gz += relative_acceleration.y / float(MathUtil::GRAVITY_ACCELERATION);
+  gy += relative_acceleration.z / float(MathUtil::GRAVITY_ACCELERATION);
+
+  out.acceleration = Common::Vec3(gx, gy, gz) * float(MathUtil::GRAVITY_ACCELERATION);
+
+  if (controller.grip_velocity.angular_valid)
+  {
+    const Common::Vec3 world_angular_velocity = ToVec3(controller.grip_velocity.angular);
+    const Common::Vec3 local_angular_velocity = world_to_local * world_angular_velocity;
+    // Aim-local (X=right, Y=up, Z=back) to Dolphin's gyro convention
+    // (+x = pitch down, +y = roll left, +z = yaw left), a proper rotation:
+    // pitch up is +x in aim-local but -x for the wiimote.
+    out.angular_velocity = Common::Vec3(-local_angular_velocity.x, local_angular_velocity.z,
+                                        local_angular_velocity.y);
+  }
+
+  // IR pointer: absolute mapping from the aim ray's intersection with the virtual screen,
+  // computed by OpenXRManager with the renderer's own screen placement. Aiming at a point
+  // on the 2D screen puts the Wii pointer at that point — no reference capture, no
+  // recentering. Raw values are stored here; the off-screen hide decision (margins +
+  // debounce) lives in the override function, which keeps state across snapshots.
+  const Common::VR::OpenXRScreenHit& hit = controller.screen_hit;
+  if (hit.valid)
+  {
+    out.ir_x = hit.u;
+    out.ir_y = hit.v;
+    // Emulated sensor-bar distance: EmulatePoint uses NEUTRAL_DISTANCE(2m) + ir_z.
+    // Feed the real controller-to-screen distance so leaning in/out changes the
+    // virtual IR dot spacing physically. The band here only rejects nonsense (screen
+    // behind the player, huge rooms) — EmulatePoint applies the Point group's Distance
+    // Sensitivity around the resting distance and clamps to the emulated remote's range,
+    // so this offset must keep headroom on both sides for that gain to have anywhere to go.
+    out.ir_z = std::clamp(hit.distance_m, 0.1f, 8.0f) - 2.0f;
+  }
+
+  return out;
 }
 
 OpenXRWiimoteState BuildOpenXRState(const Common::VR::OpenXRControllerState& controller,
@@ -367,12 +514,17 @@ ControllerEmu::InputOverrideFunction CreateOpenXRInputOverrideFunction(unsigned 
   Wiimote::OpenXRGyroSteering gyro_steering;
   u64 gyro_ticks = 0;
   Common::Vec3 gyro{};
+  // Baiji 0.9.1's motion (dolphinXR Wii Remote Motion off).
+  bool motion_model = false;
+  OpenXRVelocityHistory left_history_091;
+  OpenXRVelocityHistory right_history_091;
+  int offscreen_snapshots = 0;
 
   return [wiimote_index, prefer_left_hand, attachment, cached_state, left_velocity_history,
           right_velocity_history, offscreen_since_ns, held_ir_x, held_ir_y, held_ir_z,
-          gyro_steering, gyro_ticks,
-          gyro](std::string_view group_name, std::string_view control_name,
-                ControlState control_state) mutable -> std::optional<ControlState> {
+          gyro_steering, gyro_ticks, gyro, motion_model, left_history_091, right_history_091,
+          offscreen_snapshots](std::string_view group_name, std::string_view control_name,
+                               ControlState control_state) mutable -> std::optional<ControlState> {
     // Input held by VR patches wins; this override owns the remote, so it reads it here.
     if (const std::optional<ControlState> patch_input = VRPatch::PatchInput::Lookup(
             attachment ? VRPatch::PatchInput::Device::Attachment :
@@ -399,55 +551,32 @@ ControllerEmu::InputOverrideFunction CreateOpenXRInputOverrideFunction(unsigned 
       const auto left_valid = left.grip_pose.valid || left.aim_pose.valid;
 
       const s64 sample_time_ns = OpenXRSampleTimeNs(snapshot);
-      const float motion_pitch = MotionPitchDegrees();
-      if (!prefer_left_hand && right_valid)
+      motion_model = MotionModelOn();
+      if (!motion_model)
       {
-        cached_state =
-            BuildOpenXRState(right, &right_velocity_history, sample_time_ns, motion_pitch);
-      }
-      else if (left_valid)
-      {
-        cached_state = BuildOpenXRState(left, &left_velocity_history, sample_time_ns, motion_pitch);
-      }
-      else
-      {
-        cached_state = {};
-      }
+        if (!prefer_left_hand && right_valid)
+          cached_state = BuildOpenXRState091(right, &right_history_091, sample_time_ns);
+        else if (left_valid)
+          cached_state = BuildOpenXRState091(left, &left_history_091, sample_time_ns);
+        else
+          cached_state = {};
 
-      // Kept on the screen: an aim past an edge pins the cursor at that edge, and a ray that
-      // misses the screen's plane (or a lost controller) keeps the last position.
-      if (s_openxr_pointer_kept_on_screen.load(std::memory_order_relaxed))
-      {
-        if (std::isnan(cached_state.ir_x) && !std::isnan(held_ir_x))
+        // Off-screen debounce: a real wiimote's camera keeps tracking well past the screen
+        // edge, and a runtime pose spike during fast motion must not drop the pointer.
+        // Brief excursions keep reporting (the cursor pins at the screen edge, invalid-hit
+        // blips hold the last good position); only a sustained one hides the pointer like
+        // a real wiimote losing the sensor bar.
+        const bool on_screen = !std::isnan(cached_state.ir_x) &&
+                               std::abs(cached_state.ir_x) <= OPENXR_IR_HIDE_MARGIN_U &&
+                               std::abs(cached_state.ir_y) <= OPENXR_IR_HIDE_MARGIN_V;
+        if (on_screen)
         {
-          cached_state.ir_x = held_ir_x;
-          cached_state.ir_y = held_ir_y;
-          cached_state.ir_z = held_ir_z;
+          offscreen_snapshots = 0;
+          held_ir_x = cached_state.ir_x;
+          held_ir_y = cached_state.ir_y;
+          held_ir_z = cached_state.ir_z;
         }
-        if (!std::isnan(cached_state.ir_x))
-        {
-          cached_state.ir_x = std::clamp(cached_state.ir_x, -1.0f, 1.0f);
-          cached_state.ir_y = std::clamp(cached_state.ir_y, -1.0f, 1.0f);
-        }
-      }
-
-      // Off-screen debounce: a real wiimote's camera keeps tracking well past the screen
-      // edge, and a runtime pose spike during fast motion must not drop the pointer.
-      const bool on_screen = !std::isnan(cached_state.ir_x) &&
-                             std::abs(cached_state.ir_x) <= OPENXR_IR_HIDE_MARGIN_U &&
-                             std::abs(cached_state.ir_y) <= OPENXR_IR_HIDE_MARGIN_V;
-      if (on_screen)
-      {
-        offscreen_since_ns = 0;
-        held_ir_x = cached_state.ir_x;
-        held_ir_y = cached_state.ir_y;
-        held_ir_z = cached_state.ir_z;
-      }
-      else
-      {
-        if (offscreen_since_ns == 0)
-          offscreen_since_ns = sample_time_ns;
-        if (sample_time_ns - offscreen_since_ns < OPENXR_IR_HIDE_DELAY_NS)
+        else if (++offscreen_snapshots < OPENXR_IR_HIDE_DELAY_SNAPSHOTS)
         {
           if (std::isnan(cached_state.ir_x))
           {
@@ -463,10 +592,78 @@ ControllerEmu::InputOverrideFunction CreateOpenXRInputOverrideFunction(unsigned 
           cached_state.ir_z = 0.0f;
         }
       }
+      else
+      {
+        const float motion_pitch = MotionPitchDegrees();
+        if (!prefer_left_hand && right_valid)
+        {
+          cached_state =
+              BuildOpenXRState(right, &right_velocity_history, sample_time_ns, motion_pitch);
+        }
+        else if (left_valid)
+        {
+          cached_state = BuildOpenXRState(left, &left_velocity_history, sample_time_ns, motion_pitch);
+        }
+        else
+        {
+          cached_state = {};
+        }
+
+        // Kept on the screen: an aim past an edge pins the cursor at that edge, and a ray that
+        // misses the screen's plane (or a lost controller) keeps the last position.
+        if (s_openxr_pointer_kept_on_screen.load(std::memory_order_relaxed))
+        {
+          if (std::isnan(cached_state.ir_x) && !std::isnan(held_ir_x))
+          {
+            cached_state.ir_x = held_ir_x;
+            cached_state.ir_y = held_ir_y;
+            cached_state.ir_z = held_ir_z;
+          }
+          if (!std::isnan(cached_state.ir_x))
+          {
+            cached_state.ir_x = std::clamp(cached_state.ir_x, -1.0f, 1.0f);
+            cached_state.ir_y = std::clamp(cached_state.ir_y, -1.0f, 1.0f);
+          }
+        }
+
+        // Off-screen debounce: a real wiimote's camera keeps tracking well past the screen
+        // edge, and a runtime pose spike during fast motion must not drop the pointer.
+        const bool on_screen = !std::isnan(cached_state.ir_x) &&
+                               std::abs(cached_state.ir_x) <= OPENXR_IR_HIDE_MARGIN_U &&
+                               std::abs(cached_state.ir_y) <= OPENXR_IR_HIDE_MARGIN_V;
+        if (on_screen)
+        {
+          offscreen_since_ns = 0;
+          held_ir_x = cached_state.ir_x;
+          held_ir_y = cached_state.ir_y;
+          held_ir_z = cached_state.ir_z;
+        }
+        else
+        {
+          if (offscreen_since_ns == 0)
+            offscreen_since_ns = sample_time_ns;
+          if (sample_time_ns - offscreen_since_ns < OPENXR_IR_HIDE_DELAY_NS)
+          {
+            if (std::isnan(cached_state.ir_x))
+            {
+              cached_state.ir_x = held_ir_x;
+              cached_state.ir_y = held_ir_y;
+              cached_state.ir_z = held_ir_z;
+            }
+          }
+          else
+          {
+            cached_state.ir_x = std::numeric_limits<float>::quiet_NaN();
+            cached_state.ir_y = 0.0f;
+            cached_state.ir_z = 0.0f;
+          }
+        }
+      }
 
       cached_state.generation = snapshot.generation;
       if (!attachment)
-        PublishOpenXRInput(wiimote_index, &cached_state, gyro);
+        PublishOpenXRInput(wiimote_index, &cached_state,
+                           motion_model ? gyro : cached_state.angular_velocity);
     }
 
     if (group_name == WiimoteEmu::Wiimote::DPAD_GROUP)
@@ -497,6 +694,12 @@ ControllerEmu::InputOverrideFunction CreateOpenXRInputOverrideFunction(unsigned 
     }
     else if (group_name == WiimoteEmu::Wiimote::GYROSCOPE_GROUP)
     {
+      if (!motion_model)
+      {
+        return GetComponent(GetEmulated(wiimote_index)->GetOrientation() *
+                                cached_state.angular_velocity,
+                            control_name);
+      }
       // One step per emulated update; its three axes are queried at the same tick.
       auto& system = Core::System::GetInstance();
       const u64 ticks = system.GetCoreTiming().GetTicks();
@@ -528,6 +731,12 @@ ControllerEmu::InputOverrideFunction CreateOpenXRInputOverrideFunction(unsigned 
         return std::nullopt;
       // The aim maps the game's screen 1:1 with no vertical offset and yaw/pitch spanning the
       // screen.
+      if (!motion_model && (control_name == ControllerEmu::Cursor::VERTICAL_OFFSET_OVERRIDE ||
+                            control_name == ControllerEmu::Cursor::TOTAL_YAW_OVERRIDE ||
+                            control_name == ControllerEmu::Cursor::TOTAL_PITCH_OVERRIDE))
+      {
+        return std::nullopt;
+      }
       if (control_name == ControllerEmu::Cursor::VERTICAL_OFFSET_OVERRIDE)
         return 0.0;
       if (control_name == ControllerEmu::Cursor::TOTAL_YAW_OVERRIDE)
@@ -567,9 +776,8 @@ void UpdateOpenXRInputOverride(unsigned int index, WiimoteSource source)
 
   OpenXROverrideInstall& installed = s_openxr_overrides[index];
   const bool enable = source == WiimoteSource::OpenXR;
-  const bool prefer_left_hand =
-      enable && Config::Get(Config::Info<bool>{{Config::System::Main, "Android", "QuestLeftHanded"},
-                                               false});
+  // Baiji has no handedness setting: the right controller is the Wii Remote.
+  constexpr bool prefer_left_hand = false;
   if (enable == installed.enabled && wiimote == installed.controller &&
       (!enable ||
        (prefer_left_hand == installed.prefer_left_hand && wiimote->HasInputOverrideFunction())))
@@ -715,15 +923,13 @@ std::optional<OpenXRWiiRemoteState> GetOpenXRWiiRemoteState(unsigned int index)
   if (index >= MAX_WIIMOTES || s_wiimote_sources[index].load() != WiimoteSource::OpenXR)
     return std::nullopt;
 
-  const bool prefer_left_hand =
-      Config::Get(Config::Info<bool>{{Config::System::Main, "Android", "QuestLeftHanded"},
-                                     false});
-  std::optional<OpenXRWiiRemoteState> state = GetOpenXRHandState(prefer_left_hand);
+  std::optional<OpenXRWiiRemoteState> state = GetOpenXRHandState(false);
   if (!state)
-    state = GetOpenXRHandState(!prefer_left_hand);
+    state = GetOpenXRHandState(true);
 
-  // The gyroscope comes from pose changes over time, which only the input override tracks.
-  if (const auto input = GetOpenXRWiiRemoteInput(index); state && input)
+  // The gyroscope comes from pose changes over time, which only the input override tracks
+  // (dolphinXR Wii Remote Motion; otherwise it is the runtime's, as in 0.9.1).
+  if (const auto input = GetOpenXRWiiRemoteInput(index); state && input && MotionModelOn())
   {
     state->angular_velocity = {input->angular_velocity.x, input->angular_velocity.y,
                                input->angular_velocity.z};
@@ -752,8 +958,7 @@ std::optional<OpenXRWiiRemotePose> GetOpenXRWiiRemotePose(unsigned int index)
   if (!snapshot.runtime_active)
     return std::nullopt;
 
-  const bool prefer_left_hand =
-      Config::Get(Config::Info<bool>{{Config::System::Main, "Android", "QuestLeftHanded"}, false});
+  constexpr bool prefer_left_hand = false;
   const auto is_valid = [](const Common::VR::OpenXRControllerState& controller) {
     return controller.grip_pose.valid || controller.aim_pose.valid;
   };
@@ -872,9 +1077,19 @@ std::optional<OpenXRWiiRemoteState> GetOpenXRHandState(bool left_hand)
   if (!controller.grip_pose.valid && !controller.aim_pose.valid)
     return std::nullopt;
 
-  Wiimote::OpenXRPoseHistory throwaway_velocity_history;
-  OpenXRWiimoteState state = BuildOpenXRState(controller, &throwaway_velocity_history,
-                                              OpenXRSampleTimeNs(snapshot), MotionPitchDegrees());
+  OpenXRWiimoteState state;
+  if (MotionModelOn())
+  {
+    Wiimote::OpenXRPoseHistory throwaway_velocity_history;
+    state = BuildOpenXRState(controller, &throwaway_velocity_history, OpenXRSampleTimeNs(snapshot),
+                             MotionPitchDegrees());
+  }
+  else
+  {
+    OpenXRVelocityHistory throwaway_velocity_history;
+    state = BuildOpenXRState091(controller, &throwaway_velocity_history,
+                                OpenXRSampleTimeNs(snapshot));
+  }
 
   OpenXRWiiRemoteState out;
   out.acceleration = {state.acceleration.x, state.acceleration.y, state.acceleration.z};
