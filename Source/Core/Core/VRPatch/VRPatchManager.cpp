@@ -51,6 +51,7 @@
 #include "VideoCommon/VR/OverrideSuppression.h"
 #include "VideoCommon/VR/PatchFlags.h"
 #include "VideoCommon/VR/PatchHides.h"
+#include "VideoCommon/VideoConfig.h"
 
 namespace VRPatch
 {
@@ -1235,6 +1236,42 @@ void HandleBlockReason(Core::System& system, const ScriptEnvironment& env)
   }
   Queue({Command::Type::SyncAll, {}, true});
 }
+
+// Patches only run in a VR session: Stereoscopic 3D or Immersive.
+bool InVRSession()
+{
+  switch (Config::Get(Config::GFX_VR_PRESENTATION_MODE))
+  {
+  case OpenXRPresentationMode::Immersive:
+  case OpenXRPresentationMode::StereoScreen:
+    return true;
+  case OpenXRPresentationMode::Vulkan:
+    return false;
+  default:
+    return Config::Get(Config::GFX_VR_ENABLE_OPENXR) && !Config::Get(Config::GFX_VR_FLAT_SCREEN);
+  }
+}
+
+// At least one patch of the game is enabled (or has a session source).
+bool AnyPatchEnabled(const std::string& game_id, u16 revision)
+{
+  Manager& m = GetManager();
+  {
+    std::lock_guard lock(m.mutex);
+    for (const auto& [key, source] : m.session_sources)
+    {
+      if (key.first == game_id)
+        return true;
+    }
+  }
+  const PatchValues values = EffectiveValues(game_id, revision);
+  for (const FileEntry& file : FindPatchFiles(game_id, revision))
+  {
+    if (values.IsEnabled(file.id))
+      return true;
+  }
+  return false;
+}
 }  // namespace
 
 // ---- Emulation hooks ----
@@ -1260,7 +1297,9 @@ void OnGameLoaded(const std::string& game_id, u16 revision, bool is_wii)
   m.state_loaded.store(false);
   m.pad_signature = 0;
   m.attach_failures.clear();
-  if (!game_id.empty())
+  // Without an enabled patch, or outside a VR session, nothing is queued and RunFrame does nothing
+  // until a patch is turned on (SetPatchEnabled and the others queue their own commands).
+  if (!game_id.empty() && InVRSession() && AnyPatchEnabled(game_id, revision))
     Queue({Command::Type::SyncAll, {}, true});
 }
 
@@ -1268,7 +1307,7 @@ void RunFrame(const Core::CPUThreadGuard& guard)
 {
   Manager& m = GetManager();
   m.field.fetch_add(1, std::memory_order_relaxed);
-  if (!m.has_work.load(std::memory_order_acquire))
+  if (!m.has_work.load(std::memory_order_acquire) || !InVRSession())
   {
     m.state_loaded.store(false, std::memory_order_relaxed);
     return;

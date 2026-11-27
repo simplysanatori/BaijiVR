@@ -290,12 +290,18 @@ void DoState(PointerWrap& p)
 {
   std::lock_guard codes_lock(s_active_codes_lock);
   p.Do(s_code_handler_installed);
-  // The loaded RAM holds the code list that was active when the state was saved, which can disagree
-  // with the active codes (a code edited, enabled or disabled since). Reinstall the handler with
-  // the active codes at the next frame, or stop running it if there are none. RunCodeHandler only
-  // runs at a VI, so a handler run the state caught midway has returned by then.
-  if (p.IsReadMode() && s_code_handler_installed == Installation::Installed)
+  // FIXME: The active codes list will disagree with the embedded GCT
+#ifdef ENABLE_VR
+  // While VR patches have codes or memory in the handler's region: the loaded RAM holds the code
+  // list that was active when the state was saved, which can disagree with the patches' codes.
+  // Reinstall the handler at the next frame. RunCodeHandler only runs at a VI, so a handler run
+  // the state caught midway has returned by then. Without VR patches, nothing changes.
+  if (p.IsReadMode() && s_code_handler_installed == Installation::Installed &&
+      s_vr_patch_region != VRPatchRegion{})
+  {
     s_code_handler_installed = Installation::Uninstalled;
+  }
+#endif
 }
 
 void Shutdown()
@@ -312,10 +318,13 @@ void RunCodeHandler(const Core::CPUThreadGuard& guard)
 {
   const bool cheats_enabled = Config::AreCheatsEnabled();
 #ifdef ENABLE_VR
-  // VR patches bring their own codes, which run whether or not cheats are enabled.
+  // VR patches bring their own codes, which run whether or not cheats are enabled. Without them,
+  // this is the stock handler: user codes only, while cheats are enabled.
+  bool vr_patch_codes = false;
   {
     std::lock_guard codes_lock(s_active_codes_lock);
-    if (!cheats_enabled && s_vr_patch_region.codes.empty())
+    vr_patch_codes = !s_vr_patch_region.codes.empty();
+    if (!cheats_enabled && !vr_patch_codes)
       return;
   }
 #else
@@ -327,14 +336,15 @@ void RunCodeHandler(const Core::CPUThreadGuard& guard)
   {
     std::lock_guard codes_lock(s_active_codes_lock);
 #ifdef ENABLE_VR
-    const bool include_user_codes = cheats_enabled && !s_active_codes.empty();
+    const bool include_user_codes =
+        vr_patch_codes ? cheats_enabled && !s_active_codes.empty() : true;
     // Cheats were turned on or off since the install: the list must gain or lose the user's codes.
-    if (s_code_handler_installed == Installation::Installed &&
+    if (vr_patch_codes && s_code_handler_installed == Installation::Installed &&
         include_user_codes != s_installed_user_codes)
     {
       s_code_handler_installed = Installation::Uninstalled;
     }
-    const bool has_codes = include_user_codes || !s_vr_patch_region.codes.empty();
+    const bool has_codes = vr_patch_codes || !s_active_codes.empty();
 #else
     constexpr bool include_user_codes = true;
     const bool has_codes = !s_active_codes.empty();
