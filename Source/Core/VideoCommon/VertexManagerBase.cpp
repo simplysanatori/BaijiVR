@@ -649,6 +649,12 @@ VertexManagerBase::CpuCullPlan VertexManagerBase::GetCpuCullPlan()
 {
   if (g_ActiveConfig.stereo_mode != StereoMode::OpenXR)
     return g_ActiveConfig.bCPUCull ? CpuCullPlan::Stock : CpuCullPlan::None;
+  // Show Missing Objects: no CPU culling in VR at all.
+  if (g_ActiveConfig.vr_disable_cpu_cull)
+    return CpuCullPlan::None;
+  // Head-cone culling off: the CPU Cull setting against the game's view, as in Baiji 0.9.1.
+  if (!g_ActiveConfig.vr_head_cpu_cull)
+    return g_ActiveConfig.bCPUCull ? CpuCullPlan::Stock : CpuCullPlan::None;
 
   // The stock cull tests the game's projection, which covers far less than the headset shows: it
   // would cut head-independent holes into the view. VR only tests against the head cone.
