@@ -1292,7 +1292,7 @@ CreateFramebufferInternal(VKTexture* color_attachment, VKTexture* depth_attachme
   VkRenderPass plain_load_render_pass = VK_NULL_HANDLE;
   VkRenderPass plain_discard_render_pass = VK_NULL_HANDLE;
   VkRenderPass plain_clear_render_pass = VK_NULL_HANDLE;
-  if (efb_fdm)
+  if (efb_fdm && g_ActiveConfig.vr_smart_efb_foveation)
   {
     const u8 additional_count = static_cast<u8>(additional_color_attachments.size());
     plain_load_render_pass = g_object_cache->GetRenderPass(

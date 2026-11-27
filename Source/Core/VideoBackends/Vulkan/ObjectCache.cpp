@@ -635,6 +635,44 @@ void FillFoveationDensityLayer(u8* dst, u32 map_width, u32 map_height, u32 texel
     }
   }
 }
+// Baiji 0.9.1's map, used without Smart Foveated EFB: a radially symmetric density falloff.
+// R8G8_UNORM texels hold (x, y) shading density: 255 = full rate, 128 = half rate per axis, and
+// so on. The GPU quantizes to the rates it supports (Adreno: 1, 1/2, 1/4 per axis).
+void FillRadialFoveationDensityLayer(u8* dst, u32 width, u32 height, int level)
+{
+  struct LevelParams
+  {
+    float inner_radius;  // full-density region, in normalized [-1,1] coordinates
+    float min_density;
+    float falloff_exponent;
+  };
+  static constexpr LevelParams kLevels[] = {
+      {0.70f, 0.50f, 2.0f},  // Low
+      {0.50f, 0.25f, 2.0f},  // Medium
+      {0.35f, 0.25f, 1.0f},  // High: linear falloff reaches quarter rate sooner
+  };
+  const LevelParams& p = kLevels[std::clamp(level, 1, 3) - 1];
+
+  for (u32 y = 0; y < height; ++y)
+  {
+    const float ny = ((y + 0.5f) / height) * 2.0f - 1.0f;
+    for (u32 x = 0; x < width; ++x)
+    {
+      const float nx = ((x + 0.5f) / width) * 2.0f - 1.0f;
+      const float r = std::sqrt(nx * nx + ny * ny);
+      float density = 1.0f;
+      if (r > p.inner_radius)
+      {
+        const float t = std::min((r - p.inner_radius) / (1.05f - p.inner_radius), 1.0f);
+        density = 1.0f - (1.0f - p.min_density) * std::pow(t, p.falloff_exponent);
+      }
+      const u8 value = static_cast<u8>(
+          std::lround(std::clamp(density, p.min_density, 1.0f) * 255.0f));
+      dst[(y * width + x) * 2 + 0] = value;
+      dst[(y * width + x) * 2 + 1] = value;
+    }
+  }
+}
 }  // namespace
 
 ObjectCache::EFBFoveationKey ObjectCache::GetCurrentEFBFoveationKey()
@@ -677,8 +715,11 @@ VkImageView ObjectCache::GetEFBFragmentDensityMapView(u32 fb_width, u32 fb_heigh
     return VK_NULL_HANDLE;
   }
 
+  // Without Smart Foveated EFB the map is fixed: a new level makes a new map (Baiji 0.9.1).
   if (m_efb_fdm_view != VK_NULL_HANDLE && m_efb_fdm_fb_width == fb_width &&
-      m_efb_fdm_fb_height == fb_height && m_efb_fdm_layers == layers)
+      m_efb_fdm_fb_height == fb_height && m_efb_fdm_layers == layers &&
+      (g_ActiveConfig.vr_smart_efb_foveation ||
+       m_efb_fdm_key.level == std::clamp(g_ActiveConfig.vr_foveation_level, 1, 3)))
   {
     return m_efb_fdm_view;
   }
@@ -764,7 +805,7 @@ VkImageView ObjectCache::GetEFBFragmentDensityMapView(u32 fb_width, u32 fb_heigh
   // render passes recorded after the upload completed: the next frame end uploads them again
   // and waits for that (UpdateEFBFragmentDensityMap).
   m_efb_fdm_current = false;
-  if (!m_frame_end_event)
+  if (!m_frame_end_event && g_ActiveConfig.vr_smart_efb_foveation)
   {
     m_frame_end_event = GetVideoEvents().after_frame_event.Register(
         [this](Core::System&) { UpdateEFBFragmentDensityMap(); });
@@ -817,6 +858,12 @@ bool ObjectCache::UploadEFBFragmentDensityMap(bool initial)
   const float efb_scale_y = static_cast<float>(m_efb_fdm_fb_height) / EFB_HEIGHT;
   for (u32 layer = 0; layer < layers; ++layer)
   {
+    if (!g_ActiveConfig.vr_smart_efb_foveation)
+    {
+      FillRadialFoveationDensityLayer(map + layer * layer_size, m_efb_fdm_width, m_efb_fdm_height,
+                                      m_efb_fdm_key.level);
+      continue;
+    }
     FillFoveationDensityLayer(map + layer * layer_size, m_efb_fdm_width, m_efb_fdm_height,
                               m_efb_fdm_texel_width, m_efb_fdm_texel_height, efb_scale_x,
                               efb_scale_y, m_efb_fdm_key.eye_tangents[std::min(layer, 1u)],

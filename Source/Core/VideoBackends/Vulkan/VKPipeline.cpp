@@ -21,6 +21,7 @@
 #include "VideoBackends/Vulkan/VKVertexFormat.h"
 #include "VideoBackends/Vulkan/VulkanContext.h"
 #include "VideoCommon/FramebufferManager.h"
+#include "VideoCommon/VideoConfig.h"
 
 namespace Vulkan
 {
@@ -504,7 +505,8 @@ std::unique_ptr<VKPipeline> VKPipeline::Create(const AbstractPipelineConfig& con
   // Selective EFB foveation runs each EFB render pass with or without the density map, and a
   // pipeline must match its render pass in that, so EFB pipelines get a twin for the plain one.
   VkPipeline plain_pipeline = VK_NULL_HANDLE;
-  if (fdm_pass && g_framebuffer_manager && g_framebuffer_manager->IsEFBFoveated())
+  if (fdm_pass && g_ActiveConfig.vr_smart_efb_foveation && g_framebuffer_manager &&
+      g_framebuffer_manager->IsEFBFoveated())
   {
     pipeline_info.renderPass = g_object_cache->GetRenderPass(
         VKTexture::GetVkFormatForHostTextureFormat(config.framebuffer_state.color_texture_format),
