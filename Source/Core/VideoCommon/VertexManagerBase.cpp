@@ -1658,9 +1658,6 @@ void VertexManagerBase::Flush()
           if (!hunter_skip && !elements_skip && !texmgr_skip)
           {
             auto handling = ShaderHunter::HandlingType::Skip;
-            // Which system chose the handling (VR::AgentCapture::HandlingSource), for the agent
-            // server's draw capture.
-            [[maybe_unused]] u8 handling_source = 0;
             bool preserve_stereo_efb = false;
             bool mono_efb_copy = false;
             float element_depth = -1.0f;
@@ -1678,7 +1675,6 @@ void VertexManagerBase::Flush()
             }
             if (handling != ShaderHunter::HandlingType::Skip)
             {
-              handling_source = 1;
               // ResolveOverrides filled the parameter matching this handling.
               if (handling == ShaderHunter::HandlingType::ScreenPane)
               {
@@ -1697,7 +1693,6 @@ void VertexManagerBase::Flush()
             else if (hunter_has_overrides)
             {
               handling = hunter.GetOverrideHandling(vs_hash, ps_hash, gs_hash);
-              handling_source = 2;
               if (handling == ShaderHunter::HandlingType::Screen ||
                   handling == ShaderHunter::HandlingType::HeadLocked)
               {
@@ -1729,23 +1724,19 @@ void VertexManagerBase::Flush()
               handling = texmgr.GetHandlingForTextures(tex_hashes, &draw_depth, &element_depth,
                                                        &units_per_meter, &passthrough_opacity,
                                                        &anchor_params, &controller_anchor_params);
-              handling_source = 3;
             }
             if (handling == ShaderHunter::HandlingType::Skip && metroid_profile_active)
             {
               handling = GetMetroidLayerBehavior(metroid_profile, metroid_layer).handling;
-              handling_source = 4;
             }
             if (handling == ShaderHunter::HandlingType::Skip && uses_mp2_dark_copy)
             {
               handling = ShaderHunter::HandlingType::Fullscreen;
-              handling_source = 4;
             }
             if (handling == ShaderHunter::HandlingType::Skip && uses_mp2_dark_highlight_copy &&
                 !metroid_metrics.perspective)
             {
               handling = ShaderHunter::HandlingType::Fullscreen;
-              handling_source = 4;
             }
             // The scene's projection, which TextureCacheBase needs to aim GazeRamCopies and
             // PerEyeScreenCopies.

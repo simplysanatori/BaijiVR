@@ -43,7 +43,7 @@ void OnGameUnloaded(const Core::CPUThreadGuard* guard);
 // State::DoState: after a load, on_state_loaded runs at the next field.
 void DoState(PointerWrap& p);
 
-// ---- UIs and the agent server (any thread) ----
+// ---- UIs (any thread) ----
 
 enum class PatchState : u8
 {
@@ -128,27 +128,4 @@ std::vector<LogLine> GetLog(const std::string& id, size_t max_lines, bool curren
 // User/VRPatches/<GameID>/ and Sys/VRPatches/.
 std::string GetUserPatchDirectory(const std::string& game_id);
 std::string GetSysPatchDirectory();
-
-// ---- The agent server ----
-
-// Runs `source` as patch `id` of the running game for this session, in place of its file and
-// whether or not it is enabled. Returns an error message ("" on success) when there is no game or
-// the source does not load (syntax error, invalid manifest).
-std::string SetSessionSource(const std::string& id, std::string source);
-bool HasSessionSource(const std::string& id);
-void ClearSessionSource(const std::string& id);
-void ClearSessionSources();
-// Writes the live source to User/VRPatches/<GameID>/<id>.lua and forgets it: the file runs in its
-// place when the patch is enabled (`enable` enables it for the game, over a session value).
-// Returns an error message, "" on success.
-std::string SaveSessionSource(const std::string& id, bool enable, std::string* path);
-
-// For this session only, over the files' values of the running game: whether a patch runs, and a
-// setting's value. Nothing is written: SetPatchEnabled / SetPatchSetting save, and a change from a
-// UI drops the session value. False when no game runs or the patch has no such setting.
-bool SetSessionEnabled(const std::string& id, bool enabled);
-bool SetSessionSetting(const std::string& id, const std::string& name, double value);
-// Drops the session values of a patch (of every patch when `id` is empty, for every game): the
-// saved ones apply again.
-void ClearSessionValues(const std::string& id);
 }  // namespace VRPatch

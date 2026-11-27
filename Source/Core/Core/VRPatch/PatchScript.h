@@ -179,6 +179,4 @@ std::variant<Manifest, std::string> ReadManifest(std::string_view source, std::s
 // Patch IDs are file names: letters, digits, '-', '_' and '.', 1 to 64 characters.
 bool IsValidPatchId(std::string_view id);
 
-// The API reference shown to agents (describe_vr_patch_api) and in the docs.
-std::string_view GetApiReference();
 }  // namespace VRPatch

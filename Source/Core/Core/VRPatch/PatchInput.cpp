@@ -44,8 +44,8 @@ std::atomic<bool> s_holding{false};
 std::mutex s_mutex;
 std::vector<Entry> s_held;
 
-// The agent's override function, recognizable by type (InputOverrideFunction::target).
-struct AgentOverride
+// The override function of held input, recognizable by type (InputOverrideFunction::target).
+struct HeldInputOverride
 {
   Device device;
   unsigned int port;
@@ -57,9 +57,9 @@ struct AgentOverride
   }
 };
 
-bool IsAgentOverride(const ControllerEmu::ControlGroupContainer& controller)
+bool IsHeldInputOverride(const ControllerEmu::ControlGroupContainer& controller)
 {
-  return controller.GetInputOverrideFunction().target<AgentOverride>() != nullptr;
+  return controller.GetInputOverrideFunction().target<HeldInputOverride>() != nullptr;
 }
 
 ControllerEmu::Attachments* GetAttachments(unsigned int port)
@@ -103,8 +103,6 @@ std::optional<double> Lookup(Device device, unsigned int port, std::string_view 
     if (entry.device == device && entry.port == port && entry.control.group == group &&
         entry.control.control == control)
     {
-      if (entry.layer == Layer::Agent)
-        return entry.control.value;
       patch_value = entry.control.value;
     }
   }
@@ -129,16 +127,6 @@ void ReleaseLayer(Layer layer)
   s_holding.store(!s_held.empty(), std::memory_order_release);
 }
 
-void Hold(Device device, unsigned int port, std::vector<HeldControl> controls)
-{
-  Hold(Layer::Agent, device, port, std::move(controls));
-}
-
-void ReleaseAll()
-{
-  ReleaseLayer(Layer::Agent);
-}
-
 ControllerEmu::ControlGroupContainer* GetController(Device device, unsigned int port,
                                                     std::string* error)
 {
@@ -154,8 +142,8 @@ ControllerEmu::ControlGroupContainer* GetController(Device device, unsigned int 
     if (si_device == SerialInterface::SIDEVICE_WIIU_ADAPTER)
     {
       // The adapter reads real controllers without ControllerEmu, so no override reaches it.
-      *error = fmt::format("GameCube port {} uses the GameCube Adapter for Wii U, which the agent "
-                           "cannot drive: ask the user to set the port to Standard Controller.",
+      *error = fmt::format("GameCube port {} uses the GameCube Adapter for Wii U, which VR "
+                           "patches cannot drive: ask the user to set the port to Standard Controller.",
                            port + 1);
       return nullptr;
     }
@@ -208,13 +196,13 @@ bool Attach(Device device, unsigned int port, std::string* error)
     return true;
   if (controller->HasInputOverrideFunction())
   {
-    if (IsAgentOverride(*controller))
+    if (IsHeldInputOverride(*controller))
       return true;
     *error = "Another input override controls this controller (a TAS input window): ask the user "
              "to close it.";
     return false;
   }
-  controller->SetInputOverrideFunction(AgentOverride{device, port});
+  controller->SetInputOverrideFunction(HeldInputOverride{device, port});
   return true;
 }
 
@@ -236,7 +224,7 @@ void Detach(Layer layer)
   const auto lock = ControllerEmu::EmulatedController::GetStateLock();
   const auto detach = [&](ControllerEmu::ControlGroupContainer* controller, Device device,
                           unsigned int port) {
-    if (controller && IsAgentOverride(*controller) && !is_held(device, port))
+    if (controller && IsHeldInputOverride(*controller) && !is_held(device, port))
       controller->ClearInputOverrideFunction();
   };
   for (unsigned int port = 0; port < GC_PORTS; ++port)
@@ -250,11 +238,6 @@ void Detach(Layer layer)
         detach(attachment.get(), Device::Attachment, port);
     }
   }
-}
-
-void DetachAll()
-{
-  Detach(Layer::Agent);
 }
 
 std::vector<GroupInfo> DescribeController(const ControllerEmu::ControlGroupContainer& controller)

@@ -112,7 +112,7 @@ public:
   // Called from VertexLoaderManager::RunVertices — returns true if src matches any active code
   bool ShouldHide(const u8* src) const;
 
-  // The hunters' pick preview (VR::DrawPick): vertex data starting with one of these lines is
+  // A pick preview: vertex data starting with one of these lines is
   // drawn pink instead of hidden, so a picked code shows what it would hide. Empty: none.
   void SetPinkPreview(const std::vector<HideObjectEntry>& entries);
   bool HasPinkPreview() const { return m_has_pink_preview.load(std::memory_order_relaxed); }

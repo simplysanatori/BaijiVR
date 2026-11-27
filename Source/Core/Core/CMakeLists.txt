@@ -587,7 +587,6 @@ add_library(core
 
 if(ENABLE_VR)
   target_sources(core PRIVATE
-    VRPatch/ApiReference.cpp
     VRPatch/BindingsMem.cpp
     VRPatch/BindingsMisc.cpp
     VRPatch/BindingsVR.cpp
