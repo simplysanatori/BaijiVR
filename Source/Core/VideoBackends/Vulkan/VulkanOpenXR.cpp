@@ -2053,6 +2053,8 @@ void VulkanOpenXR::DestroySwapchains()
 
 AbstractFramebuffer* VulkanOpenXR::AcquireEyeFramebuffer(uint32_t eye_index)
 {
+  // OverrideImageLayout below changes texture state that queued commands may read.
+  DrainRecordingWorkerForDirectAccess();
   ASSERT(eye_index < 2);
 #if defined(BAIJI_STEAMVR)
   // Do not acquire a second XR image pair while the previous pair is still being written.
@@ -2130,6 +2132,8 @@ AbstractFramebuffer* VulkanOpenXR::AcquireEyeFramebuffer(uint32_t eye_index)
 
 AbstractFramebuffer* VulkanOpenXR::AcquireLayeredFramebuffer()
 {
+  // OverrideImageLayout below changes texture state that queued commands may read.
+  DrainRecordingWorkerForDirectAccess();
   static unsigned int s_openxr_vk_layered_acquire_log_count = 0;
   auto& sc = m_layered_swapchain;
   if (!m_use_layered_swapchain || sc.swapchain == XR_NULL_HANDLE)
@@ -2609,6 +2613,8 @@ void VulkanOpenXR::FinalizeStereoFlatFrameAfterGPU(VkFence fence, bool have_pair
 
 bool VulkanOpenXR::SubmitStereoFlatFrame()
 {
+  // The eye blits' framebuffer restore may still be queued on the recording worker.
+  DrainRecordingWorkerForDirectAccess();
   ASSERT(VR::g_openxr != nullptr);
 
 #if defined(BAIJI_STEAMVR)

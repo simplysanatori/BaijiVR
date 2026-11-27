@@ -34,29 +34,35 @@ public:
   bool IsFlushed() const override;
   bool UseNonBlockingResults() const override;
   void PrepareNonBlockingResult() override;
+  void OnFrameAborted() override;
+  void OnStateLoaded() override;
 
 private:
   // u32 is used for the sample counts.
   using PerfQueryDataType = u32;
 
   // when testing in SMS: 64 was too small, 128 was ok
-  // Super Mario Sunshine queries every draw (700+ per frame in Delfino Plaza): with 512 entries
-  // the half-full partial flush forced mid-frame submits and the full ring blocked on the GPU
-  // every frame. 2048 holds more than a frame, so results are read once their command buffer
-  // completed on its own.
   // TODO: This should be size_t, but the base class uses u32s
-  static const u32 PERF_QUERY_BUFFER_SIZE = 2048;
-  // A query recorded in a multiview render pass (VR stereo EFB) uses one pool slot per view,
-  // so every entry owns this many consecutive slots.
+  static const u32 PERF_QUERY_BUFFER_SIZE = 512;
+  // Non-blocking results: Super Mario Sunshine queries every draw (700+ per frame in Delfino Plaza).
+  // With 512 entries the half-full partial flush forces mid-frame submits and the full ring blocks
+  // on the GPU every frame; 2048 holds more than a frame, so results are read once their command
+  // buffer completed on its own.
+  static const u32 NONBLOCKING_QUERY_BUFFER_SIZE = 2048;
+  // A query recorded in a multiview render pass (Immersive VR's stereo EFB) uses one pool slot per
+  // view, so with non-blocking results every entry owns this many consecutive slots.
   static const u32 MAX_QUERY_VIEWS = 2;
 
   struct ActiveQuery
   {
     u64 fence_counter;
     // Measurement period (the queries between two ResetQuery calls) the query counts for, and
-    // its 1-based position in it. Only non-blocking results use these.
+    // its 1-based position in it, and the EFB's size when it was begun. Only non-blocking results
+    // use these.
     u64 period;
     u32 period_seq;
+    u32 efb_width;
+    u32 efb_height;
     PerfQueryGroup query_group;
     bool has_value;
   };
@@ -89,11 +95,12 @@ private:
   VkQueryPool m_query_pool = VK_NULL_HANDLE;
   u32 m_query_readback_pos = 0;
   u32 m_query_next_pos = 0;
-  // Pool slots per entry for the queries in flight (the EFB view count when they were begun).
+  // The entries of m_query_buffer in use, and the pool slots per entry.
+  u32 m_ring_size = PERF_QUERY_BUFFER_SIZE;
   u32 m_query_views = 1;
-  std::array<ActiveQuery, PERF_QUERY_BUFFER_SIZE> m_query_buffer = {};
-  std::array<PerfQueryDataType, PERF_QUERY_BUFFER_SIZE * MAX_QUERY_VIEWS> m_query_result_buffer =
-      {};
+  std::array<ActiveQuery, NONBLOCKING_QUERY_BUFFER_SIZE> m_query_buffer = {};
+  std::array<PerfQueryDataType, NONBLOCKING_QUERY_BUFFER_SIZE * MAX_QUERY_VIEWS>
+      m_query_result_buffer = {};
 
   // Non-blocking results ([VR] NonBlockingPerfQueries). m_results then holds the answer of the
   // last read, valid until the next query or reset.
