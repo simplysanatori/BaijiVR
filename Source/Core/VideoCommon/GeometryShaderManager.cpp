@@ -327,7 +327,11 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
             // The same for Y: Red Steel 2's view space points Y down, with a reflection in its
             // view matrix, and its projection flips Y back. Without the flip the VR projection
             // drew the world upside down with every triangle reversed (front faces culled).
-            const float proj_y_sign = (xfmem.projection.rawProjection[2] < 0.0f) ? -1.0f : 1.0f;
+            // Part of the dolphinXR rendering fixes; without them Y is never flipped (0.9.1).
+            const float proj_y_sign = (g_ActiveConfig.vr_dolphinxr_render_fixes &&
+                                       xfmem.projection.rawProjection[2] < 0.0f) ?
+                                          -1.0f :
+                                          1.0f;
             constants.stereoparams[1] = proj_y_sign;
 
             float depth_scale = 1.0f;
@@ -731,8 +735,15 @@ void GeometryShaderManager::RefreshVREyeRowCache()
   const bool lock = g_ActiveConfig.VRLockHeadPosePerFrame();
   const bool freelook = g_freelook_camera.IsActive();
   const u64 generation = VR::g_openxr->GetPoseGeneration();
-  if (!m_vr_pose_needs_refresh && freelook == m_vr_eye_rows_freelook &&
-      (lock || (!freelook && generation == m_vr_eye_rows_generation)))
+  if (!g_ActiveConfig.vr_dolphinxr_render_fixes)
+  {
+    // Without the dolphinXR rendering fixes, 0.9.1's timing: under the lock until the frame
+    // boundary, otherwise a fresh pose for every draw.
+    if (lock && !m_vr_pose_needs_refresh)
+      return;
+  }
+  else if (!m_vr_pose_needs_refresh && freelook == m_vr_eye_rows_freelook &&
+           (lock || (!freelook && generation == m_vr_eye_rows_generation)))
   {
     return;
   }
@@ -759,12 +770,25 @@ void GeometryShaderManager::RefreshVREyeRowCache()
 const GeometryShaderManager::VREyeRows& GeometryShaderManager::GetVREyeRows(float units_per_meter)
 {
   RefreshVREyeRowCache();
-  for (const VREyeRows& rows : m_vr_eye_rows)
+  // Without the dolphinXR rendering fixes only the last rows built are reused (0.9.1 had one
+  // cache entry: another scale rebuilt it from the current pose).
+  const bool keep_scales = g_ActiveConfig.vr_dolphinxr_render_fixes;
+  for (u32 i = 0; i < m_vr_eye_rows.size(); ++i)
   {
-    if (rows.valid && std::abs(rows.units_per_meter - units_per_meter) <= 0.0001f)
+    const VREyeRows& rows = m_vr_eye_rows[i];
+    if (rows.valid && std::abs(rows.units_per_meter - units_per_meter) <= 0.0001f &&
+        (keep_scales || i == m_vr_eye_rows_last))
+    {
       return rows;
+    }
+  }
+  if (!keep_scales)
+  {
+    for (VREyeRows& stale : m_vr_eye_rows)
+      stale.valid = false;
   }
 
+  m_vr_eye_rows_last = m_vr_eye_rows_next;
   VREyeRows& rows = m_vr_eye_rows[m_vr_eye_rows_next];
   m_vr_eye_rows_next = (m_vr_eye_rows_next + 1) % static_cast<u32>(m_vr_eye_rows.size());
   rows.valid = true;

@@ -2245,7 +2245,8 @@ static void GetDisplayRectForXFBEntry(TCacheEntry* entry, u32 width, u32 height,
   // VR: the eye projections fill the scene's lines, which this copy spread over all of its own.
   // The VI may show fewer (with ImmediateXFB off): showing only those would crop and stretch
   // the eyes' picture, and the world would swim as the head turns.
-  if (entry->vr_scene_fills_copy)
+  // Part of the dolphinXR rendering fixes.
+  if (entry->vr_scene_fills_copy && g_ActiveConfig.vr_dolphinxr_render_fixes)
     height = entry->native_height;
 
   // Scale the sub-rectangle to the full resolution of the texture.
@@ -2388,7 +2389,7 @@ RcTcacheEntry TextureCacheBase::GetXFBFromCache(u32 address, u32 width, u32 heig
 RcTcacheEntry TextureCacheBase::GetVRRecentXFBCopy(u32 address, u32 width, u32 height,
                                                    u32 stride) const
 {
-  if (!g_ActiveConfig.VRSessionActive() ||
+  if (!g_ActiveConfig.VRSessionActive() || !g_ActiveConfig.vr_dolphinxr_render_fixes ||
       m_vr_presents_since_xfb_copy > MAX_VR_RECENT_XFB_PRESENTS)
   {
     return {};
@@ -3062,7 +3063,8 @@ void TextureCacheBase::CopyRenderTargetToTexture(
     const u64 hash = entry->CalculateHash();
     entry->SetHashes(hash, hash);
 #ifdef ENABLE_VR
-    if (is_xfb_copy && g_ActiveConfig.VRSessionActive())
+    if (is_xfb_copy && g_ActiveConfig.VRSessionActive() &&
+        g_ActiveConfig.vr_dolphinxr_render_fixes)
     {
       std::shift_right(m_vr_recent_xfb_copies.begin(), m_vr_recent_xfb_copies.end(), 1);
       m_vr_recent_xfb_copies[0] = entry;

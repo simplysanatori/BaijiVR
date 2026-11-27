@@ -211,6 +211,7 @@ private:
   // new pose generation (once per LocateViews) instead of for every draw.
   std::array<VREyeRows, 4> m_vr_eye_rows{};
   u32 m_vr_eye_rows_next = 0;
+  u32 m_vr_eye_rows_last = 0;
   u64 m_vr_eye_rows_generation = 0;
   bool m_vr_eye_rows_freelook = false;
   bool m_vr_pose_needs_refresh = true;

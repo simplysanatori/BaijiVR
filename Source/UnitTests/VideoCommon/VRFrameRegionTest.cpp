@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "VideoCommon/VR/VRFrameRegion.h"
+#include "VideoCommon/VideoConfig.h"
 #include "VideoCommon/XFMemory.h"
 
 namespace
@@ -26,6 +27,14 @@ VR::VRScissor ScissorOf(int left, int top, int width, int height)
 {
   return {left, top, left + width - 1, top + height - 1};
 }
+
+// The scissor-aware classes (displaced scenes, copied panes) belong to the dolphinXR rendering
+// fixes; without them the classification is 0.9.1's.
+struct RenderFixesOn
+{
+  RenderFixesOn() { g_ActiveConfig.vr_dolphinxr_render_fixes = true; }
+  ~RenderFixesOn() { g_ActiveConfig.vr_dolphinxr_render_fixes = false; }
+};
 
 void LatchDisplayRegion(int width, int height)
 {
@@ -124,6 +133,7 @@ TEST(VRFrameRegion, NearMatchingAnimatedViewportCannotMoveComposedScreen)
 
 TEST(VRFrameRegion, SceneMovedFarOffTheFrameIsDisplaced)
 {
+  RenderFixesOn fixes;
   VR::ResetVRFrameRegion();
   LatchDisplayRegion(640, 480);
 
@@ -143,6 +153,7 @@ TEST(VRFrameRegion, SceneMovedFarOffTheFrameIsDisplaced)
 
 TEST(VRFrameRegion, SceneMovedWithinTheToleranceStaysMainScene)
 {
+  RenderFixesOn fixes;
   VR::ResetVRFrameRegion();
   LatchDisplayRegion(640, 480);
 
@@ -160,6 +171,7 @@ TEST(VRFrameRegion, SceneMovedWithinTheToleranceStaysMainScene)
 
 TEST(VRFrameRegion, ViewportMovedInsideAFixedScissorIsNotDisplaced)
 {
+  RenderFixesOn fixes;
   VR::ResetVRFrameRegion();
   LatchDisplayRegion(640, 448);
 
@@ -174,6 +186,7 @@ TEST(VRFrameRegion, ViewportMovedInsideAFixedScissorIsNotDisplaced)
 
 TEST(VRFrameRegion, SceneOutsideTheFrameStaysOffscreen)
 {
+  RenderFixesOn fixes;
   VR::ResetVRFrameRegion();
   LatchDisplayRegion(640, 480);
 
@@ -479,6 +492,7 @@ TEST(VRFrameRegion, ReticleCopyRectangles)
 // as large as the viewport, is not.
 TEST(VRFrameRegion, SmallScissorAtTheCornerIsRenderToTexture)
 {
+  RenderFixesOn fixes;
   VR::ResetVRFrameRegion();
   LatchDisplayRegion(640, 456);
   EXPECT_EQ(VR::ClassifyVRViewport(MakeViewport(0, 0, 608, 448), ScissorOf(0, 0, 64, 64), 0, 0),
@@ -502,6 +516,7 @@ TEST(VRFrameRegion, SmallScissorAtTheCornerIsRenderToTexture)
 // target from the frame after the copy, not the left half of a split screen.
 TEST(VRFrameRegion, PaneCopiedToATextureIsRenderToTexture)
 {
+  RenderFixesOn fixes;
   VR::ResetVRFrameRegion();
   LatchDisplayRegion(640, 456);
   const Viewport pane = MakeViewport(342, 342, 350, 456);
@@ -551,6 +566,7 @@ TEST(VRFrameRegion, PaneCopiedToATextureIsRenderToTexture)
 // 456-line frame: outside the displayed region, not a letterboxed scene.
 TEST(VRFrameRegion, FullWidthBandUnderTheFrameIsOffscreen)
 {
+  RenderFixesOn fixes;
   VR::ResetVRFrameRegion();
   LatchDisplayRegion(608, 456);
   EXPECT_EQ(VR::ClassifyVRViewport(MakeViewport(342, 798, 608, 72), ScissorOf(342, 798, 608, 72),
@@ -567,6 +583,7 @@ TEST(VRFrameRegion, FullWidthBandUnderTheFrameIsOffscreen)
 // the last copy of its pane is two frames old, and both panes are render targets.
 TEST(VRFrameRegion, PanesCopiedOnAlternateFramesAreRenderTargets)
 {
+  RenderFixesOn fixes;
   VR::ResetVRFrameRegion();
   LatchDisplayRegion(608, 456);
   const Viewport small_pane = MakeViewport(342, 342, 152, 114);

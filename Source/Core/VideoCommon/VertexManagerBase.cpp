@@ -679,7 +679,10 @@ VertexManagerBase::CpuCullPlan VertexManagerBase::GetCpuCullPlan()
   if (xfmem.projection.type == ProjectionType::Perspective)
   {
     const float x_sign = xfmem.projection.rawProjection[0] < 0.0f ? -1.0f : 1.0f;
-    const float y_sign = xfmem.projection.rawProjection[2] < 0.0f ? -1.0f : 1.0f;
+    const float y_sign = g_ActiveConfig.vr_dolphinxr_render_fixes &&
+                                 xfmem.projection.rawProjection[2] < 0.0f ?
+                             -1.0f :
+                             1.0f;
     for (auto& row : m_vr_cull_projection)
     {
       row[0] *= x_sign;

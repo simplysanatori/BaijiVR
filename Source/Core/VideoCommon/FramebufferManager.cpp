@@ -481,8 +481,11 @@ void FramebufferManager::ClearEFBForOpenXR()
   // Far is the game's own far value, 0xFFFFFF, as ClearRegion stores it: an EFB depth copy turns
   // exactly 1.0 into 0x1000000, which wraps to 0, the near plane (Wii Sports Resort's see-through
   // Mii depth-tests against such a copy and darkened everything the game's camera did not see).
+  // Part of the dolphinXR rendering fixes; without them the clear is 1.0 / 0.0 (0.9.1).
   constexpr float game_far = 16777215.0f / 16777216.0f;
-  const float far_depth = g_backend_info.bSupportsReversedDepthRange ? game_far : 1.0f - game_far;
+  const float far_value = g_ActiveConfig.vr_dolphinxr_render_fixes ? game_far : 1.0f;
+  const float far_depth =
+      g_backend_info.bSupportsReversedDepthRange ? far_value : 1.0f - far_value;
   g_gfx->SetAndClearFramebuffer(m_efb_framebuffer.get(), {0.f, 0.f, 0.f, 0.f}, far_depth);
   if (HasEFBCoverage())
   {
