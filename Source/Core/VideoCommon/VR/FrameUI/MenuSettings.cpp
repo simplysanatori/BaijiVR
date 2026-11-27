@@ -325,9 +325,13 @@ std::vector<SettingRow> MakeGraphicsRows()
                       "Display in the headset.",
                       {{"Off", 0.0f}, {"Low", 1.0f}, {"Medium", 2.0f}, {"High", 3.0f}}),
            SettingStore::VRFile, RowDisplay::Immersive, Applies::NextGame),
+      With(MakeRow(FoveateEFB, SECTION, RowKind::Switch, "Foveate the Game's Own Picture",
+                   "Uses Foveated Rendering earlier in the picture too. Faster in some games, "
+                   "slower in others."),
+           SettingStore::VRFile, RowDisplay::Immersive, Applies::NextGame),
       With(MakeRow(SmartFoveatedEFB, SECTION, RowKind::Switch, "Smart Foveated EFB",
-                   "Foveates only EFB passes that measure faster on the GPU and caches results "
-                   "per game."),
+                   "With Foveate the Game's Own Picture: foveates only the passes that measure "
+                   "faster on the GPU and caches results per game."),
            SettingStore::VRFile, RowDisplay::Immersive, Applies::NextGame),
       With(MakeSlider(Gamma, SECTION, "Gamma", "Darkens a picture that is too bright.",
                       {Config::GFX_VR_GAMMA_MIN, Config::GFX_VR_GAMMA_MAX,
@@ -440,11 +444,21 @@ std::vector<SettingRow> MakeImmersiveRows()
   rows.push_back(With(MakeRow(RemoveBars, SECTION, RowKind::Switch, "Remove Cinematic Bars",
                               "Removes the black bars at the top and bottom."),
                       SettingStore::VRFile, DISPLAY));
+  rows.push_back(With(MakeRow(DolphinXRRenderFixes, SECTION, RowKind::Switch,
+                              "dolphinXR Rendering Fixes",
+                              "dolphinXR's fixes for upside-down views, far depth, moved scenes "
+                              "and picture copies. For games that need them."),
+                      SettingStore::VRFile, DISPLAY));
   rows.push_back(With(MakeRow(HeadCPUCull, SECTION, RowKind::Switch, "Head-Cone CPU Culling",
                               "Culls off-screen triangles against your headset's wider view."),
                       SettingStore::VRFile, DISPLAY));
+  rows.push_back(With(MakeRow(WiimoteMotionModel, SECTION, RowKind::Switch,
+                              "dolphinXR Wii Remote Motion",
+                              "The VR controllers' Wii Remote motion and pointer from dolphinXR."),
+                      SettingStore::VRFile));
   rows.push_back(With(MakeSlider(WiimoteMotionPitch, SECTION, "Wii Remote Pitch",
-                                 "Tilts the VR controller's Wii Remote motion orientation.",
+                                 "With dolphinXR Wii Remote Motion: tilts the VR controller's Wii "
+                                 "Remote motion orientation.",
                                  {-45.0f, 45.0f, 1.0f}, FormatDegrees),
                       SettingStore::VRFile));
   rows.push_back(With(MakeRow(PerEyeScreenCopies, SECTION, RowKind::Switch,
@@ -579,7 +593,8 @@ const std::vector<Binding>& GetBindings()
       Bind(SettingId::EFBCopiesToTexture, Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM),
       Bind(SettingId::XFBCopiesToTexture, Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM),
       Bind(SettingId::FoveatedRendering, Config::GFX_VR_FOVEATION_LEVEL),
-      Bind(SettingId::SmartFoveatedEFB, Config::GFX_VR_EFB_FOVEATION),
+      Bind(SettingId::FoveateEFB, Config::GFX_VR_EFB_FOVEATION),
+      Bind(SettingId::SmartFoveatedEFB, Config::GFX_VR_SMART_EFB_FOVEATION),
       Bind(SettingId::Gamma, Config::GFX_VR_GAMMA),
       Bind(SettingId::NonBlockingEFBCopies, Config::GFX_VR_ASYNC_EFB_COPIES),
       Bind(SettingId::NonBlockingPerfQueries, Config::GFX_VR_NON_BLOCKING_PERF_QUERIES),
@@ -600,7 +615,9 @@ const std::vector<Binding>& GetBindings()
       Bind(SettingId::HeadTracking, Config::GFX_VR_TRACKING_MODE),
       Bind(SettingId::HudDepth, Config::GFX_VR_HUD_THICKNESS),
       Bind(SettingId::RemoveBars, Config::GFX_VR_REMOVE_BARS),
+      Bind(SettingId::DolphinXRRenderFixes, Config::GFX_VR_DOLPHINXR_RENDER_FIXES),
       Bind(SettingId::HeadCPUCull, Config::GFX_VR_HEAD_CPU_CULL),
+      Bind(SettingId::WiimoteMotionModel, Config::GFX_VR_WIIMOTE_MOTION_MODEL),
       Bind(SettingId::WiimoteMotionPitch, Config::GFX_VR_WIIMOTE_MOTION_PITCH),
       Bind(SettingId::PerEyeScreenCopies, Config::GFX_VR_PER_EYE_SCREEN_COPIES),
       Bind(SettingId::SkipBackgroundFill, Config::GFX_VR_SKIP_BACKGROUND_FILL),

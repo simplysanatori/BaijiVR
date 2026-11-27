@@ -215,7 +215,9 @@ static void ClearAppliedVRSettings()
   ClearAppliedVRSetting("HeadLockedCurvature", Config::GFX_VR_HEAD_LOCKED_CURVATURE);
   ClearAppliedVRSetting("DontClearScreen", Config::GFX_VR_DONT_CLEAR_SCREEN);
   ClearAppliedVRSetting("LoadCustomShaders", Config::GFX_VR_LOAD_CUSTOM_SHADERS);
+  ClearAppliedVRSetting("DisableCPUCull", Config::GFX_VR_DISABLE_CPU_CULL);
   ClearAppliedVRSetting("HeadCPUCull", Config::GFX_VR_HEAD_CPU_CULL);
+  ClearAppliedVRSetting("WiimoteMotionModel", Config::GFX_VR_WIIMOTE_MOTION_MODEL);
   ClearAppliedVRSetting("WiimoteMotionPitch", Config::GFX_VR_WIIMOTE_MOTION_PITCH);
   ClearAppliedVRSetting("GazeRamCopies", Config::GFX_VR_GAZE_RAM_COPIES);
   ClearAppliedVRSetting("PerEyeScreenCopies", Config::GFX_VR_PER_EYE_SCREEN_COPIES);
@@ -240,6 +242,7 @@ static void ClearAppliedVRSettings()
   ClearAppliedVRSetting("OrthoScissorFix", Config::GFX_VR_ORTHO_SCISSOR_FIX);
   ClearAppliedVRSetting("DetectSkybox", Config::GFX_VR_DETECT_SKYBOX);
   ClearAppliedVRSetting("SkipBackgroundFill", Config::GFX_VR_SKIP_BACKGROUND_FILL);
+  ClearAppliedVRSetting("DolphinXRRenderFixes", Config::GFX_VR_DOLPHINXR_RENDER_FIXES);
   ClearAppliedVRSetting("MetroidThermalVisorFix", Config::GFX_VR_METROID_THERMAL_VISOR_FIX);
   ClearAppliedVRSetting("MetroidD3DThermalPaletteFix",
                         Config::GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX);
@@ -251,6 +254,7 @@ static void ClearAppliedVRSettings()
   ClearAppliedVRSetting("FoveationLevel", Config::GFX_VR_FOVEATION_LEVEL);
   ClearAppliedVRSetting("DynamicFoveation", Config::GFX_VR_FOVEATION_DYNAMIC);
   ClearAppliedVRSetting("FoveateEFB", Config::GFX_VR_EFB_FOVEATION);
+  ClearAppliedVRSetting("SmartFoveateEFB", Config::GFX_VR_SMART_EFB_FOVEATION);
   ClearAppliedVRSetting("Passthrough", Config::GFX_VR_PASSTHROUGH);
   ClearAppliedVRSetting("ARMode", Config::GFX_VR_PASSTHROUGH);
   ClearAppliedVRSetting("PassthroughRemoveBlackBackground",
@@ -310,7 +314,9 @@ static void ApplyGameVRConfigOverrides(std::string_view game_id, std::optional<u
   ApplyVRSetting(values, "HeadLockedCurvature", Config::GFX_VR_HEAD_LOCKED_CURVATURE);
   ApplyVRSetting(values, "DontClearScreen", Config::GFX_VR_DONT_CLEAR_SCREEN);
   ApplyVRSetting(values, "LoadCustomShaders", Config::GFX_VR_LOAD_CUSTOM_SHADERS);
+  ApplyVRSetting(values, "DisableCPUCull", Config::GFX_VR_DISABLE_CPU_CULL);
   ApplyVRSetting(values, "HeadCPUCull", Config::GFX_VR_HEAD_CPU_CULL);
+  ApplyVRSetting(values, "WiimoteMotionModel", Config::GFX_VR_WIIMOTE_MOTION_MODEL);
   ApplyVRSetting(values, "WiimoteMotionPitch", Config::GFX_VR_WIIMOTE_MOTION_PITCH);
   ApplyVRSetting(values, "GazeRamCopies", Config::GFX_VR_GAZE_RAM_COPIES);
   ApplyVRSetting(values, "PerEyeScreenCopies", Config::GFX_VR_PER_EYE_SCREEN_COPIES);
@@ -351,6 +357,7 @@ static void ApplyGameVRConfigOverrides(std::string_view game_id, std::optional<u
   ApplyVRSetting(values, "OrthoScissorFix", Config::GFX_VR_ORTHO_SCISSOR_FIX);
   ApplyVRSetting(values, "DetectSkybox", Config::GFX_VR_DETECT_SKYBOX);
   ApplyVRSetting(values, "SkipBackgroundFill", Config::GFX_VR_SKIP_BACKGROUND_FILL);
+  ApplyVRSetting(values, "DolphinXRRenderFixes", Config::GFX_VR_DOLPHINXR_RENDER_FIXES);
   const bool has_d3d_thermal_palette_fix =
       values.find("MetroidD3DThermalPaletteFix") != values.end();
   ApplyVRSetting(values, "MetroidThermalVisorFix", Config::GFX_VR_METROID_THERMAL_VISOR_FIX);
@@ -374,6 +381,7 @@ static void ApplyGameVRConfigOverrides(std::string_view game_id, std::optional<u
   ApplyVRSetting(values, "FoveationLevel", Config::GFX_VR_FOVEATION_LEVEL);
   ApplyVRSetting(values, "DynamicFoveation", Config::GFX_VR_FOVEATION_DYNAMIC);
   ApplyVRSetting(values, "FoveateEFB", Config::GFX_VR_EFB_FOVEATION);
+  ApplyVRSetting(values, "SmartFoveateEFB", Config::GFX_VR_SMART_EFB_FOVEATION);
   const bool has_passthrough = values.find("Passthrough") != values.end();
   ApplyVRSetting(values, "Passthrough", Config::GFX_VR_PASSTHROUGH);
   // Legacy key from before the XR_FB_passthrough rework.

@@ -412,7 +412,8 @@ struct VideoConfig final
   float vr_head_locked_curvature = 0.0f;
   bool vr_dont_clear_screen = false;
   bool vr_load_custom_shaders = false;
-  bool vr_head_cpu_cull = true;
+  bool vr_disable_cpu_cull = false;
+  bool vr_head_cpu_cull = false;
   int vr_gaze_ram_copies = 0;
   bool vr_per_eye_screen_copies = false;
   OpenXRMirrorView vr_mirror_view = OpenXRMirrorView::BothEyes;
@@ -436,6 +437,7 @@ struct VideoConfig final
   bool vr_ortho_scissor_fix = true;  // Expand scissor for orthographic VR draws
   bool vr_detect_skybox = false;     // Treat objects drawn at camera origin (0,0,0) as skyboxes
   bool vr_skip_background_fill = false;  // Skip opaque untextured depth-tested background fill quads
+  bool vr_dolphinxr_render_fixes = false;  // GFX_VR_DOLPHINXR_RENDER_FIXES
   bool vr_metroid_thermal_visor_fix = false;  // Preserve thermal EFB copy layers for MP1 Vulkan
   bool vr_metroid_d3d_thermal_palette_fix = false;  // Layered MP1 thermal palette conversion on D3D11
   bool vr_passthrough = false;  // Show the headset camera feed behind unrendered (transparent) areas
@@ -458,6 +460,7 @@ struct VideoConfig final
   int vr_foveation_level = 0;   // XR_FB_foveation level: 0=off, 1=low, 2=medium, 3=high
   bool vr_foveation_dynamic = true;  // Let the runtime drop the foveation level when GPU load allows
   bool vr_efb_foveation = false;  // Also foveate the EFB pass (hurts EFB-copy-heavy games)
+  bool vr_smart_efb_foveation = false;  // GFX_VR_SMART_EFB_FOVEATION
   // D3D only config, mostly to be merged into the above
   int iAdapter = 0;
 

@@ -231,7 +231,9 @@ const Info<int> GFX_VR_STATS_POSITION{{System::GFX, "VR", "StatsPosition"}, 0};
 const Info<float> GFX_VR_HEAD_LOCKED_CURVATURE{{System::GFX, "VR", "HeadLockedCurvature"}, 0.0f};
 const Info<bool> GFX_VR_DONT_CLEAR_SCREEN{{System::GFX, "VR", "DontClearScreen"}, false};
 const Info<bool> GFX_VR_LOAD_CUSTOM_SHADERS{{System::GFX, "VR", "LoadCustomShaders"}, false};
-const Info<bool> GFX_VR_HEAD_CPU_CULL{{System::GFX, "VR", "HeadCPUCull"}, true};
+const Info<bool> GFX_VR_DISABLE_CPU_CULL{{System::GFX, "VR", "DisableCPUCull"}, false};
+const Info<bool> GFX_VR_HEAD_CPU_CULL{{System::GFX, "VR", "HeadCPUCull"}, false};
+const Info<bool> GFX_VR_WIIMOTE_MOTION_MODEL{{System::GFX, "VR", "WiimoteMotionModel"}, false};
 const Info<float> GFX_VR_WIIMOTE_MOTION_PITCH{{System::GFX, "VR", "WiimoteMotionPitch"}, 20.0f};
 const Info<int> GFX_VR_GAZE_RAM_COPIES{{System::GFX, "VR", "GazeRamCopies"},
                                        GFX_VR_GAZE_RAM_COPIES_OFF};
@@ -288,6 +290,8 @@ const Info<bool> GFX_VR_DETECT_RENDER_TARGETS{{System::GFX, "VR", "DetectRenderT
 const Info<bool> GFX_VR_ORTHO_SCISSOR_FIX{{System::GFX, "VR", "OrthoScissorFix"}, true};
 const Info<bool> GFX_VR_DETECT_SKYBOX{{System::GFX, "VR", "DetectSkybox"}, false};
 const Info<bool> GFX_VR_SKIP_BACKGROUND_FILL{{System::GFX, "VR", "SkipBackgroundFill"}, false};
+const Info<bool> GFX_VR_DOLPHINXR_RENDER_FIXES{{System::GFX, "VR", "DolphinXRRenderFixes"},
+                                              false};
 const Info<bool> GFX_VR_METROID_THERMAL_VISOR_FIX{
     {System::GFX, "VR", "MetroidThermalVisorFix"}, true};
 const Info<bool> GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX{
@@ -330,6 +334,7 @@ const Info<bool> GFX_VR_FOVEATION_DYNAMIC{{System::GFX, "VR", "DynamicFoveation"
 // — measured as a net GPU-time LOSS despite the fragment savings. Only worth enabling
 // per-game where the EFB pass runs long and uninterrupted.
 const Info<bool> GFX_VR_EFB_FOVEATION{{System::GFX, "VR", "FoveateEFB"}, false};
+const Info<bool> GFX_VR_SMART_EFB_FOVEATION{{System::GFX, "VR", "SmartFoveateEFB"}, false};
 // Graphics.Hacks
 
 const Info<bool> GFX_HACK_EFB_ACCESS_ENABLE{{System::GFX, "Hacks", "EFBAccessEnable"}, false};

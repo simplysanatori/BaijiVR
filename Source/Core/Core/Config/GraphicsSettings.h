@@ -229,7 +229,13 @@ extern const Info<int> GFX_VR_STATS_POSITION;
 extern const Info<float> GFX_VR_HEAD_LOCKED_CURVATURE;
 extern const Info<bool> GFX_VR_DONT_CLEAR_SCREEN;
 extern const Info<bool> GFX_VR_LOAD_CUSTOM_SHADERS;
+// No CPU culling at all in VR (Baiji 0.9.1's "Show Missing Objects"); wins over HeadCPUCull.
+extern const Info<bool> GFX_VR_DISABLE_CPU_CULL;
+// Off: CPU culling in VR as in 0.9.1 (CPU Cull setting, the game's view). On: the head cone.
 extern const Info<bool> GFX_VR_HEAD_CPU_CULL;
+// The VR controllers' Wii Remote motion from dolphinXR (gyro from the pose, accelerometer lever,
+// fixed pointer range, timed off-screen hide). WiimoteMotionPitch only applies with it on.
+extern const Info<bool> GFX_VR_WIIMOTE_MOTION_MODEL;
 extern const Info<float> GFX_VR_WIIMOTE_MOTION_PITCH;
 extern const Info<int> GFX_VR_GAZE_RAM_COPIES;
 static constexpr int GFX_VR_GAZE_RAM_COPIES_OFF = 0;
@@ -277,6 +283,9 @@ extern const Info<bool> GFX_VR_DETECT_RENDER_TARGETS;
 extern const Info<bool> GFX_VR_ORTHO_SCISSOR_FIX;
 extern const Info<bool> GFX_VR_DETECT_SKYBOX;
 extern const Info<bool> GFX_VR_SKIP_BACKGROUND_FILL;
+// dolphinXR's Immersive rendering fixes (projection Y flip, far-depth clear, displaced scenes,
+// scissor-aware viewport classes, XFB copy fallbacks, eye-row cache, Prime 2 load rules).
+extern const Info<bool> GFX_VR_DOLPHINXR_RENDER_FIXES;
 extern const Info<bool> GFX_VR_METROID_THERMAL_VISOR_FIX;
 extern const Info<bool> GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX;
 extern const Info<bool> GFX_VR_PASSTHROUGH;
@@ -299,6 +308,9 @@ extern const Info<float> GFX_VR_RESOLUTION_SCALE;
 extern const Info<int> GFX_VR_FOVEATION_LEVEL;
 extern const Info<bool> GFX_VR_FOVEATION_DYNAMIC;
 extern const Info<bool> GFX_VR_EFB_FOVEATION;
+// With FoveateEFB: the density map from the eyes' fields of view, and foveation only for the EFB
+// passes that measure faster (EFBFoveationScheduler).
+extern const Info<bool> GFX_VR_SMART_EFB_FOVEATION;
 static constexpr float GFX_VR_RESOLUTION_SCALE_MIN = 0.5f;
 static constexpr float GFX_VR_RESOLUTION_SCALE_MAX = 2.0f;
 static constexpr float GFX_VR_RESOLUTION_SCALE_STEP = 0.05f;

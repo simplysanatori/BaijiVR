@@ -183,9 +183,17 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
        {tr("Draw Both Eyes at Once"), tr("Faster. Turn it off if one eye looks wrong. Applies "
                                          "from the next game.")}},
       {Config::GFX_VR_EFB_FOVEATION.GetLocation(),
+       {tr("Foveate the Game's Own Picture"),
+        tr("Uses Foveated Rendering earlier in the picture too. Faster in some games, slower in "
+           "others.")}},
+      {Config::GFX_VR_SMART_EFB_FOVEATION.GetLocation(),
        {tr("Smart Foveated EFB"),
-        tr("Foveates only the game render passes that measure faster on the GPU and caches "
-           "verdicts per game.")}},
+        tr("With Foveate the Game's Own Picture: foveates only the passes that measure faster on "
+           "the GPU and caches results per game.")}},
+      {Config::GFX_VULKAN_RECORDING_WORKER.GetLocation(),
+       {tr("Vulkan Recording Worker"),
+        tr("Records Vulkan draws on a helper thread to take work off the video thread. For the "
+           "next game start.")}},
       // Performance
       {Config::GFX_VR_DYNAMIC_RESOLUTION.GetLocation(),
        {tr("Dynamic Resolution"),
@@ -237,9 +245,23 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
       {Config::GFX_VR_DONT_CLEAR_SCREEN.GetLocation(),
        {tr("Don't Clear Screen"), tr("Keeps the last picture where the game draws nothing. For "
                                      "games that flicker.")}},
+      {Config::GFX_VR_DISABLE_CPU_CULL.GetLocation(),
+       {tr("Show Missing Objects"),
+        tr("Draws objects that are otherwise left out. A little slower.")}},
       {Config::GFX_VR_HEAD_CPU_CULL.GetLocation(),
        {tr("Head-Cone CPU Culling"),
-        tr("Culls draws outside a wide cone around your head before sending them to the GPU.")}},
+        tr("Culls off-screen triangles against your headset's wider view.")}},
+      {Config::GFX_VR_DOLPHINXR_RENDER_FIXES.GetLocation(),
+       {tr("dolphinXR Rendering Fixes"),
+        tr("dolphinXR's fixes for upside-down views, far depth, moved scenes and picture copies. "
+           "For games that need them.")}},
+      {Config::GFX_VR_WIIMOTE_MOTION_MODEL.GetLocation(),
+       {tr("dolphinXR Wii Remote Motion"),
+        tr("The VR controllers' Wii Remote motion and pointer from dolphinXR.")}},
+      {Config::GFX_VR_WIIMOTE_MOTION_PITCH.GetLocation(),
+       {tr("Wii Remote Pitch"),
+        tr("With dolphinXR Wii Remote Motion: tilts the VR controller's Wii Remote motion "
+           "orientation.")}},
       {Config::GFX_VR_FRAME_SIZE_FROM_XFB.GetLocation(),
        {tr("Match Shown Picture Size"),
         tr("Takes the size of the picture from what the game shows. Fixes Metroid Prime Trilogy "
@@ -539,6 +561,9 @@ void VRSettingsPage::AddImmersive()
             [](float value) { return QString::asprintf("%.2f", value); });
   AddBool(layout, ALL, Config::GFX_VR_ENABLE_CONTROLLER_ANCHOR);
   AddBool(layout, ALL, Config::GFX_VR_REMOVE_BARS);
+  AddBool(layout, ALL, Config::GFX_VR_WIIMOTE_MOTION_MODEL);
+  AddSlider(layout, ALL, Config::GFX_VR_WIIMOTE_MOTION_PITCH, -45.0f, 45.0f, 1.0f,
+            [](float value) { return QString::asprintf("%.0f°", value); });
 }
 
 void VRSettingsPage::AddHeadset()
@@ -613,6 +638,7 @@ QVBoxLayout* VRSettingsPage::AddAdvanced()
                       {tr("120 Hz"), Config::GFX_VR_FORCED_VBI_FREQUENCY_120}});
   m_multiview = AddBool(tracking, Immersive, Config::GFX_VR_USE_VULKAN_MULTIVIEW);
   AddBool(tracking, Immersive, Config::GFX_VR_EFB_FOVEATION);
+  AddBool(tracking, Immersive, Config::GFX_VR_SMART_EFB_FOVEATION);
 #ifndef BAIJI_STEAMVR
   AddChoice<OpenXRMirrorView>(tracking, HEADSET, Config::GFX_VR_MIRROR_VIEW,
                               {{tr("Both Eyes"), OpenXRMirrorView::BothEyes},
@@ -626,7 +652,9 @@ QVBoxLayout* VRSettingsPage::AddAdvanced()
   m_auto_native_efb_effects = AddBool(fixes, Immersive, Config::GFX_VR_AUTO_NATIVE_EFB_EFFECTS);
   AddBool(fixes, Immersive, Config::GFX_VR_PANES_ON_SCREEN);
   AddBool(fixes, Immersive, Config::GFX_VR_ORTHO_SCISSOR_FIX);
+  AddBool(fixes, Immersive, Config::GFX_VR_DISABLE_CPU_CULL);
   AddBool(fixes, Immersive, Config::GFX_VR_HEAD_CPU_CULL);
+  AddBool(fixes, Immersive, Config::GFX_VR_DOLPHINXR_RENDER_FIXES);
   AddBool(fixes, Immersive, Config::GFX_VR_DETECT_SKYBOX);
   AddBool(fixes, Immersive, Config::GFX_VR_SKIP_BACKGROUND_FILL);
   AddBool(fixes, Immersive, Config::GFX_VR_PER_EYE_SCREEN_COPIES);
@@ -686,6 +714,7 @@ QVBoxLayout* VRSettingsPage::AddAdvanced()
   {
     AddBool(performance, TWO_EYES, Config::GFX_VR_PIN_EMULATION_CORES);
     AddBool(performance, TWO_EYES, Config::GFX_VR_PERFORMANCE_HINT);
+    AddBool(performance, ALL, Config::GFX_VULKAN_RECORDING_WORKER);
   }
   AddBool(performance, TWO_EYES, Config::GFX_VR_ASYNC_EFB_COPIES);
   AddBool(performance, TWO_EYES, Config::GFX_VR_NON_BLOCKING_PERF_QUERIES);
@@ -960,7 +989,8 @@ void VRPane::ResetSettings()
         Config::GFX_VR_ENABLE_CAMERA_FORWARD, Config::GFX_VR_CAMERA_FORWARD,
         Config::GFX_VR_ENABLE_CAMERA_HEIGHT, Config::GFX_VR_CAMERA_HEIGHT,
         Config::GFX_VR_ENABLE_CAMERA_ANCHOR, Config::GFX_VR_CAMERA_ANCHOR_SMOOTHING,
-        Config::GFX_VR_ENABLE_CONTROLLER_ANCHOR, Config::GFX_VR_REMOVE_BARS);
+        Config::GFX_VR_ENABLE_CONTROLLER_ANCHOR, Config::GFX_VR_REMOVE_BARS,
+        Config::GFX_VR_WIIMOTE_MOTION_MODEL, Config::GFX_VR_WIIMOTE_MOTION_PITCH);
 
   // Headset
   reset(Config::GFX_VR_REQUESTED_REFRESH_RATE, Config::GFX_VR_RESOLUTION_SCALE,
@@ -975,8 +1005,10 @@ void VRPane::ResetSettings()
   reset(Config::GFX_VR_REFERENCE_SPACE_MODE, Config::GFX_VR_TRACKING_MODE,
         Config::GFX_VR_FORCED_VBI_FREQUENCY, Config::GFX_VR_AUTO_VBI_FROM_HMD,
         Config::GFX_VR_USE_VULKAN_MULTIVIEW, Config::GFX_VR_EFB_FOVEATION,
-        Config::GFX_VR_MIRROR_VIEW, Config::GFX_VR_PANES_ON_SCREEN,
-        Config::GFX_VR_ORTHO_SCISSOR_FIX, Config::GFX_VR_HEAD_CPU_CULL,
+        Config::GFX_VR_SMART_EFB_FOVEATION, Config::GFX_VR_MIRROR_VIEW,
+        Config::GFX_VR_PANES_ON_SCREEN, Config::GFX_VR_ORTHO_SCISSOR_FIX,
+        Config::GFX_VR_DISABLE_CPU_CULL, Config::GFX_VR_HEAD_CPU_CULL,
+        Config::GFX_VR_DOLPHINXR_RENDER_FIXES,
         Config::GFX_VR_DETECT_SKYBOX, Config::GFX_VR_SKIP_BACKGROUND_FILL,
         Config::GFX_VR_PER_EYE_SCREEN_COPIES, Config::GFX_VR_DETECT_RENDER_TARGETS,
         Config::GFX_VR_FRAME_SIZE_FROM_XFB, Config::GFX_VR_DONT_CLEAR_SCREEN,

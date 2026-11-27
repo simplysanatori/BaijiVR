@@ -294,6 +294,7 @@ void VideoConfig::Refresh()
                                         Config::GFX_VR_HEAD_LOCKED_CURVATURE_MAX);
   vr_dont_clear_screen = Config::Get(Config::GFX_VR_DONT_CLEAR_SCREEN);
   vr_load_custom_shaders = Config::Get(Config::GFX_VR_LOAD_CUSTOM_SHADERS);
+  vr_disable_cpu_cull = Config::Get(Config::GFX_VR_DISABLE_CPU_CULL);
   vr_head_cpu_cull = Config::Get(Config::GFX_VR_HEAD_CPU_CULL);
   vr_gaze_ram_copies = Config::Get(Config::GFX_VR_GAZE_RAM_COPIES);
   vr_per_eye_screen_copies = Config::Get(Config::GFX_VR_PER_EYE_SCREEN_COPIES);
@@ -330,6 +331,7 @@ void VideoConfig::Refresh()
   vr_ortho_scissor_fix = Config::Get(Config::GFX_VR_ORTHO_SCISSOR_FIX);
   vr_detect_skybox = Config::Get(Config::GFX_VR_DETECT_SKYBOX);
   vr_skip_background_fill = Config::Get(Config::GFX_VR_SKIP_BACKGROUND_FILL);
+  vr_dolphinxr_render_fixes = Config::Get(Config::GFX_VR_DOLPHINXR_RENDER_FIXES);
   vr_metroid_thermal_visor_fix = Config::Get(Config::GFX_VR_METROID_THERMAL_VISOR_FIX);
   vr_metroid_d3d_thermal_palette_fix =
       Config::Get(Config::GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX);
@@ -358,6 +360,7 @@ void VideoConfig::Refresh()
                                   Config::GFX_VR_FOVEATION_LEVEL_MAX);
   vr_foveation_dynamic = Config::Get(Config::GFX_VR_FOVEATION_DYNAMIC);
   vr_efb_foveation = Config::Get(Config::GFX_VR_EFB_FOVEATION);
+  vr_smart_efb_foveation = Config::Get(Config::GFX_VR_SMART_EFB_FOVEATION);
   bEFBAccessEnable = Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE);
   bEFBAccessDeferInvalidation = Config::Get(Config::GFX_HACK_EFB_DEFER_INVALIDATION);
   bBBoxEnable = Config::Get(Config::GFX_HACK_BBOX_ENABLE);
