@@ -1357,10 +1357,11 @@ void VertexManagerBase::Flush()
 #else
         constexpr bool anchor_bone_hide = false;
 #endif
-        // In flat 2D / stereo screen mode the game renders on the virtual screen rather than
-        // immersive per-eye stereo, so skip the immersive override/hunter pass.
-        const bool vr_flat_mode =
-            g_ActiveConfig.vr_flat_screen || g_ActiveConfig.vr_stereo_screen;
+        // In flat 2D "cinema" mode the game renders mono exactly like a normal flat game. The
+        // Shader/Elements/Textures overrides (and the hunter) only skip or reproject draws for
+        // stereo VR, so running them here would corrupt the flat image and waste work — skip the
+        // whole override/hunter pass when the panel path is active.
+        const bool vr_flat_mode = g_ActiveConfig.vr_flat_screen;
         if (!vr_flat_mode && (hunter_enabled || hunter_has_overrides || hunter_debug_logging ||
                               elements_runtime_active || texmgr_active ||
                               pink_preview_batch || anchor_bone_hide))
