@@ -14,6 +14,7 @@
 #include "VideoBackends/Vulkan/CommandBufferManager.h"
 #include "VideoBackends/Vulkan/StateTracker.h"
 #include "VideoBackends/Vulkan/VKGfx.h"
+#include "VideoBackends/Vulkan/VKRecordingWorker.h"
 #include "VideoBackends/Vulkan/VKTexture.h"
 #include "VideoBackends/Vulkan/VulkanContext.h"
 #include "VideoCommon/FramebufferManager.h"
@@ -76,6 +77,10 @@ void PerfQuery::EnableQuery(PerfQueryGroup group)
     }
   }
 
+  // The commands below go straight into the command buffer: with the recording worker on, the
+  // draws queued before them must be recorded first.
+  DrainRecordingWorkerForDirectAccess();
+
   // Ensure command buffer is ready to go before beginning the query, that way we don't submit
   // a buffer with open queries.
   StateTracker::GetInstance()->Bind();
@@ -110,6 +115,7 @@ void PerfQuery::DisableQuery(PerfQueryGroup group)
 {
   if (group == PQG_ZCOMP_ZCOMPLOC || group == PQG_ZCOMP)
   {
+    DrainRecordingWorkerForDirectAccess();
     vkCmdEndQuery(g_command_buffer_mgr->GetCurrentCommandBuffer(), m_query_pool,
                   m_query_next_pos * m_query_views);
     ActiveQuery& entry = m_query_buffer[m_query_next_pos];
@@ -147,6 +153,7 @@ void PerfQuery::ResetAllQueries()
     m_results[i].store(0, std::memory_order_relaxed);
 
   // Reset entire query pool, ensuring all queries are ready to write to.
+  DrainRecordingWorkerForDirectAccess();
   StateTracker::GetInstance()->EndRenderPass();
   vkCmdResetQueryPool(g_command_buffer_mgr->GetCurrentCommandBuffer(), m_query_pool, 0,
                       m_nonblocking.load(std::memory_order_relaxed) ?
@@ -396,6 +403,7 @@ void PerfQuery::ReadbackQueries(u32 query_count)
   if (res != VK_SUCCESS)
     LOG_VULKAN_ERROR(res, "vkGetQueryPoolResults failed: ");
 
+  DrainRecordingWorkerForDirectAccess();
   const bool nonblocking = m_nonblocking.load(std::memory_order_relaxed);
   if (nonblocking)
   {
