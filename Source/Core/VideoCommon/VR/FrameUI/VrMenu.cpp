@@ -749,9 +749,9 @@ std::string FormatProgress(const GameMods::Progress& progress)
 void AddMods(Builder* builder, const MenuState& state)
 {
   MenuWidget& list = builder->Add(Kind::Segmented, MenuItem::ModsList);
-  list.rect = {LEFT + 136.0f, PANE.y0 + 16.0f, RIGHT - 136.0f, PANE.y0 + 64.0f};
+  list.rect = {LEFT + 56.0f, PANE.y0 + 16.0f, RIGHT - 56.0f, PANE.y0 + 64.0f};
   list.control = list.rect;
-  list.options = {"Mods and Cheats", "Textures"};
+  list.options = {"Mods and Cheats", "Textures", "VR Patches"};
   list.selected = state.mods_list;
   builder->Gap(64.0f);
 

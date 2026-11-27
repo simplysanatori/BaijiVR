@@ -15,6 +15,8 @@
 
 #include <array>
 
+#include "Common/MathUtil.h"
+
 struct Viewport;
 
 namespace VR
@@ -28,6 +30,19 @@ struct VRFrameRegion
   bool valid = false;
 };
 
+// The game's scissor rectangle in raw bpmem coordinates: offset by the scissor offset like the
+// viewport, bottom-right corner inclusive.
+struct VRScissor
+{
+  int left = 0;
+  int top = 0;
+  int right = 0;
+  int bottom = 0;
+};
+
+// The current bpmem scissor.
+VRScissor GetVRScissor();
+
 // Hydra-style viewport classification, measured against the latched frame region.
 enum class VRViewportClass
 {
@@ -35,8 +50,12 @@ enum class VRViewportClass
   Letterboxed,      // full-width but not full-height (cinematic bars, Trilogy 448-in-480)
   SplitScreen,      // multiplayer half/quadrant viewport
   HudElement,       // small / off-center sub-viewport (e.g. MKDD character select panes)
-  RenderToTexture,  // square edge-anchored render target (shadow/env maps)
+  RenderToTexture,  // square edge-anchored render target (shadow/env maps), or a pane the game
+                    // copies to a texture
   Offscreen,        // outside the displayed frame region
+  DisplacedScene,   // frame-sized viewport and scissor moved off the frame together by more
+                    // than 10% (PSO pans the scene aside under its menus): still the
+                    // head-tracked main scene
 };
 
 // Called from BPStructs for every EFB->XFB copy (srcRect in native EFB coordinates,
@@ -46,6 +65,11 @@ enum class VRViewportClass
 // g_final_screen_region, updated at Swap).
 void NotifyVRXFBCopyRegion(int left, int top, int right, int bottom);
 
+// Called from BPStructs for every EFB->texture copy (srcRect in native EFB coordinates). The
+// classifier reads the copies of the last four completed frames (a frame's first XFB copy
+// completes it): a pane the game copied whole is a render target.
+void NotifyVRTextureCopyRegion(int left, int top, int right, int bottom);
+
 // Previous completed frame's display region. Not valid until two XFB copies were seen.
 VRFrameRegion GetVRFrameRegion();
 
@@ -53,16 +77,19 @@ VRFrameRegion GetVRFrameRegion();
 void ResetVRFrameRegion();
 
 // Classify a draw's viewport against the latched frame region. x_off/y_off are the
-// doubled scissor offsets (scissorOffset << 1), matching BPFunctions conventions.
+// doubled scissor offsets (scissorOffset << 1), matching BPFunctions conventions; the
+// scissor tells a scene panned with the scissor offset from a viewport moved inside it.
 // Returns MainScene when the frame region is unknown so all callers fall back to
 // current behavior.
-VRViewportClass ClassifyVRViewport(const Viewport& viewport, int x_off, int y_off);
+VRViewportClass ClassifyVRViewport(const Viewport& viewport, const VRScissor& scissor, int x_off,
+                                   int y_off);
 
 // Record a real perspective draw which can describe the composed scene's EFB extent.
 // At the XFB-copy boundary the most frequently drawn full-width region is used as the
 // presentation source. This deliberately records the game's unmodified viewport: EFB
 // effects continue to see the exact layout the game rendered.
-void ObserveVRPerspectiveViewport(const Viewport& viewport, int x_off, int y_off);
+void ObserveVRPerspectiveViewport(const Viewport& viewport, const VRScissor& scissor, int x_off,
+                                  int y_off);
 
 // Select and consume the scene extent accumulated since the previous XFB copy. Returns
 // true only when the VR presentation copy should sample a different vertical EFB region
@@ -75,11 +102,91 @@ bool ConsumeVRPresentationSourceRegion(const VRFrameRegion& xfb_source,
 std::array<float, 4> CalculateVRPaneRemap(const Viewport& viewport, int x_off, int y_off,
                                           const VRFrameRegion& frame);
 
+// Value of an open edge in CalculateVRPaneClip's rectangle.
+constexpr float VR_PANE_CLIP_OPEN = 1.0e6f;
+
+// The game's scissor as a clip rectangle {left, right, bottom, top} in frame NDC (Y up, same
+// space as CalculateVRPaneRemap's output). Screen Pane opens the raster scissor to the whole
+// frame, so the VR shaders clip the pane with this instead. The scissor is in raw bpmem
+// coordinates (offset by x_off/y_off, bottom-right inclusive). Edges at or beyond the frame's
+// edges are left open (+-VR_PANE_CLIP_OPEN).
+std::array<float, 4> CalculateVRPaneClip(int scissor_left, int scissor_top, int scissor_right,
+                                         int scissor_bottom, int x_off, int y_off,
+                                         const VRFrameRegion& frame);
+
+// What an orthographic pane shows of the frame, in the same layout: its viewport cut by the game's
+// scissor (CalculateVRPaneClip). The viewport clips too, unlike in a Screen Pane: the course map
+// of Wii Sports Resort's golf draws the whole course, and only its pane may show.
+std::array<float, 4> CalculateVRPaneRect(const Viewport& viewport, int scissor_left,
+                                         int scissor_top, int scissor_right, int scissor_bottom,
+                                         int x_off, int y_off, const VRFrameRegion& frame);
+
 // Reference clip W for the perspective Screen Pane 3D transform. Most draws expose their model
 // origin through the current position matrix. Skinned/per-vertex-matrix draws do not, so use the
 // geometric centre of the projection's near/far range as a stable positive fallback.
 float CalculateVRPaneReferenceW(float model_origin_view_z, float projection_z,
                                 float projection_w);
+
+// An eye's field of view as the tangents of its angles (left and down negative), from OpenXR.
+struct VREyeTangents
+{
+  float left = 0.0f;
+  float right = 0.0f;
+  float up = 0.0f;
+  float down = 0.0f;
+};
+
+// Where a point of the game's screen lands in an eye's image when the game camera looks where
+// the head looks: through the game's perspective projection (raw XF values) to a direction, then
+// through the eye's FOV. Both points in normalized device coordinates, Y up.
+std::array<float, 2> MapGameNDCToEyeNDC(const std::array<float, 6>& game_projection,
+                                        const VREyeTangents& eye, float x, float y);
+
+// An eye's view of the game's view space as rendered (OpenXRManager::GetEyeProjectionRows: head
+// rotation and eye position included): clip x = dot(x, viewPos), clip y = dot(y, viewPos), eye
+// space z = dot(z, viewPos), with the eye looking down -z.
+struct VREyeViewRows
+{
+  std::array<float, 4> x{};
+  std::array<float, 4> y{};
+  std::array<float, 4> z{};
+};
+
+// Where a point of the game's screen lands in an eye's image as rendered: through the game's
+// perspective projection to a direction from the game camera, then through the eye's rows (only
+// their rotation: a direction is a point at infinity). NDC, Y up; NaN when the direction is
+// behind the eye.
+std::array<float, 2> MapGameNDCToEyeViewNDC(const std::array<float, 6>& game_projection,
+                                            const VREyeViewRows& eye, float x, float y);
+
+// Whether an EFB copy rectangle is centred on the frame and at most half its size: the block under
+// a reticle at the screen's centre (Metroid Prime 2's scan, Metroid Prime's scan window).
+bool IsVRCentredCopyRectangle(const MathUtil::Rectangle<int>& rect, const VRFrameRegion& frame);
+
+// Whether an EFB copy rectangle looks like the block a game reads back under its reticle: centred
+// (IsVRCentredCopyRectangle), or at most a quarter of the frame and clear of its edges (Metroid
+// Prime 3's reticle moves with the pointer; also Echoes' sun glare test, a block around the sun).
+// Render-to-texture and downscaled effect buffers sit at the frame's edges.
+bool IsVRReticleCopyRectangle(const MathUtil::Rectangle<int>& rect, const VRFrameRegion& frame);
+
+// Whether an EFB copy rectangle is small enough to be a block a game draws back in place around a
+// point of its scene (PerEyeScreenCopies): at most a third of the frame wide and half of it high
+// (Metroid Prime's charged shot warp, 192x192 in 640x448).
+bool IsVRPerEyeCopyRectangle(const MathUtil::Rectangle<int>& rect, const VRFrameRegion& frame);
+
+// An EFB copy rectangle (native EFB pixels) moved by MapGameNDCToEyeNDC: its centre goes where
+// the eye's image shows the direction the game's screen shows there. It keeps its size and stays
+// inside the frame; unchanged when the frame or the projections are unusable.
+MathUtil::Rectangle<int> MapVRGazeCopyRectangle(const MathUtil::Rectangle<int>& rect,
+                                                const VRFrameRegion& frame,
+                                                const std::array<float, 6>& game_projection,
+                                                const VREyeTangents& eye);
+
+// The same, moved by MapGameNDCToEyeViewNDC: through the eye's view, head turn included.
+MathUtil::Rectangle<int> MapVRViewCopyRectangle(const MathUtil::Rectangle<int>& rect,
+                                                const VRFrameRegion& frame,
+                                                const std::array<float, 6>& game_projection,
+                                                const VREyeViewRows& eye);
 
 const char* GetVRViewportClassName(VRViewportClass vclass);
 }  // namespace VR

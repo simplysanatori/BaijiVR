@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <locale>
 #include <map>
 #include <set>
 #include <sstream>
@@ -17,6 +18,9 @@
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Core/ConfigLoaders/GameConfigLoader.h"
+#include "VideoCommon/DrawDepth.h"
+#include "VideoCommon/VR/OverrideSuppression.h"
+#include "VideoCommon/VR/PatchHides.h"
 #include "VideoCommon/VideoConfig.h"
 
 namespace
@@ -192,14 +196,14 @@ ParsedTextureOverrideFile LoadTextureOverridesFromINIFile(const std::string& pat
       if (!line.empty() && line.back() == '\r')
         line.pop_back();
 
-      if (line == "[TextureElementOverride_Enable]")
+      // Read every copy of the section: a code pasted with its header in the VR Config editor can
+      // add one after the other sections.
+      if (!line.empty() && line[0] == '[')
       {
-        in_section = true;
-        parsed.has_enable_section = true;
+        in_section = line == "[TextureElementOverride_Enable]";
+        parsed.has_enable_section |= in_section;
         continue;
       }
-      if (in_section && !line.empty() && line[0] == '[')
-        break;
       if (!in_section || line.empty())
         continue;
       if (line[0] == '$')
@@ -235,13 +239,13 @@ ParsedTextureOverrideFile LoadTextureOverridesFromINIFile(const std::string& pat
     if (!line.empty() && line.back() == '\r')
       line.pop_back();
 
-    if (line == "[TextureElementOverride]")
+    if (!line.empty() && line[0] == '[')
     {
-      in_section = true;
+      commit_entry();
+      has_entry = false;
+      in_section = line == "[TextureElementOverride]";
       continue;
     }
-    if (in_section && !line.empty() && line[0] == '[')
-      break;
     if (!in_section || line.empty())
       continue;
 
@@ -266,6 +270,10 @@ ParsedTextureOverrideFile LoadTextureOverridesFromINIFile(const std::string& pat
       // silently ignored so older INIs still load.
       else if (key == "element_depth")
         current.element_depth = std::stof(value);
+      else if (key == "min_depth")
+        current.min_depth = std::stof(value);
+      else if (key == "max_depth")
+        current.max_depth = std::stof(value);
       else if (key == "units_per_meter" || key == "upm")
         current.units_per_meter = std::stof(value);
       else if (key == "passthrough_opacity")
@@ -331,10 +339,16 @@ void MergeParsedTextureOverrideFile(std::vector<TextureElementOverride>* result,
     }
   }
 
+  // The entries of this file already follow its enable list. The list only turns on the overrides
+  // of earlier files: a user file saved before an override shipped in Sys does not list it, and
+  // must not turn it off.
   if (parsed.has_enable_section)
   {
     for (auto& entry : *result)
-      entry.enabled = parsed.enabled_names.count(entry.name) > 0;
+    {
+      if (parsed.enabled_names.contains(entry.name))
+        entry.enabled = true;
+    }
   }
 }
 }  // namespace
@@ -351,18 +365,34 @@ TextureElementManager::LoadOverridesFromINI(const std::string& game_id, std::opt
   if (game_id.empty())
     return {};
 
+  std::vector<std::string> sys_paths;
+  std::vector<std::string> user_paths;
+  for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(game_id, revision))
+  {
+    sys_paths.push_back(GetSysVRGameSettingsPath(filename));
+    user_paths.push_back(File::GetUserPath(D_GAMESETTINGSVR_IDX) + filename);
+  }
+  return LoadOverridesFromINIFiles(sys_paths, user_paths);
+}
+
+std::vector<TextureElementManager::TextureElementOverride>
+TextureElementManager::LoadOverridesFromINIFiles(const std::vector<std::string>& sys_paths,
+                                                 const std::vector<std::string>& user_paths)
+{
   std::vector<TextureElementOverride> result;
   std::map<std::string, size_t> index_by_name;
 
-  for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(game_id, revision))
-    MergeParsedTextureOverrideFile(
-        &result, &index_by_name,
-        LoadTextureOverridesFromINIFile(GetSysVRGameSettingsPath(filename)));
+  for (const std::string& path : sys_paths)
+    MergeParsedTextureOverrideFile(&result, &index_by_name, LoadTextureOverridesFromINIFile(path));
+  const std::map<std::string, size_t> sys_names = index_by_name;
 
-  for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(game_id, revision))
-    MergeParsedTextureOverrideFile(
-        &result, &index_by_name,
-        LoadTextureOverridesFromINIFile(File::GetUserPath(D_GAMESETTINGSVR_IDX) + filename));
+  for (const std::string& path : user_paths)
+    MergeParsedTextureOverrideFile(&result, &index_by_name, LoadTextureOverridesFromINIFile(path));
+
+  // An override that ships in Sys comes back on every load, even if the user's file (which saves
+  // every override) drops or renames it.
+  for (TextureElementOverride& entry : result)
+    entry.user_defined = !sys_names.contains(entry.name);
 
   return result;
 }
@@ -384,6 +414,9 @@ void TextureElementManager::SaveOverridesToINI(
     base += "\n";
 
   std::ostringstream out;
+  // The global locale may be the user's (UICommon::SetLocale), which can write "1,5" for a
+  // float: write the classic one like the rest of Dolphin's serialization code.
+  out.imbue(std::locale::classic());
   out << base;
 
   // [TextureElementOverride_Enable] — lists enabled override names.
@@ -402,6 +435,10 @@ void TextureElementManager::SaveOverridesToINI(
     out << "handling=" << HandlingToString(ovr.handling) << "\n";
     if (ovr.element_depth >= 0.0f)
       out << "element_depth=" << ovr.element_depth << "\n";
+    if (ovr.min_depth > 0.0f)
+      out << "min_depth=" << ovr.min_depth << "\n";
+    if (ovr.max_depth > 0.0f)
+      out << "max_depth=" << ovr.max_depth << "\n";
     if (ovr.handling == HandlingType::UnitsPerMeter && ovr.units_per_meter > 0.0f)
       out << "units_per_meter=" << ovr.units_per_meter << "\n";
     if (ovr.handling == HandlingType::Passthrough)
@@ -467,7 +504,20 @@ void TextureElementManager::SaveOverridesToINI(
   outfile << out.str();
 }
 
+std::vector<TextureElementManager::TextureElementOverride>
+TextureElementManager::LoadOverridesFromINIFile(const std::string& path)
+{
+  return LoadTextureOverridesFromINIFile(path).entries;
+}
+
 void TextureElementManager::LoadOverrides(const std::string& game_id)
+{
+  ApplyOverrideList(game_id, game_id.empty() ? std::vector<TextureElementOverride>{} :
+                                               LoadOverridesFromINI(game_id));
+}
+
+void TextureElementManager::ApplyOverrideList(const std::string& game_id,
+                                              std::vector<TextureElementOverride> all)
 {
   std::lock_guard lock(m_mutex);
 
@@ -476,43 +526,68 @@ void TextureElementManager::LoadOverrides(const std::string& game_id)
   m_flag_rules.clear();
   m_loaded_game_id = game_id;
   m_has_overrides.store(false, std::memory_order_relaxed);
+  m_has_controller_anchor_overrides.store(false, std::memory_order_relaxed);
+  m_applied_overrides = all;
+  m_suppression_generation = VR::OverrideSuppression::GetGeneration();
+  m_patch_hides_generation = VR::PatchHides::GetGeneration();
 
   if (game_id.empty())
     return;
 
-  auto all = LoadOverridesFromINI(game_id);
   bool has_overrides = false;
+  bool has_controller_anchor_overrides = false;
+
+  // A VR patch's hides first: while its flag is raised they win over the profile's entries for
+  // the same textures (the head the patch's Camera Anchor puts the view in), and they let the
+  // profile's entries apply when it is lowered.
+  for (const VR::PatchHides::Hide& hide : VR::PatchHides::Get())
+  {
+    ResolvedHandling resolved;
+    resolved.handling = HandlingType::Skip;
+    resolved.condition_flag = hide.condition_flag;
+    for (u64 texture_hash : hide.texture_hashes)
+      m_texture_handling[texture_hash].push_back(resolved);
+    has_overrides = has_overrides || !hide.texture_hashes.empty();
+  }
 
   for (auto& ovr : all)
   {
-    if (!ovr.enabled || ovr.texture_hashes.empty())
+    if (!ovr.enabled || ovr.texture_hashes.empty() ||
+        VR::OverrideSuppression::IsSuppressed(VR::OverrideSuppression::Kind::Texture, ovr.name))
+    {
       continue;
+    }
 
     has_overrides = true;
+    if (ovr.handling == HandlingType::ControllerAnchor)
+      has_controller_anchor_overrides = true;
 
     if (!ovr.flag_group.empty())
     {
-      m_flag_rules.push_back(
-          {ovr.flag_group, ovr.condition_flag, ovr.condition_inverted, ovr.texture_hashes});
+      m_flag_rules.push_back({ovr.flag_group, ovr.condition_flag, ovr.condition_inverted,
+                              ovr.texture_hashes, ovr.min_depth, ovr.max_depth});
     }
 
     const ResolvedHandling resolved{
-        ovr.handling, ovr.element_depth, ovr.units_per_meter,
+        ovr.handling,
+        ovr.element_depth,
+        ovr.units_per_meter,
         std::clamp(ovr.passthrough_opacity, 0.0f, 1.0f),
         CameraAnchorParams{.offset = {ovr.anchor_right, ovr.anchor_up, ovr.anchor_forward},
                            .hide = ovr.anchor_hide,
                            .rotation = ovr.anchor_rotation,
                            .yaw_offset_deg = ovr.anchor_yaw_deg,
                            .units_per_meter = ovr.anchor_units_per_meter},
-        ControllerAnchorParams{
-            .hand = ovr.anchor_hand == 0 ? 0 : 1,
-            .offset = {ovr.anchor_right, ovr.anchor_up, ovr.anchor_forward},
-            .rotation = ovr.anchor_rotation != AnchorRotationMode::Off,
-            .yaw_deg = ovr.anchor_yaw_deg,
-            .pitch_deg = ovr.anchor_pitch_deg,
-            .roll_deg = ovr.anchor_roll_deg},
+        ControllerAnchorParams{.hand = ovr.anchor_hand == 0 ? 0 : 1,
+                               .offset = {ovr.anchor_right, ovr.anchor_up, ovr.anchor_forward},
+                               .rotation = ovr.anchor_rotation != AnchorRotationMode::Off,
+                               .yaw_deg = ovr.anchor_yaw_deg,
+                               .pitch_deg = ovr.anchor_pitch_deg,
+                               .roll_deg = ovr.anchor_roll_deg},
         ovr.condition_flag,
-        ovr.condition_inverted};
+        ovr.condition_inverted,
+        ovr.min_depth,
+        ovr.max_depth};
     if (ovr.handling != HandlingType::Flag)
     {
       for (u64 texture_hash : ovr.texture_hashes)
@@ -523,6 +598,8 @@ void TextureElementManager::LoadOverrides(const std::string& game_id)
   }
 
   m_has_overrides.store(has_overrides, std::memory_order_relaxed);
+  m_has_controller_anchor_overrides.store(has_controller_anchor_overrides,
+                                          std::memory_order_relaxed);
 
   if (!m_overrides.empty())
   {
@@ -534,7 +611,21 @@ void TextureElementManager::LoadOverrides(const std::string& game_id)
 void TextureElementManager::LoadOverridesIfNeeded(const std::string& game_id)
 {
   if (game_id == m_loaded_game_id)
+  {
+    // A VR patch started or stopped suppressing overrides, or hiding draws: activate the same list
+    // again.
+    if (m_suppression_generation != VR::OverrideSuppression::GetGeneration() ||
+        m_patch_hides_generation != VR::PatchHides::GetGeneration())
+    {
+      std::vector<TextureElementOverride> all;
+      {
+        std::lock_guard lock(m_mutex);
+        all = m_applied_overrides;
+      }
+      ApplyOverrideList(game_id, std::move(all));
+    }
     return;
+  }
   LoadOverrides(game_id);
 }
 
@@ -543,23 +634,33 @@ bool TextureElementManager::HasOverrides() const
   return m_has_overrides.load(std::memory_order_relaxed);
 }
 
+bool TextureElementManager::HasControllerAnchorOverrides() const
+{
+  return m_has_controller_anchor_overrides.load(std::memory_order_relaxed);
+}
+
 bool TextureElementManager::NeedsTextureHashes() const
 {
   return m_has_overrides.load(std::memory_order_relaxed) ||
          m_hunter_active.load(std::memory_order_relaxed);
 }
 
-bool TextureElementManager::IsConditionMatch(const ResolvedHandling& resolved) const
+bool TextureElementManager::IsConditionMatch(const ResolvedHandling& resolved,
+                                             const DrawDepthSource* depth) const
 {
-  if (resolved.condition_flag.empty())
-    return true;
-
-  const bool active = ShaderHunter::GetInstance().IsFlagActive(resolved.condition_flag);
-  return resolved.condition_inverted ? !active : active;
+  if (!resolved.condition_flag.empty())
+  {
+    const bool active = ShaderHunter::GetInstance().IsFlagActive(resolved.condition_flag);
+    if (resolved.condition_inverted ? active : !active)
+      return false;
+  }
+  // Last: it may read the draw's vertices back.
+  return DrawPassesDepthConstraints(depth, resolved.min_depth, resolved.max_depth);
 }
 
 const TextureElementManager::ResolvedHandling*
-TextureElementManager::FindFirstMatchingHandling(u64 texture_hash) const
+TextureElementManager::FindFirstMatchingHandling(u64 texture_hash,
+                                                 const DrawDepthSource* depth) const
 {
   const auto it = m_texture_handling.find(texture_hash);
   if (it == m_texture_handling.end())
@@ -567,13 +668,14 @@ TextureElementManager::FindFirstMatchingHandling(u64 texture_hash) const
 
   for (const ResolvedHandling& resolved : it->second)
   {
-    if (IsConditionMatch(resolved))
+    if (IsConditionMatch(resolved, depth))
       return &resolved;
   }
   return nullptr;
 }
 
-void TextureElementManager::RegisterFlagsForTextures(const std::array<u64, 8>& bound) const
+void TextureElementManager::RegisterFlagsForTextures(const std::array<u64, 8>& bound,
+                                                     const DrawDepthSource* depth) const
 {
   for (const FlagRule& rule : m_flag_rules)
   {
@@ -591,6 +693,8 @@ void TextureElementManager::RegisterFlagsForTextures(const std::array<u64, 8>& b
     });
     if (!texture_matches)
       continue;
+    if (!DrawPassesDepthConstraints(depth, rule.min_depth, rule.max_depth))
+      continue;
 
     if (ShaderHunter::GetInstance().IsDebugLogging())
       INFO_LOG_FMT(VIDEO, "TextureElementManager: Flag '{}' matched", rule.flag_group);
@@ -598,7 +702,8 @@ void TextureElementManager::RegisterFlagsForTextures(const std::array<u64, 8>& b
   }
 }
 
-bool TextureElementManager::ShouldSkipByTexture(const std::array<u64, 8>& bound) const
+bool TextureElementManager::ShouldSkipByTexture(const std::array<u64, 8>& bound,
+                                                const DrawDepthSource* depth) const
 {
   if (m_texture_handling.empty())
     return false;
@@ -607,7 +712,7 @@ bool TextureElementManager::ShouldSkipByTexture(const std::array<u64, 8>& bound)
   {
     if (hash == 0)
       continue;
-    const ResolvedHandling* resolved = FindFirstMatchingHandling(hash);
+    const ResolvedHandling* resolved = FindFirstMatchingHandling(hash, depth);
     if (resolved != nullptr && resolved->handling == HandlingType::Skip)
       return true;
   }
@@ -615,8 +720,8 @@ bool TextureElementManager::ShouldSkipByTexture(const std::array<u64, 8>& bound)
 }
 
 TextureElementManager::HandlingType TextureElementManager::GetHandlingForTextures(
-    const std::array<u64, 8>& bound, float* element_depth, float* units_per_meter,
-    float* passthrough_opacity, CameraAnchorParams* anchor,
+    const std::array<u64, 8>& bound, const DrawDepthSource* depth, float* element_depth,
+    float* units_per_meter, float* passthrough_opacity, CameraAnchorParams* anchor,
     ControllerAnchorParams* controller_anchor) const
 {
   if (m_texture_handling.empty())
@@ -626,7 +731,7 @@ TextureElementManager::HandlingType TextureElementManager::GetHandlingForTexture
   {
     if (hash == 0)
       continue;
-    const ResolvedHandling* resolved = FindFirstMatchingHandling(hash);
+    const ResolvedHandling* resolved = FindFirstMatchingHandling(hash, depth);
     if (resolved == nullptr || resolved->handling == HandlingType::Skip ||
         resolved->handling == HandlingType::Flag)
       continue;
@@ -767,28 +872,78 @@ u64 TextureElementManager::GetSelectedTextureHash() const
       ->first;
 }
 
-bool TextureElementManager::SaveSelectedTextureOverride(const std::string& game_id,
-                                                        HandlingType handling)
+TextureElementManager::HuntingSelection TextureElementManager::GetHuntingSelection() const
+{
+  std::lock_guard lock(m_mutex);
+  HuntingSelection selection;
+  selection.total = static_cast<int>(m_textures_display.size());
+  const auto selected = m_textures_display.find(m_selected_texture_hash);
+  if (m_selected_texture_hash == 0 || selected == m_textures_display.end())
+    return selection;
+
+  // Prev/NextTexture walk the textures in hash order.
+  selection.position = static_cast<int>(
+      std::ranges::count_if(m_textures_display, [this](const auto& texture) {
+        return texture.first < m_selected_texture_hash;
+      }));
+  selection.hash = m_selected_texture_hash;
+  selection.name = selected->second;
+  return selection;
+}
+
+std::optional<std::string> TextureElementManager::SaveSelectedTextureOverride(
+    const std::string& game_id, HandlingType handling, float units_per_meter,
+    const std::string& name)
 {
   if (game_id.empty())
-    return false;
+    return std::nullopt;
 
   const u64 texture_hash = GetSelectedTextureHash();
   if (texture_hash == 0)
-    return false;
+    return std::nullopt;
 
   auto overrides = LoadOverridesFromINI(game_id);
+  const auto is_this_texture = [texture_hash](const TextureElementOverride& entry) {
+    return entry.texture_hashes.size() == 1 && entry.texture_hashes[0] == texture_hash;
+  };
+
   TextureElementOverride entry;
-  entry.name = fmt::format("Texture {:016x}", texture_hash);
+  const std::string base_name = name.empty() ? fmt::format("Texture {:016x}", texture_hash) : name;
+  entry.name = base_name;
+  for (int number = 2;; ++number)
+  {
+    const auto same_name = std::ranges::find(overrides, entry.name, &TextureElementOverride::name);
+    if (same_name == overrides.end() || is_this_texture(*same_name))
+      break;
+    entry.name = fmt::format("{} {}", base_name, number);
+  }
   entry.handling = handling;
   entry.texture_hashes.push_back(texture_hash);
   if (handling == HandlingType::UnitsPerMeter)
-    entry.units_per_meter = g_Config.vr_units_per_meter;
+  {
+    entry.units_per_meter =
+        units_per_meter > 0.0f ? units_per_meter : g_Config.vr_units_per_meter;
+  }
+  // A texture Flag override only does something with a flag to set.
+  if (handling == HandlingType::Flag)
+    entry.flag_group = entry.name;
 
-  overrides.push_back(std::move(entry));
+  // Saving the same texture under its name again changes its override. (A duplicate name would
+  // load as the last entry anyway.)
+  const std::string saved_name = entry.name;
+  const auto existing = std::ranges::find(overrides, entry.name, &TextureElementOverride::name);
+  if (existing != overrides.end())
+  {
+    // The hunter cannot capture a depth limit: keep the one the entry had.
+    entry.min_depth = existing->min_depth;
+    entry.max_depth = existing->max_depth;
+    *existing = std::move(entry);
+  }
+  else
+    overrides.push_back(std::move(entry));
   SaveOverridesToINI(game_id, overrides);
   LoadOverrides(game_id);
-  return true;
+  return saved_name;
 }
 
 void TextureElementManager::SetPreviewTextures(const std::vector<u64>& hashes)
@@ -801,6 +956,15 @@ void TextureElementManager::SetPreviewTextures(const std::vector<u64>& hashes)
       m_preview_textures.insert(hash);
   }
   m_has_preview.store(!m_preview_textures.empty(), std::memory_order_relaxed);
+}
+
+bool TextureElementManager::SelectTexture(u64 hash)
+{
+  std::lock_guard lock(m_mutex);
+  m_selected_texture_hash = hash;
+  m_preview_textures = {hash};
+  m_has_preview.store(hash != 0, std::memory_order_relaxed);
+  return m_textures_display.contains(hash);
 }
 
 void TextureElementManager::SetPreviewPink(bool pink)

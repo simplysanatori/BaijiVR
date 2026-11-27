@@ -353,6 +353,8 @@ add_library(core
   HW/WiimoteEmu/Speaker.h
   HW/WiimoteEmu/WiimoteEmu.cpp
   HW/WiimoteEmu/WiimoteEmu.h
+  HW/WiimoteMotionTracker.cpp
+  HW/WiimoteMotionTracker.h
   HW/WiimoteReal/WiimoteReal.cpp
   HW/WiimoteReal/WiimoteReal.h
   HW/WiiSave.cpp
@@ -582,6 +584,36 @@ add_library(core
   WiiUtils.cpp
   WiiUtils.h
 )
+
+if(ENABLE_VR)
+  target_sources(core PRIVATE
+    VRPatch/ApiReference.cpp
+    VRPatch/BindingsMem.cpp
+    VRPatch/BindingsMisc.cpp
+    VRPatch/BindingsVR.cpp
+    VRPatch/GeckoRegion.cpp
+    VRPatch/GeckoRegion.h
+    VRPatch/MemoryAccess.cpp
+    VRPatch/MemoryAccess.h
+    VRPatch/PatchIni.cpp
+    VRPatch/PatchIni.h
+    VRPatch/PatchInput.cpp
+    VRPatch/PatchInput.h
+    VRPatch/PatchScript.cpp
+    VRPatch/PatchScript.h
+    VRPatch/PatchTypes.cpp
+    VRPatch/PatchTypes.h
+    VRPatch/Prelude.cpp
+    VRPatch/ScriptContext.h
+    VRPatch/StickTurn.cpp
+    VRPatch/StickTurn.h
+    VRPatch/VRPatch.h
+    VRPatch/VRPatchManager.cpp
+    VRPatch/VRSettingsTable.cpp
+    VRPatch/VRSettingsTable.h
+  )
+  target_link_libraries(core PRIVATE lua)
+endif()
 
 if(_M_X86_64)
   target_sources(core PRIVATE

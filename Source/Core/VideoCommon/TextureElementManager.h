@@ -16,6 +16,8 @@
 #include "Common/CommonTypes.h"
 #include "VideoCommon/ShaderHunter.h"
 
+class DrawDepthSource;
+
 // Texture Element Override: reclassify VR draws (Skip / Screen / Fullscreen / Head Locked / Units
 // per Meter), or set a shared Flag, based purely on the bound texture hash, regardless of which
 // shader draws it.
@@ -49,6 +51,11 @@ public:
     HandlingType handling = HandlingType::Skip;
     float element_depth = -1.0f;    // Per-override within-element depth (-1 = global)
     float units_per_meter = -1.0f;  // Per-override UPM for UnitsPerMeter handling (-1 = global)
+    // Camera depth limits in game units (<= 0 = no limit): the entry only matches draws whose
+    // vertices are all at least min_depth and at most max_depth from the game camera (a HUD
+    // drawn in perspective just in front of it, sharing its textures with world objects).
+    float min_depth = 0.0f;
+    float max_depth = 0.0f;
     float passthrough_opacity = 0.0f;  // Passthrough handling: element opacity (0 = fully camera)
     // CameraAnchor handling: offset from the element's origin (meters, right/up/forward),
     // whether to hide the anchor element, how much of its orientation to follow (+ a fixed yaw
@@ -73,6 +80,9 @@ public:
     std::string condition_flag;
     bool condition_inverted = false;
     bool enabled = true;
+    // False for overrides that ship in Sys: they come back on every load, so they cannot be
+    // deleted or renamed in the user's file. Not stored in the ini.
+    bool user_defined = true;
   };
 
   static TextureElementManager& GetInstance();
@@ -80,27 +90,41 @@ public:
   // Static INI helpers (used by both this manager and the Qt pane).
   static std::vector<TextureElementOverride> LoadOverridesFromINI(
       const std::string& game_id, std::optional<u16> revision = std::nullopt);
+  // The Sys files, then the user files, merged by name (later files win).
+  static std::vector<TextureElementOverride>
+  LoadOverridesFromINIFiles(const std::vector<std::string>& sys_paths,
+                            const std::vector<std::string>& user_paths);
   static void SaveOverridesToINI(const std::string& game_id,
                                  const std::vector<TextureElementOverride>& overrides);
+  // The overrides of one INI file (no Sys/User merge), e.g. an entry the agent server wrote.
+  static std::vector<TextureElementOverride> LoadOverridesFromINIFile(const std::string& path);
 
   // Runtime override management.
   void LoadOverrides(const std::string& game_id);
+  // Makes `overrides` the active list (what LoadOverrides does with the game's INI files). Video
+  // thread: the draw path reads the tables this rebuilds without a lock.
+  void ApplyOverrideList(const std::string& game_id, std::vector<TextureElementOverride> overrides);
   void LoadOverridesIfNeeded(const std::string& game_id);
   bool HasOverrides() const;
+  // True when a loaded override moves elements to a VR controller (ControllerAnchor).
+  bool HasControllerAnchorOverrides() const;
   // True when the per-draw bound texture hashes are needed (overrides exist or hunter is open).
   bool NeedsTextureHashes() const;
 
   // --- Video-thread match path (bound = 8 currently-bound texture hashes) ---
+  // `depth` is the draw's camera depth for entries with min_depth / max_depth (nullptr: those
+  // entries do not match).
   // Register every flag whose texture group matches this draw. This is independent of handling
   // precedence so texture flags remain available to Shader and Elements Group conditions.
-  void RegisterFlagsForTextures(const std::array<u64, 8>& bound) const;
+  void RegisterFlagsForTextures(const std::array<u64, 8>& bound,
+                                const DrawDepthSource* depth) const;
   // True if any bound texture maps to a Skip override.
-  bool ShouldSkipByTexture(const std::array<u64, 8>& bound) const;
+  bool ShouldSkipByTexture(const std::array<u64, 8>& bound, const DrawDepthSource* depth) const;
   // Handling for the first bound texture with a non-Skip override (Skip if none). Out-params are
   // filled for Screen/HeadLocked (element_depth), UnitsPerMeter (units_per_meter),
   // Passthrough (passthrough_opacity), CameraAnchor (anchor) and ControllerAnchor
   // (controller_anchor).
-  HandlingType GetHandlingForTextures(const std::array<u64, 8>& bound,
+  HandlingType GetHandlingForTextures(const std::array<u64, 8>& bound, const DrawDepthSource* depth,
                                       float* element_depth, float* units_per_meter,
                                       float* passthrough_opacity, CameraAnchorParams* anchor,
                                       ControllerAnchorParams* controller_anchor) const;
@@ -115,13 +139,36 @@ public:
   void PrevTexture();
   void NextTexture();
   u64 GetSelectedTextureHash() const;
-  bool SaveSelectedTextureOverride(const std::string& game_id, HandlingType handling);
+
+  // The texture Prev/NextTexture picked (and the live preview hides or highlights), as long as the
+  // last frame drew it.
+  struct HuntingSelection
+  {
+    int position = -1;  // In GetCurrentTextures() order; -1 = none, or not drawn last frame.
+    int total = 0;      // Textures drawn last frame.
+    u64 hash = 0;
+    std::string name;
+  };
+  HuntingSelection GetHuntingSelection() const;
+
+  // Saves the selected texture as an override named `name` ("Texture <hash>" when empty) and
+  // reloads the overrides. An override of that name for just this texture is replaced; when
+  // another override has the name, a number is appended. `units_per_meter` is the scale for
+  // UnitsPerMeter handling; <= 0 uses the current global value. Returns the override's name, or
+  // nothing when no texture is selected.
+  std::optional<std::string> SaveSelectedTextureOverride(const std::string& game_id,
+                                                         HandlingType handling,
+                                                         float units_per_meter = -1.0f,
+                                                         const std::string& name = {});
 
   // --- Live preview (Texture Hunter browser open) ---
   // Draws binding a preview texture are skipped or pink-highlighted in-game without being saved,
   // mirroring the Shader Override tool's texture preview. The set is cleared when the hunter is
   // deactivated.
   void SetPreviewTextures(const std::vector<u64>& hashes);
+  // Selects one texture, as Prev/NextTexture do, by its hash (a pick on screen). Returns whether
+  // the last frame's list has it (the selection stands either way).
+  bool SelectTexture(u64 hash);
   // Preview mode: false = Skip (hide the draw), true = Pink (magenta highlight).
   void SetPreviewPink(bool pink);
   bool IsPreviewPink() const;
@@ -141,6 +188,8 @@ private:
     ControllerAnchorParams controller_anchor;
     std::string condition_flag;
     bool condition_inverted = false;
+    float min_depth = 0.0f;
+    float max_depth = 0.0f;
   };
 
   struct FlagRule
@@ -149,10 +198,13 @@ private:
     std::string condition_flag;
     bool condition_inverted = false;
     std::vector<u64> texture_hashes;
+    float min_depth = 0.0f;
+    float max_depth = 0.0f;
   };
 
-  bool IsConditionMatch(const ResolvedHandling& resolved) const;
-  const ResolvedHandling* FindFirstMatchingHandling(u64 texture_hash) const;
+  bool IsConditionMatch(const ResolvedHandling& resolved, const DrawDepthSource* depth) const;
+  const ResolvedHandling* FindFirstMatchingHandling(u64 texture_hash,
+                                                    const DrawDepthSource* depth) const;
 
   mutable std::mutex m_mutex;
 
@@ -163,7 +215,13 @@ private:
   std::unordered_map<u64, std::vector<ResolvedHandling>> m_texture_handling;
   std::vector<FlagRule> m_flag_rules;
   std::string m_loaded_game_id;
+  // The whole list given to ApplyOverrideList, re-applied when VR::OverrideSuppression or
+  // VR::PatchHides changes.
+  std::vector<TextureElementOverride> m_applied_overrides;
+  u64 m_suppression_generation = 0;
+  u64 m_patch_hides_generation = 0;
   std::atomic_bool m_has_overrides = false;
+  std::atomic_bool m_has_controller_anchor_overrides = false;
 
   // Texture Hunter: double-buffered "all textures seen this frame" (mutex-guarded).
   std::atomic_bool m_hunter_active = false;

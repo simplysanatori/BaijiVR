@@ -9,7 +9,8 @@ bool HasActiveGroups(const ShaderHunter::RuntimeElementSignature& signature)
 {
   return signature.valid &&
          (signature.use_projection || signature.use_projection_type || signature.use_layer ||
-          signature.use_viewport || signature.use_scissor || signature.use_render_state);
+          signature.use_viewport || signature.use_scissor || signature.use_render_state ||
+          signature.use_load);
 }
 
 bool Matches(const ShaderHunter::RuntimeElementSignature& pattern,
@@ -62,6 +63,15 @@ bool Matches(const ShaderHunter::RuntimeElementSignature& pattern,
       return false;
   }
 
+  if (pattern.use_load)
+  {
+    if (candidate.projection_load < pattern.load_min ||
+        (pattern.load_max >= 0 && candidate.projection_load > pattern.load_max))
+    {
+      return false;
+    }
+  }
+
   if (pattern.use_viewport)
   {
     if (pattern.viewport_x != candidate.viewport_x ||
@@ -86,13 +96,24 @@ bool Matches(const ShaderHunter::RuntimeElementSignature& pattern,
 
   if (pattern.use_render_state)
   {
-    if (pattern.alpha_test_hex != candidate.alpha_test_hex || pattern.ztest != candidate.ztest ||
-        pattern.zupdate != candidate.zupdate || pattern.zfunc != candidate.zfunc ||
+    // The alpha test's two reference values are its low 16 bits.
+    const u32 alpha_test_mask = pattern.any_alpha_ref ? 0xFFFF0000u : 0xFFFFFFFFu;
+    if ((pattern.alpha_test_hex & alpha_test_mask) !=
+            (candidate.alpha_test_hex & alpha_test_mask) ||
+        pattern.ztest != candidate.ztest || pattern.zupdate != candidate.zupdate ||
+        pattern.zfunc != candidate.zfunc ||
         pattern.blend_color_update != candidate.blend_color_update ||
-        pattern.blend_alpha_update != candidate.blend_alpha_update)
+        (!pattern.any_alpha_update && pattern.blend_alpha_update != candidate.blend_alpha_update))
     {
       return false;
     }
+  }
+
+  // 1 matches any EFB copy, 2 only a reduced one.
+  if (pattern.efb_copy >= 0 && pattern.efb_copy != candidate.efb_copy &&
+      !(pattern.efb_copy == 1 && candidate.efb_copy == 2))
+  {
+    return false;
   }
 
   return true;

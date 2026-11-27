@@ -215,7 +215,10 @@ static void ClearAppliedVRSettings()
   ClearAppliedVRSetting("HeadLockedCurvature", Config::GFX_VR_HEAD_LOCKED_CURVATURE);
   ClearAppliedVRSetting("DontClearScreen", Config::GFX_VR_DONT_CLEAR_SCREEN);
   ClearAppliedVRSetting("LoadCustomShaders", Config::GFX_VR_LOAD_CUSTOM_SHADERS);
-  ClearAppliedVRSetting("DisableCPUCull", Config::GFX_VR_DISABLE_CPU_CULL);
+  ClearAppliedVRSetting("HeadCPUCull", Config::GFX_VR_HEAD_CPU_CULL);
+  ClearAppliedVRSetting("WiimoteMotionPitch", Config::GFX_VR_WIIMOTE_MOTION_PITCH);
+  ClearAppliedVRSetting("GazeRamCopies", Config::GFX_VR_GAZE_RAM_COPIES);
+  ClearAppliedVRSetting("PerEyeScreenCopies", Config::GFX_VR_PER_EYE_SCREEN_COPIES);
   ClearAppliedVRSetting("MirrorView", Config::GFX_VR_MIRROR_VIEW);
   ClearAppliedVRSetting("ReferenceSpaceMode", Config::GFX_VR_REFERENCE_SPACE_MODE);
   ClearAppliedVRSetting("TrackingMode", Config::GFX_VR_TRACKING_MODE);
@@ -236,6 +239,7 @@ static void ClearAppliedVRSettings()
   ClearAppliedVRSetting("DetectRenderTargets", Config::GFX_VR_DETECT_RENDER_TARGETS);
   ClearAppliedVRSetting("OrthoScissorFix", Config::GFX_VR_ORTHO_SCISSOR_FIX);
   ClearAppliedVRSetting("DetectSkybox", Config::GFX_VR_DETECT_SKYBOX);
+  ClearAppliedVRSetting("SkipBackgroundFill", Config::GFX_VR_SKIP_BACKGROUND_FILL);
   ClearAppliedVRSetting("MetroidThermalVisorFix", Config::GFX_VR_METROID_THERMAL_VISOR_FIX);
   ClearAppliedVRSetting("MetroidD3DThermalPaletteFix",
                         Config::GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX);
@@ -306,7 +310,10 @@ static void ApplyGameVRConfigOverrides(std::string_view game_id, std::optional<u
   ApplyVRSetting(values, "HeadLockedCurvature", Config::GFX_VR_HEAD_LOCKED_CURVATURE);
   ApplyVRSetting(values, "DontClearScreen", Config::GFX_VR_DONT_CLEAR_SCREEN);
   ApplyVRSetting(values, "LoadCustomShaders", Config::GFX_VR_LOAD_CUSTOM_SHADERS);
-  ApplyVRSetting(values, "DisableCPUCull", Config::GFX_VR_DISABLE_CPU_CULL);
+  ApplyVRSetting(values, "HeadCPUCull", Config::GFX_VR_HEAD_CPU_CULL);
+  ApplyVRSetting(values, "WiimoteMotionPitch", Config::GFX_VR_WIIMOTE_MOTION_PITCH);
+  ApplyVRSetting(values, "GazeRamCopies", Config::GFX_VR_GAZE_RAM_COPIES);
+  ApplyVRSetting(values, "PerEyeScreenCopies", Config::GFX_VR_PER_EYE_SCREEN_COPIES);
   ApplyVRSetting(values, "MirrorView", Config::GFX_VR_MIRROR_VIEW);
   ApplyVRSetting(values, "ReferenceSpaceMode", Config::GFX_VR_REFERENCE_SPACE_MODE);
   ApplyVRSetting(values, "TrackingMode", Config::GFX_VR_TRACKING_MODE);
@@ -343,6 +350,7 @@ static void ApplyGameVRConfigOverrides(std::string_view game_id, std::optional<u
   ApplyVRSetting(values, "DetectRenderTargets", Config::GFX_VR_DETECT_RENDER_TARGETS);
   ApplyVRSetting(values, "OrthoScissorFix", Config::GFX_VR_ORTHO_SCISSOR_FIX);
   ApplyVRSetting(values, "DetectSkybox", Config::GFX_VR_DETECT_SKYBOX);
+  ApplyVRSetting(values, "SkipBackgroundFill", Config::GFX_VR_SKIP_BACKGROUND_FILL);
   const bool has_d3d_thermal_palette_fix =
       values.find("MetroidD3DThermalPaletteFix") != values.end();
   ApplyVRSetting(values, "MetroidThermalVisorFix", Config::GFX_VR_METROID_THERMAL_VISOR_FIX);

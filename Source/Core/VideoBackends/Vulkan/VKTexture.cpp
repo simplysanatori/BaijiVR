@@ -18,6 +18,7 @@
 #include "VideoBackends/Vulkan/StagingBuffer.h"
 #include "VideoBackends/Vulkan/StateTracker.h"
 #include "VideoBackends/Vulkan/VKGfx.h"
+#include "VideoBackends/Vulkan/VKRecordingWorker.h"
 #include "VideoBackends/Vulkan/VKStreamBuffer.h"
 #include "VideoBackends/Vulkan/VulkanContext.h"
 
@@ -46,9 +47,10 @@ VKTexture::VKTexture(const TextureConfig& tex_config, VmaAllocation alloc, VkIma
 
 VKTexture::~VKTexture()
 {
+  DrainRecordingWorkerForDirectAccess();
   if (m_view != VK_NULL_HANDLE)
   {
-    StateTracker::GetInstance()->UnbindTexture(m_view);
+    StateTracker::GetInstance()->OnImageViewDestroyed(m_view);
     g_command_buffer_mgr->DeferImageViewDestruction(m_view);
   }
 
@@ -61,10 +63,11 @@ VKTexture::~VKTexture()
 
 VkImageView VKTexture::ReleaseView()
 {
+  DrainRecordingWorkerForDirectAccess();
   if (m_view == VK_NULL_HANDLE)
     return VK_NULL_HANDLE;
 
-  StateTracker::GetInstance()->UnbindTexture(m_view);
+  StateTracker::GetInstance()->OnImageViewDestroyed(m_view);
   const VkImageView view = m_view;
   m_view = VK_NULL_HANDLE;
   return view;
@@ -300,6 +303,7 @@ void VKTexture::CopyRectangleFromTexture(const AbstractTexture* src,
                                          u32 src_level, const MathUtil::Rectangle<int>& dst_rect,
                                          u32 dst_layer, u32 dst_level)
 {
+  DrainRecordingWorkerForDirectAccess();
   const VKTexture* src_texture = static_cast<const VKTexture*>(src);
 
   ASSERT_MSG(VIDEO,
@@ -341,6 +345,7 @@ void VKTexture::CopyRectangleFromTexture(const AbstractTexture* src,
 void VKTexture::ResolveFromTexture(const AbstractTexture* src, const MathUtil::Rectangle<int>& rect,
                                    u32 layer, u32 level)
 {
+  DrainRecordingWorkerForDirectAccess();
   const VKTexture* srcentry = static_cast<const VKTexture*>(src);
   DEBUG_ASSERT(m_config.samples == 1 && m_config.width == srcentry->m_config.width &&
                m_config.height == srcentry->m_config.height && srcentry->m_config.samples > 1);
@@ -371,6 +376,7 @@ void VKTexture::ResolveFromTexture(const AbstractTexture* src, const MathUtil::R
 void VKTexture::Load(u32 level, u32 width, u32 height, u32 row_length, const u8* buffer,
                      size_t buffer_size, u32 layer)
 {
+  DrainRecordingWorkerForDirectAccess();
   // Can't copy data larger than the texture extents.
   width = std::max(1u, std::min(width, GetWidth() >> level));
   height = std::max(1u, std::min(height, GetHeight() >> level));
@@ -468,12 +474,16 @@ void VKTexture::Load(u32 level, u32 width, u32 height, u32 row_length, const u8*
 
 void VKTexture::FinishedRendering()
 {
-  if (m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+  // Uploads end in the shader-read layout, and only render targets and compute images leave it
+  // through queued commands. For any other texture a layout that already reads as shader-read
+  // stays that way until this thread changes it, so the command can be skipped. Otherwise it is
+  // recorded in order with the draws and re-checks the layout at recording time.
+  if (!m_config.IsRenderTarget() && !m_config.IsComputeImage() &&
+      m_layout.load(std::memory_order_relaxed) == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+  {
     return;
-
-  StateTracker::GetInstance()->EndRenderPass();
-  TransitionToLayout(g_command_buffer_mgr->GetCurrentCommandBuffer(),
-                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  }
+  VKGfx::GetInstance()->RecordFinishedRendering(this);
 }
 
 void VKTexture::OverrideImageLayout(VkImageLayout new_layout)
@@ -786,6 +796,9 @@ VKStagingTexture::VKStagingTexture(PrivateTag, StagingTextureType type, const Te
 
 VKStagingTexture::~VKStagingTexture()
 {
+  // A copy queued on the recording worker still points at this object, its staging buffer and
+  // its linear image; let it record before any of them goes away.
+  DrainRecordingWorkerForDirectAccess();
   if (m_linear_image != VK_NULL_HANDLE)
   {
     g_command_buffer_mgr->DeferImageDestruction(m_linear_image, m_linear_image_alloc);
@@ -911,8 +924,43 @@ void VKStagingTexture::CopyFromTexture(const AbstractTexture* src,
   ASSERT(dst_rect.left >= 0 && static_cast<u32>(dst_rect.right) <= m_config.width &&
          dst_rect.top >= 0 && static_cast<u32>(dst_rect.bottom) <= m_config.height);
 
+  // Queued behind the draws instead of draining the recording worker: games that read the EFB
+  // from the CPU issue tens of these per frame, and each drain stalled the video thread until
+  // the worker caught up. Nothing here needs the copy to be recorded yet; Flush() drains (through
+  // ExecuteCommandBuffer) before it submits and waits.
+  RecordCommand::StagingCopyFromTextureCmd copy{};
+  copy.staging = this;
+  copy.src = src_tex;
+  copy.src_left = src_rect.left;
+  copy.src_top = src_rect.top;
+  copy.src_right = src_rect.right;
+  copy.src_bottom = src_rect.bottom;
+  copy.dst_left = dst_rect.left;
+  copy.dst_top = dst_rect.top;
+  copy.src_layer = src_layer;
+  copy.src_level = src_level;
+  VKGfx::GetInstance()->RecordStagingCopyFromTexture(copy);
+
+  m_needs_flush = true;
+  // Stamped here rather than by the worker: the worker never submits, and every submit drains it
+  // first, so the queued copy is recorded into the command buffer that is current right now.
+  m_flush_fence_counter = g_command_buffer_mgr->GetCurrentFenceCounter();
+}
+
+void VKStagingTexture::CopyFromTextureDirect(const RecordCommand::StagingCopyFromTextureCmd& copy)
+{
+  const VKTexture* src_tex = copy.src;
+  const u32 src_layer = copy.src_layer;
+  const u32 src_level = copy.src_level;
+  const MathUtil::Rectangle<int> src_rect(copy.src_left, copy.src_top, copy.src_right,
+                                          copy.src_bottom);
+  const MathUtil::Rectangle<int> dst_rect(copy.dst_left, copy.dst_top,
+                                          copy.dst_left + src_rect.GetWidth(),
+                                          copy.dst_top + src_rect.GetHeight());
+
   StateTracker::GetInstance()->EndRenderPass();
 
+  // Read at recording time: commands queued ahead of this one may have changed the layout.
   VkImageLayout old_layout = src_tex->GetLayout();
   src_tex->TransitionToLayout(g_command_buffer_mgr->GetCurrentCommandBuffer(),
                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -936,6 +984,10 @@ void VKStagingTexture::CopyFromTexture(const AbstractTexture* src,
     CopyFromTextureToLinearImage(src_tex, src_rect, src_layer, src_level, dst_rect);
     src_image = m_linear_image;
     image_copy.imageOffset = {0, 0, 0};
+    // The linear image has one layer and one level: the blit above already selected the source
+    // ones (reading layer src_layer of it, e.g. the right eye, returned black).
+    image_copy.imageSubresource.mipLevel = 0;
+    image_copy.imageSubresource.baseArrayLayer = 0;
   }
 
   vkCmdCopyImageToBuffer(g_command_buffer_mgr->GetCurrentCommandBuffer(), src_image,
@@ -944,9 +996,6 @@ void VKStagingTexture::CopyFromTexture(const AbstractTexture* src,
 
   // Restore old source texture layout.
   src_tex->TransitionToLayout(g_command_buffer_mgr->GetCurrentCommandBuffer(), old_layout);
-
-  m_needs_flush = true;
-  m_flush_fence_counter = g_command_buffer_mgr->GetCurrentFenceCounter();
 }
 
 void VKStagingTexture::CopyFromTextureToLinearImage(const VKTexture* src_tex,
@@ -1002,6 +1051,7 @@ void VKStagingTexture::CopyToTexture(const MathUtil::Rectangle<int>& src_rect, A
                                      const MathUtil::Rectangle<int>& dst_rect, u32 dst_layer,
                                      u32 dst_level)
 {
+  DrainRecordingWorkerForDirectAccess();
   const VKTexture* dst_tex = static_cast<const VKTexture*>(dst);
   ASSERT(m_type == StagingTextureType::Upload || m_type == StagingTextureType::Mutable);
   ASSERT(src_rect.GetWidth() == dst_rect.GetWidth() &&
@@ -1060,12 +1110,15 @@ void VKStagingTexture::Flush()
   // Is this copy in the current command buffer?
   if (g_command_buffer_mgr->GetCurrentFenceCounter() == m_flush_fence_counter)
   {
-    // Execute the command buffer and wait for it to finish.
+    // Execute the command buffer and wait for it to finish. ExecuteCommandBuffer drains the
+    // recording worker before it submits, so a CopyFromTexture still queued there is recorded
+    // into this buffer first.
     VKGfx::GetInstance()->ExecuteCommandBuffer(false, true);
   }
   else
   {
-    // Wait for the GPU to finish with it.
+    // Wait for the GPU to finish with it. The buffer holding the copy has been submitted, and
+    // every submit path drains the worker first, so the copy was recorded into it.
     g_command_buffer_mgr->WaitForFenceCounter(m_flush_fence_counter);
   }
 
@@ -1121,8 +1174,21 @@ VKFramebuffer::VKFramebuffer(VKTexture* color_attachment, VKTexture* depth_attac
 
 VKFramebuffer::~VKFramebuffer()
 {
+  DrainRecordingWorkerForDirectAccess();
   if (m_fb != VK_NULL_HANDLE)
     g_command_buffer_mgr->DeferFramebufferDestruction(m_fb);
+  if (m_plain_fb != VK_NULL_HANDLE)
+    g_command_buffer_mgr->DeferFramebufferDestruction(m_plain_fb);
+}
+
+void VKFramebuffer::SetPlainVariant(VkFramebuffer fb, VkRenderPass load_render_pass,
+                                    VkRenderPass discard_render_pass,
+                                    VkRenderPass clear_render_pass)
+{
+  m_plain_fb = fb;
+  m_plain_load_render_pass = load_render_pass;
+  m_plain_discard_render_pass = discard_render_pass;
+  m_plain_clear_render_pass = clear_render_pass;
 }
 
 VkFramebuffer VKFramebuffer::ReleaseHandle()
@@ -1185,8 +1251,7 @@ CreateFramebufferInternal(VKTexture* color_attachment, VKTexture* depth_attachme
   const bool can_use_multiview =
       layers == 2 && samples == 1 && g_vulkan_context->SupportsMultiview();
   const bool automatic_efb_multiview =
-      is_current_efb && can_use_multiview && g_ActiveConfig.vr_use_vulkan_multiview &&
-      g_ActiveConfig.stereo_mode == StereoMode::OpenXR;
+      is_current_efb && can_use_multiview && g_ActiveConfig.UseStereoMultiview();
   const bool use_multiview = force_multiview || automatic_efb_multiview;
   if (use_multiview && !can_use_multiview)
   {
@@ -1207,8 +1272,9 @@ CreateFramebufferInternal(VKTexture* color_attachment, VKTexture* depth_attachme
   // density map, matching the fragment_density_map bit GX pipelines carry in their
   // framebuffer state. Explicit views (XR swapchains) take precedence.
   VkImageView fdm_view = fragment_density_map_view;
-  if (fdm_view == VK_NULL_HANDLE && is_current_efb && use_multiview &&
-      g_framebuffer_manager->IsEFBFoveated())
+  const bool efb_fdm = fdm_view == VK_NULL_HANDLE && is_current_efb && use_multiview &&
+                       g_framebuffer_manager->IsEFBFoveated();
+  if (efb_fdm)
   {
     fdm_view = g_object_cache->GetEFBFragmentDensityMapView(width, height, layers);
     if (fdm_view == VK_NULL_HANDLE)
@@ -1219,6 +1285,47 @@ CreateFramebufferInternal(VKTexture* color_attachment, VKTexture* depth_attachme
     }
   }
   const bool use_fdm = fdm_view != VK_NULL_HANDLE;
+
+  // The plain twin of a foveated EFB framebuffer (EFBFoveationScheduler) has the same
+  // attachments minus the density map.
+  VkFramebuffer plain_fb = VK_NULL_HANDLE;
+  VkRenderPass plain_load_render_pass = VK_NULL_HANDLE;
+  VkRenderPass plain_discard_render_pass = VK_NULL_HANDLE;
+  VkRenderPass plain_clear_render_pass = VK_NULL_HANDLE;
+  if (efb_fdm)
+  {
+    const u8 additional_count = static_cast<u8>(additional_color_attachments.size());
+    plain_load_render_pass = g_object_cache->GetRenderPass(
+        vk_color_format, vk_depth_format, samples, VK_ATTACHMENT_LOAD_OP_LOAD, additional_count,
+        use_multiview, additional_color_format, false);
+    plain_discard_render_pass = g_object_cache->GetRenderPass(
+        vk_color_format, vk_depth_format, samples, VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        additional_count, use_multiview, additional_color_format, false);
+    plain_clear_render_pass = g_object_cache->GetRenderPass(
+        vk_color_format, vk_depth_format, samples, VK_ATTACHMENT_LOAD_OP_CLEAR, additional_count,
+        use_multiview, additional_color_format, false);
+    if (plain_load_render_pass == VK_NULL_HANDLE || plain_discard_render_pass == VK_NULL_HANDLE ||
+        plain_clear_render_pass == VK_NULL_HANDLE)
+    {
+      return nullptr;
+    }
+    const VkFramebufferCreateInfo plain_info = {VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                                                nullptr,
+                                                0,
+                                                plain_load_render_pass,
+                                                static_cast<uint32_t>(attachment_views.size()),
+                                                attachment_views.data(),
+                                                width,
+                                                height,
+                                                fb_layers};
+    const VkResult plain_res =
+        vkCreateFramebuffer(g_vulkan_context->GetDevice(), &plain_info, nullptr, &plain_fb);
+    if (plain_res != VK_SUCCESS)
+    {
+      LOG_VULKAN_ERROR(plain_res, "vkCreateFramebuffer (plain EFB twin) failed: ");
+      return nullptr;
+    }
+  }
 
   // The fragment density map is always the last attachment; the render passes from
   // GetRenderPass() reference it at the same index (after color/depth/additional).
@@ -1259,13 +1366,21 @@ CreateFramebufferInternal(VKTexture* color_attachment, VKTexture* depth_attachme
   if (res != VK_SUCCESS)
   {
     LOG_VULKAN_ERROR(res, "vkCreateFramebuffer failed: ");
+    if (plain_fb != VK_NULL_HANDLE)
+      vkDestroyFramebuffer(g_vulkan_context->GetDevice(), plain_fb, nullptr);
     return nullptr;
   }
 
-  return std::make_unique<VKFramebuffer>(
+  auto framebuffer = std::make_unique<VKFramebuffer>(
       color_attachment, depth_attachment, std::move(additional_color_attachments), width, height,
       layers, samples, fb, load_render_pass, discard_render_pass, clear_render_pass, use_fdm,
       use_multiview);
+  if (plain_fb != VK_NULL_HANDLE)
+  {
+    framebuffer->SetPlainVariant(plain_fb, plain_load_render_pass, plain_discard_render_pass,
+                                 plain_clear_render_pass);
+  }
+  return framebuffer;
 }
 
 std::unique_ptr<VKFramebuffer>

@@ -3,16 +3,19 @@
 
 #include "VideoCommon/GeometryShaderManager.h"
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
 #include "Core/System.h"
 #include "VideoCommon/BPMemory.h"
+#include "VideoCommon/DrawDepth.h"
 #include "VideoCommon/FreeLookCamera.h"
 #include "VideoCommon/RenderState.h"
 #include "VideoCommon/VertexShaderManager.h"
@@ -28,10 +31,7 @@ static constexpr int LINE_PT_TEX_OFFSETS[8] = {0, 16, 8, 4, 2, 1, 1, 1};
 
 namespace
 {
-static constexpr float METROID_PERSPECTIVE_HUD_FORWARD_OFFSET = 1.0f;
-static constexpr int METROID_HUD_REFERENCE_CONTEXT_COMBAT = 1;
-static constexpr float METROID_COMBAT_HUD_REFERENCE_FAR_Z = -28.5f;
-static constexpr float METROID_COMBAT_HUD_REFERENCE_NEAR_Z = -18.0f;
+static constexpr float PERSPECTIVE_HUD_FORWARD_OFFSET = 1.0f;
 
 struct PerspectiveHudTransform
 {
@@ -87,17 +87,6 @@ bool IsFinite(float value)
   return std::isfinite(value);
 }
 
-bool IsMetroidHudStableReferenceAllowed(int context, float reference_view_z)
-{
-  if (context != METROID_HUD_REFERENCE_CONTEXT_COMBAT)
-    return true;
-
-  // Prime 1 combat HUD body anchors sit around -20 in normal combat and can move toward -27 for
-  // visor-specific HUD projections.  Grappling-hook arm/attachment draws are classified as HUD
-  // anchors too, but sit around -32 and must not replace the shared combat HUD body depth.
-  return reference_view_z >= METROID_COMBAT_HUD_REFERENCE_FAR_Z &&
-         reference_view_z <= METROID_COMBAT_HUD_REFERENCE_NEAR_Z;
-}
 
 PerspectiveHudTransform CalculatePerspectiveHudTransform(const Projection::Raw& projection,
                                                          float units_per_meter,
@@ -156,8 +145,7 @@ PerspectiveHudTransform CalculatePerspectiveHudTransform(const Projection::Raw& 
   // This decouples the sliders (Distance = forward placement, Size = scale).  The earlier
   // `scale[2] * zobj - distance` coupled them and assumed the model sat at view-z == -zobj;
   // a plain -distance assumed view-z == 0.  Neither held, so the HUD floated too far away.
-  result.position[2] = result.scale[2] * (zobj + METROID_PERSPECTIVE_HUD_FORWARD_OFFSET) -
-                       result.distance;
+  result.position[2] = result.scale[2] * (zobj + PERSPECTIVE_HUD_FORWARD_OFFSET) - result.distance;
   result.origin_z = result.scale[2] * reference_view_z + result.position[2];
   result.ref_minus_one_z = result.scale[2] * (reference_view_z - 1.0f) + result.position[2];
   result.ref_plus_one_z = result.scale[2] * (reference_view_z + 1.0f) + result.position[2];
@@ -187,6 +175,8 @@ void GeometryShaderManager::Init()
   m_vr_pane_frame_reference_w.clear();
   vr_pane_group_override = 0;
   vr_flat_screen_pane_override = false;
+  vr_pane_reference_w_override = -1.0f;
+  vr_pane_depth_strength = 1.0f;
 
   // Init any initial constants which aren't zero when bpmem is zero.
   SetViewportChanged();
@@ -245,24 +235,34 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
         constants.head_locked_params = {};
         constants.pixel_center_correction = {};
         constants.vr_pane_remap = {1.0f, 1.0f, 0.0f, 0.0f};
+        constants.vr_pane_clip = {-VR::VR_PANE_CLIP_OPEN, VR::VR_PANE_CLIP_OPEN,
+                                  -VR::VR_PANE_CLIP_OPEN, VR::VR_PANE_CLIP_OPEN};
         const bool pane_screen_override = vr_pane_screen_override;
         vr_pane_screen_override = false;  // consume
         const bool flat_screen_pane_override = vr_flat_screen_pane_override;
         vr_flat_screen_pane_override = false;  // consume
         const u64 pane_group_override = vr_pane_group_override;
         vr_pane_group_override = 0;  // consume
+        const float pane_reference_w_override = vr_pane_reference_w_override;
+        vr_pane_reference_w_override = -1.0f;  // consume
+        const float pane_depth_strength = vr_pane_depth_strength;
+        vr_pane_depth_strength = 1.0f;  // consume
         const float upm_override = vr_units_per_meter_override;
         vr_units_per_meter_override = -1.0f;  // consume
         const float headlocked_projection_scale_x = vr_headlocked_projection_scale_x;
         const float headlocked_projection_scale_y = vr_headlocked_projection_scale_y;
         const float headlocked_projection_offset_x = vr_headlocked_projection_offset_x;
         const float headlocked_projection_offset_y = vr_headlocked_projection_offset_y;
-        const bool metroid_hud_self_center = vr_metroid_hud_self_center;
-        vr_metroid_hud_self_center = false;  // consume
-        const bool metroid_hud_anchor_candidate = vr_metroid_hud_anchor_candidate;
-        vr_metroid_hud_anchor_candidate = false;  // consume
-        const int metroid_hud_reference_context = vr_metroid_hud_reference_context;
-        vr_metroid_hud_reference_context = 0;  // consume
+        const bool hud_self_center = vr_hud_self_center;
+        vr_hud_self_center = false;  // consume
+        const bool hud_anchor_candidate = vr_hud_anchor_candidate;
+        vr_hud_anchor_candidate = false;  // consume
+        const float hud_anchor_z_min = vr_hud_anchor_z_min;
+        vr_hud_anchor_z_min = -std::numeric_limits<float>::infinity();  // consume
+        const float hud_anchor_z_max = vr_hud_anchor_z_max;
+        vr_hud_anchor_z_max = std::numeric_limits<float>::infinity();  // consume
+        const int hud_reference_context = vr_hud_reference_context;
+        vr_hud_reference_context = 0;  // consume
         vr_headlocked_projection_scale_x = 1.0f;
         vr_headlocked_projection_scale_y = 1.0f;
         vr_headlocked_projection_offset_x = 0.0f;
@@ -276,68 +276,18 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
                                               g_ActiveConfig.vr_units_per_meter;
         const float upm = std::max(upm_override > 0.0f ? upm_override : base_upm, 0.0001f);
 
+        const VREyeRows* vr_rows = nullptr;
         if (VR::g_openxr && VR::g_openxr->IsSessionRunning())
         {
+          // Projection rows for this scale, cached until the pose they were built from changes
+          // (see RefreshVREyeRowCache).
+          vr_rows = &GetVREyeRows(upm);
 
-          // Under the head-pose lock, only re-fetch the head pose from OpenXR when we've
-          // been explicitly invalidated (at the XFB-copy frame boundary).  This prevents
-          // mid-frame LocateViews() updates from desynchronising different draw calls
-          // within the same game frame.  The lock applies whenever ImmediateXFB is off
-          // (VRLockHeadPosePerFrame): presents then interleave with the next frame's draw
-          // stream, so per-draw refresh WILL land mid-frame.  With ImmediateXFB on,
-          // presentation is frame-aligned, so refetch every call for fresher tracking.
-          const bool upm_changed = std::abs(upm - m_cached_units_per_meter) > 0.0001f;
-          const bool need_refresh =
-              upm_changed || !g_ActiveConfig.VRLockHeadPosePerFrame() || m_vr_pose_needs_refresh;
-          if (need_refresh)
-          {
-            std::array<std::array<float, 4>, 4> eye_projection_rows{};
-            std::array<std::array<float, 4>, 2> eye_z_rows{};
-            VR::g_openxr->GetEyeProjectionRows(upm, eye_projection_rows, eye_z_rows);
-
-            // OpenXR stereo bypasses the classic cproj path, so bake Free Look into the cached
-            // game-camera rows.  Do this regardless of the current draw type: with the per-frame
-            // pose lock, an ortho draw may be the one that refreshes the cache for all later
-            // perspective draws in the frame.
-            if (g_freelook_camera.IsActive())
-            {
-              const Common::Matrix44 freelook_view = g_freelook_camera.GetView();
-              ApplyRowTransform(&eye_projection_rows, freelook_view);
-              ApplyRowTransform(&eye_z_rows, freelook_view);
-            }
-
-            m_cached_eye_projection = eye_projection_rows;
-            m_cached_eye_z_row = eye_z_rows;
-
-            // Cache a second projection from the exact same tracked pose without any game-camera
-            // adjustment.  Orthographic HUD and other virtual-screen routes select this below, so
-            // Free Look, Camera Forward/Height, and Camera Anchor only move immersive 3D geometry.
-            std::array<std::array<float, 4>, 4> tracked_eye_projection_rows{};
-            std::array<std::array<float, 4>, 2> tracked_eye_z_rows{};
-            VR::g_openxr->GetTrackedEyeProjectionRows(upm, tracked_eye_projection_rows,
-                                                       tracked_eye_z_rows);
-            m_cached_tracked_eye_projection = tracked_eye_projection_rows;
-            m_cached_tracked_eye_z_row = tracked_eye_z_rows;
-            m_cached_units_per_meter = upm;
-
-            // Unrotated per-eye projection rows for head-locked content.
-            std::array<std::array<float, 4>, 4> head_proj_rows{};
-            VR::g_openxr->GetRawEyeProjectionRows(upm, head_proj_rows);
-            m_cached_head_projection = head_proj_rows;
-
-            // Snapshot the pose the cache was built from.  SubmitFrame will use
-            // this snapshot so render_pose == submit_pose regardless of any
-            // later LocateViews that may clobber m_eye_views before xrEndFrame.
-            VR::g_openxr->RecordRenderedEyeViews();
-
-            m_vr_pose_needs_refresh = false;
-          }
-
-          // Unrotated per-eye projection rows for head-locked content (cached above).
-          constants.head_projection[0] = m_cached_head_projection[0];
-          constants.head_projection[1] = m_cached_head_projection[1];
-          constants.head_projection[2] = m_cached_head_projection[2];
-          constants.head_projection[3] = m_cached_head_projection[3];
+          // Unrotated per-eye projection rows for head-locked content.
+          constants.head_projection[0] = vr_rows->head_projection[0];
+          constants.head_projection[1] = vr_rows->head_projection[1];
+          constants.head_projection[2] = vr_rows->head_projection[2];
+          constants.head_projection[3] = vr_rows->head_projection[3];
           for (u32 eye = 0; eye < 2; ++eye)
           {
             auto& row0 = constants.head_projection[eye * 2 + 0];
@@ -374,6 +324,11 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
             const float proj_x_sign =
                 (xfmem.projection.rawProjection[0] < 0.0f) ? -1.0f : 1.0f;
             constants.stereoparams[0] = proj_x_sign;
+            // The same for Y: Red Steel 2's view space points Y down, with a reflection in its
+            // view matrix, and its projection flips Y back. Without the flip the VR projection
+            // drew the world upside down with every triangle reversed (front faces culled).
+            const float proj_y_sign = (xfmem.projection.rawProjection[2] < 0.0f) ? -1.0f : 1.0f;
+            constants.stereoparams[1] = proj_y_sign;
 
             float depth_scale = 1.0f;
             float depth_offset = 0.0f;
@@ -400,24 +355,14 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
             // Perspective flag consumed in the OpenXR GS path.
             constants.stereoparams[3] = 1.0f;
 
-            // Skybox heuristic (Hydra "Detect Skybox"): an object drawn at the camera origin
-            // (translation 0,0,0) with a non-identity matrix is treated as a skybox.  Render it
-            // with the eye position locked at 0,0,0 (rotation only, no IPD/positional offset) so
-            // it sits at infinity instead of appearing too close.  cstereo.z is the per-draw
-            // world-position weight consumed in the GS perspective path: 1.0 = normal (apply eye
-            // position), 0.0 = skybox (rotation only).  This must be set for EVERY perspective VR
-            // draw, otherwise normal geometry would lose its per-eye offset and stereo would break.
-            bool is_skybox = false;
-            if (g_ActiveConfig.vr_detect_skybox)
-            {
-              const auto& pnm = vertex_shader_manager.constants.posnormalmatrix;
-              if (pnm[0][3] == 0.0f && pnm[1][3] == 0.0f && pnm[2][3] == 0.0f &&
-                  pnm[0][0] != 1.0f)
-              {
-                is_skybox = true;
-              }
-            }
-            constants.stereoparams[2] = is_skybox ? 0.0f : 1.0f;
+            // Skybox heuristic (Hydra "Detect Skybox", decided per draw by VertexManagerBase with
+            // IsSkyboxDraw): an object drawn at the camera origin is rendered with the eye
+            // position locked at 0,0,0 (rotation only, no IPD/positional offset) so it sits at
+            // infinity instead of appearing too close.  cstereo.z is the per-draw world-position
+            // weight consumed in the GS perspective path: 1.0 = normal (apply eye position), 0.0 =
+            // skybox (rotation only).  This must be set for EVERY perspective VR draw, otherwise
+            // normal geometry would lose its per-eye offset and stereo would break.
+            constants.stereoparams[2] = vr_skybox_draw ? 0.0f : 1.0f;
 
             // Hydra-style viewport classification (measured against the XFB display region):
             // perspective draws in sub-screen panes (MKDD character select) must NOT be
@@ -431,8 +376,8 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
               const int pane_x_off = bpmem.scissorOffset.x << 1;
               const int pane_y_off = bpmem.scissorOffset.y << 1;
               const VR::VRFrameRegion frame = VR::GetVRFrameRegion();
-              const VR::VRViewportClass vp_class =
-                  VR::ClassifyVRViewport(xfmem.viewport, pane_x_off, pane_y_off);
+              const VR::VRViewportClass vp_class = VR::ClassifyVRViewport(
+                  xfmem.viewport, VR::GetVRScissor(), pane_x_off, pane_y_off);
               if (g_ActiveConfig.vr_panes_on_screen && g_ActiveConfig.vr_virtual_screen &&
                   frame.valid && vp_class == VR::VRViewportClass::HudElement)
               {
@@ -462,8 +407,8 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
             {
               const int pane_x_off = bpmem.scissorOffset.x << 1;
               const int pane_y_off = bpmem.scissorOffset.y << 1;
-              const VR::VRViewportClass vp_class =
-                  VR::ClassifyVRViewport(xfmem.viewport, pane_x_off, pane_y_off);
+              const VR::VRViewportClass vp_class = VR::ClassifyVRViewport(
+                  xfmem.viewport, VR::GetVRScissor(), pane_x_off, pane_y_off);
               if (vp_class == VR::VRViewportClass::RenderToTexture ||
                   vp_class == VR::VRViewportClass::Offscreen)
               {
@@ -489,9 +434,16 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
               constants.stereoparams[3] = VR_STEREO_SCREEN_PANE_3D;
               constants.vr_pane_remap =
                   VR::CalculateVRPaneRemap(xfmem.viewport, pane_x_off, pane_y_off, frame);
-              const float draw_reference_w = VR::CalculateVRPaneReferenceW(
-                  reference_view_z, xfmem.projection.rawProjection[4],
-                  xfmem.projection.rawProjection[5]);
+              constants.vr_pane_clip =
+                  VR::CalculateVRPaneClip(bpmem.scissorTL.x, bpmem.scissorTL.y, bpmem.scissorBR.x,
+                                          bpmem.scissorBR.y, pane_x_off, pane_y_off, frame);
+              constants.head_locked_params[2] = 1.0f - std::clamp(pane_depth_strength, 0.0f, 1.0f);
+              const float draw_reference_w =
+                  pane_reference_w_override > 0.0f ?
+                      pane_reference_w_override :
+                      VR::CalculateVRPaneReferenceW(reference_view_z,
+                                                    xfmem.projection.rawProjection[4],
+                                                    xfmem.projection.rawProjection[5]);
               if (pane_group_override != 0)
               {
                 const auto it =
@@ -515,23 +467,57 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
           vr_stereo_override = std::numeric_limits<float>::quiet_NaN();
         }
 
-        if (VR::g_openxr && VR::g_openxr->IsSessionRunning())
+        // An orthographic pane on the virtual screen: its NDC spans its viewport only. The pane
+        // clip is exact where the shaders apply it (the multiview VS); the scissor
+        // VertexManagerBase sets covers the pane in both eyes.
+        if (std::exchange(vr_ortho_pane, false) && !perspective &&
+            constants.stereoparams[3] == -1.0f)
+        {
+          const int x_off = bpmem.scissorOffset.x << 1;
+          const int y_off = bpmem.scissorOffset.y << 1;
+          const VR::VRFrameRegion frame = VR::GetVRFrameRegion();
+          constants.vr_pane_remap = VR::CalculateVRPaneRemap(xfmem.viewport, x_off, y_off, frame);
+          constants.vr_pane_clip =
+              VR::CalculateVRPaneRect(xfmem.viewport, bpmem.scissorTL.x, bpmem.scissorTL.y,
+                                      bpmem.scissorBR.x, bpmem.scissorBR.y, x_off, y_off, frame);
+        }
+
+        if (vr_rows)
         {
           // Only the normal immersive-perspective route represents the game camera.  Virtual
           // screens (including orthographic HUD and perspective Screen Pane draws) stay tied to
           // the tracked room pose and therefore do not inherit Free Look or camera offsets.
           const bool use_game_camera =
               constants.stereoparams[3] > 0.5f && constants.stereoparams[3] < 1.5f;
-          const auto& eye_projection = use_game_camera ? m_cached_eye_projection :
-                                                         m_cached_tracked_eye_projection;
-          const auto& eye_z_row =
-              use_game_camera ? m_cached_eye_z_row : m_cached_tracked_eye_z_row;
+          const auto& eye_projection =
+              use_game_camera ? vr_rows->eye_projection : vr_rows->tracked_eye_projection;
+          const auto& eye_z_row = use_game_camera ? vr_rows->eye_z_row : vr_rows->tracked_eye_z_row;
           constants.eye_projection[0] = eye_projection[0];
           constants.eye_projection[1] = eye_projection[1];
           constants.eye_projection[2] = eye_projection[2];
           constants.eye_projection[3] = eye_projection[3];
           constants.eye_z_row[0] = eye_z_row[0];
           constants.eye_z_row[1] = eye_z_row[1];
+        }
+        // The fullscreen route projects nothing: each eye's first projection row carries its
+        // offset instead.
+        if (constants.stereoparams[3] == VR_STEREO_FULLSCREEN_PER_EYE)
+        {
+          for (size_t eye = 0; eye < 2; ++eye)
+          {
+            constants.eye_projection[eye * 2] = {vr_fullscreen_eye_offsets[eye][0],
+                                                 vr_fullscreen_eye_offsets[eye][1], 0.0f, 0.0f};
+          }
+        }
+        // The fullscreen route projects nothing: each eye's first projection row carries its
+        // offset instead.
+        if (constants.stereoparams[3] == VR_STEREO_FULLSCREEN_PER_EYE)
+        {
+          for (size_t eye = 0; eye < 2; ++eye)
+          {
+            constants.eye_projection[eye * 2] = {vr_fullscreen_eye_offsets[eye][0],
+                                                 vr_fullscreen_eye_offsets[eye][1], 0.0f, 0.0f};
+          }
         }
 
         const bool perspective_hud =
@@ -541,35 +527,35 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
         {
           // Model origin's view-space z (position-matrix translation).
           const float reference_view_z = vertex_shader_manager.constants.posnormalmatrix[2][3];
-          // The radar/minimap (METROID_VISOR_RADAR_HINT / METROID_RADAR_DOT) is a flat overlay whose
+          // A radar or minimap (hud_self_center, Metroid Prime's radar) is a flat overlay whose
           // blip geometry spans a large depth.  Under the SHARED scene transform that spread clips
-          // behind the camera and the whole minimap vanishes at low HUD distances.  Self-centre it on
-          // its own origin depth (its own, smaller scale — the pre-shared-reference behaviour) so it
-          // stays at `distance` and visible.  Coherent 3D content (Samus + hook, beam boxes) keeps the
-          // shared reference so its relative depth survives.
-          // (The radar/minimap draws are NOT classified as a RADAR layer in practice — combat-visor
-          // logs show them under METROID_SCAN_TEXT — so the depth-outlier check below is what
+          // behind the camera and the whole minimap vanishes at low HUD distances.  Self-centre it
+          // on its own origin depth (its own, smaller scale — the pre-shared-reference behaviour)
+          // so it stays at `distance` and visible.  Coherent 3D content (Samus + hook, beam boxes)
+          // keeps the shared reference so its relative depth survives. (Metroid Prime's combat
+          // radar draws share the HUD body's projection, so the depth-outlier check below is what
           // actually catches them.  The flag is kept as a cheap explicit opt-out.)
-          const bool self_center_layer = metroid_hud_self_center;
+          const bool self_center_layer = hud_self_center;
           const bool valid_reference =
               std::isfinite(reference_view_z) && reference_view_z < 0.0f;
-          if (metroid_hud_anchor_candidate && !self_center_layer && valid_reference)
+          if (hud_anchor_candidate && !self_center_layer && valid_reference)
           {
             // Pick the farthest stable HUD-body origin seen this frame as the anchor for the next
             // frame. Free-aim adds/moves nearer reticle pieces, but those are not anchor candidates
-            // and cannot pull the whole 3D HUD plane toward the camera.
-            const bool stable_reference_allowed = IsMetroidHudStableReferenceAllowed(
-                metroid_hud_reference_context, reference_view_z);
+            // and cannot pull the whole 3D HUD plane toward the camera. The entry's depth range
+            // keeps out anchors that sit elsewhere (Prime 1's grappling-hook arm, around -32).
+            const bool stable_reference_allowed =
+                reference_view_z >= hud_anchor_z_min && reference_view_z <= hud_anchor_z_max;
             const bool replace_candidate =
                 stable_reference_allowed &&
                 (!m_vr_hud_frame_anchor_candidate_valid ||
-                 metroid_hud_reference_context != m_vr_hud_frame_anchor_candidate_context ||
+                 hud_reference_context != m_vr_hud_frame_anchor_candidate_context ||
                  reference_view_z < m_vr_hud_frame_anchor_candidate_z);
             if (replace_candidate)
             {
               m_vr_hud_frame_anchor_candidate_z = reference_view_z;
               m_vr_hud_frame_anchor_candidate_valid = true;
-              m_vr_hud_frame_anchor_candidate_context = metroid_hud_reference_context;
+              m_vr_hud_frame_anchor_candidate_context = hud_reference_context;
             }
           }
           // Reuse ONE shared reference for all coherent -3 draws in this frame, so every Prime
@@ -579,22 +565,22 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
           // the first coherent draw only until a stable anchor is promoted at the frame boundary.
           const bool stable_reference_matches =
               m_vr_hud_stable_reference_valid &&
-              m_vr_hud_stable_reference_context == metroid_hud_reference_context;
+              m_vr_hud_stable_reference_context == hud_reference_context;
           if ((!m_vr_hud_shared_reference_valid ||
-               m_vr_hud_shared_reference_context != metroid_hud_reference_context) &&
+               m_vr_hud_shared_reference_context != hud_reference_context) &&
               !self_center_layer)
           {
             if (stable_reference_matches)
             {
               m_vr_hud_shared_reference_z = m_vr_hud_stable_reference_z;
               m_vr_hud_shared_reference_valid = true;
-              m_vr_hud_shared_reference_context = metroid_hud_reference_context;
+              m_vr_hud_shared_reference_context = hud_reference_context;
             }
             else if (valid_reference)
             {
               m_vr_hud_shared_reference_z = reference_view_z;
               m_vr_hud_shared_reference_valid = true;
-              m_vr_hud_shared_reference_context = metroid_hud_reference_context;
+              m_vr_hud_shared_reference_context = hud_reference_context;
             }
           }
           const float shared_reference_z =
@@ -612,6 +598,22 @@ void GeometryShaderManager::SetConstants(PrimitiveType prim)
           {
             const float depth_ratio = reference_view_z / shared_reference_z;
             depth_outlier = depth_ratio < 0.5f || depth_ratio > 2.0f;
+            // The origin is the model's, not always its geometry's: Metroid Prime 3's frame lines
+            // and counters and Metroid Prime's energy tanks have it 4 to 6 units in front of the
+            // camera, their vertices 16 to 22 units away with the rest of the HUD. Self-centred on
+            // the origin, those vertices went metres behind the HUD. A model whose vertices lie
+            // in the reference's depth band keeps the shared transform; Prime 3's hyper mode
+            // overlays, 0 to 7 units away, stay outliers.
+            if (depth_outlier && vr_hud_draw_depth)
+            {
+              const DrawDepthRange& depth = vr_hud_draw_depth->GetFew();
+              const float reference_depth = -shared_reference_z;
+              if (depth.valid && depth.min >= 0.4f * reference_depth &&
+                  depth.max <= 2.0f * reference_depth)
+              {
+                depth_outlier = false;
+              }
+            }
           }
           const float ref_for_transform =
               (self_center_layer || depth_outlier) ? reference_view_z : shared_reference_z;
@@ -716,18 +718,167 @@ void GeometryShaderManager::SetProjectionChanged()
   m_projection_changed = true;
 }
 
+#ifdef ENABLE_VR
+void GeometryShaderManager::RefreshVREyeRowCache()
+{
+  // Rows stay valid while the pose they were built from does. Under the head-pose lock
+  // (ImmediateXFB off) that is until the XFB-copy frame boundary invalidates them, so every
+  // draw of a game frame sees one pose even when presents interleave with the next frame's
+  // draws. Otherwise it is until OpenXRManager publishes a new pose generation (LocateViews,
+  // a Camera Anchor commit), so draws keep using the freshest pose without rebuilding the rows
+  // for every draw. Free Look moves the camera between draws: without the lock it still
+  // rebuilds per draw, as before.
+  const bool lock = g_ActiveConfig.VRLockHeadPosePerFrame();
+  const bool freelook = g_freelook_camera.IsActive();
+  const u64 generation = VR::g_openxr->GetPoseGeneration();
+  if (!m_vr_pose_needs_refresh && freelook == m_vr_eye_rows_freelook &&
+      (lock || (!freelook && generation == m_vr_eye_rows_generation)))
+  {
+    return;
+  }
+
+  for (VREyeRows& rows : m_vr_eye_rows)
+    rows.valid = false;
+  m_vr_eye_rows_generation = generation;
+  m_vr_eye_rows_freelook = freelook;
+  m_vr_pose_needs_refresh = false;
+  // The first draw of a game frame: the game camera has its pitch for this frame, which the rows
+  // remove. Only then: without the head-pose lock the rows are also rebuilt for each new head
+  // pose, in the middle of a frame, when the CPU thread may already have moved the camera for a
+  // later frame, and the draws after it would get that frame's pitch (parts of the world jumped
+  // while the camera tilted). A VR patch's Camera Anchor, composed with the game camera of a recent
+  // field, is taken at the same point.
+  if (m_vr_camera_pitch_needs_latch)
+  {
+    VR::g_openxr->LatchGameCameraPitch();
+    VR::g_openxr->LatchCameraAnchorSource();
+    m_vr_camera_pitch_needs_latch = false;
+  }
+}
+
+const GeometryShaderManager::VREyeRows& GeometryShaderManager::GetVREyeRows(float units_per_meter)
+{
+  RefreshVREyeRowCache();
+  for (const VREyeRows& rows : m_vr_eye_rows)
+  {
+    if (rows.valid && std::abs(rows.units_per_meter - units_per_meter) <= 0.0001f)
+      return rows;
+  }
+
+  VREyeRows& rows = m_vr_eye_rows[m_vr_eye_rows_next];
+  m_vr_eye_rows_next = (m_vr_eye_rows_next + 1) % static_cast<u32>(m_vr_eye_rows.size());
+  rows.valid = true;
+  rows.units_per_meter = units_per_meter;
+  VR::g_openxr->GetEyeProjectionRows(units_per_meter, rows.eye_projection, rows.eye_z_row);
+
+  // OpenXR stereo bypasses the classic cproj path, so bake Free Look into the cached
+  // game-camera rows.  Do this regardless of the current draw type: with the per-frame
+  // pose lock, an ortho draw may be the one that refreshes the cache for all later
+  // perspective draws in the frame.
+  if (g_freelook_camera.IsActive())
+  {
+    const Common::Matrix44 freelook_view = g_freelook_camera.GetView();
+    ApplyRowTransform(&rows.eye_projection, freelook_view);
+    ApplyRowTransform(&rows.eye_z_row, freelook_view);
+  }
+
+  // A second projection from the exact same tracked pose without any game-camera adjustment.
+  // Orthographic HUD and other virtual-screen routes select this, so Free Look, Camera
+  // Forward/Height, and Camera Anchor only move immersive 3D geometry.
+  VR::g_openxr->GetTrackedEyeProjectionRows(units_per_meter, rows.tracked_eye_projection,
+                                            rows.tracked_eye_z_row);
+
+  // Unrotated per-eye projection rows for head-locked content.
+  VR::g_openxr->GetRawEyeProjectionRows(units_per_meter, rows.head_projection);
+
+  // CPU culling cone of the game-camera rig, from the same pose as the rows above.
+  rows.cull_valid = VR::g_openxr->GetHeadCullProjection(units_per_meter, rows.cull_projection);
+
+  // Snapshot the pose the cache was built from.  SubmitFrame will use
+  // this snapshot so render_pose == submit_pose regardless of any
+  // later LocateViews that may clobber m_eye_views before xrEndFrame.
+  VR::g_openxr->RecordRenderedEyeViews();
+  return rows;
+}
+
+#endif
+
+const std::array<std::array<float, 4>, 4>* GeometryShaderManager::GetVRCullProjection()
+{
+#ifdef ENABLE_VR
+  if (!VR::g_openxr || !VR::g_openxr->IsSessionRunning())
+    return nullptr;
+
+  // Free Look moves the rendered camera away from the rig the cone describes.
+  if (g_freelook_camera.IsActive())
+    return nullptr;
+
+  const float upm = std::max(VR::g_openxr->GetEffectiveUnitsPerMeter(), 0.0001f);
+  const VREyeRows& rows = GetVREyeRows(upm);
+  return rows.cull_valid ? &rows.cull_projection : nullptr;
+#else
+  return nullptr;
+#endif
+}
+
+std::optional<std::array<float, 4>>
+GeometryShaderManager::GetVRScreenRectInEyes(const std::array<float, 4>& rect)
+{
+#ifdef ENABLE_VR
+  if (!VR::g_openxr || !VR::g_openxr->IsSessionRunning())
+    return std::nullopt;
+
+  // The virtual screen as SetConstants places it for orthographic draws.
+  const float upm = std::max(VR::g_openxr->GetEffectiveUnitsPerMeter(), 0.0001f);
+  const VREyeRows& rows = GetVREyeRows(upm);
+  const float dist = upm * g_ActiveConfig.vr_screen_distance;
+  const float half_h = upm * g_ActiveConfig.vr_screen_size * 0.5f;
+  const float half_w = half_h * (16.0f / 9.0f);
+
+  constexpr float inf = std::numeric_limits<float>::infinity();
+  std::array<float, 4> box{inf, -inf, inf, -inf};
+  const auto dot = [](const std::array<float, 4>& row, const std::array<float, 4>& p) {
+    return row[0] * p[0] + row[1] * p[1] + row[2] * p[2] + row[3] * p[3];
+  };
+  for (size_t eye = 0; eye < 2; ++eye)
+  {
+    for (const float x : {rect[0], rect[1]})
+    {
+      for (const float y : {rect[2], rect[3]})
+      {
+        const std::array<float, 4> p{x * half_w, y * half_h, -dist, 1.0f};
+        const float w = -dot(rows.tracked_eye_z_row[eye], p);
+        if (w < 1.0e-5f)
+          return std::nullopt;
+        const float ndc_x = dot(rows.tracked_eye_projection[eye * 2], p) / w;
+        const float ndc_y = dot(rows.tracked_eye_projection[eye * 2 + 1], p) / w;
+        box = {std::min(box[0], ndc_x), std::max(box[1], ndc_x), std::min(box[2], ndc_y),
+               std::max(box[3], ndc_y)};
+      }
+    }
+  }
+  return box;
+#else
+  return std::nullopt;
+#endif
+}
+
+void GeometryShaderManager::InvalidateVRGameCameraPitch()
+{
+  m_vr_camera_pitch_needs_latch = true;
+  m_vr_pose_needs_refresh = true;
+}
+
 void GeometryShaderManager::InvalidateVRHeadPose()
 {
   m_vr_pose_needs_refresh = true;
   if (m_vr_hud_frame_anchor_candidate_valid)
   {
-    const bool stable_reference_allowed = IsMetroidHudStableReferenceAllowed(
-        m_vr_hud_frame_anchor_candidate_context, m_vr_hud_frame_anchor_candidate_z);
+    // The candidate already passed its entry's anchor depth range when it was chosen.
     const bool accept_candidate =
-        stable_reference_allowed &&
-        (!m_vr_hud_stable_reference_valid ||
-         m_vr_hud_frame_anchor_candidate_context != m_vr_hud_stable_reference_context ||
-         m_vr_hud_frame_anchor_candidate_z < m_vr_hud_stable_reference_z);
+        !m_vr_hud_stable_reference_valid ||
+        m_vr_hud_frame_anchor_candidate_context != m_vr_hud_stable_reference_context ||
+        m_vr_hud_frame_anchor_candidate_z < m_vr_hud_stable_reference_z;
     // Within one HUD context, keep the farthest allowed stable body anchor so free-aim cannot pull
     // the whole 3D HUD toward the camera.  Across contexts, such as combat HUD -> pause/map UI,
     // replace the stable reference so menu models do not inherit the combat HUD depth.
@@ -773,7 +924,10 @@ void GeometryShaderManager::DoState(PointerWrap& p)
   p.Do(m_projection_changed);
   p.Do(m_viewport_changed);
 
-  p.Do(constants);
+  // vr_pane_clip is rebuilt for every draw. Leaving it out keeps the savestate layout, so
+  // existing savestates still load.
+  p.DoArray(reinterpret_cast<u8*>(&constants),
+            static_cast<u32>(offsetof(GeometryShaderConstants, vr_pane_clip)));
 
   if (p.IsReadMode())
   {
@@ -783,6 +937,8 @@ void GeometryShaderManager::DoState(PointerWrap& p)
     vr_pane_screen_override = false;
     vr_flat_screen_pane_override = false;
     vr_pane_group_override = 0;
+    vr_pane_reference_w_override = -1.0f;
+    vr_pane_depth_strength = 1.0f;
     m_vr_pane_frame_reference_w.clear();
   }
 }

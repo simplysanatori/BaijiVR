@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
+#include "Common/Timer.h"
 #include "Common/WindowSystemInfo.h"
 #include "VideoBackends/Vulkan/Constants.h"
 #include "VideoCommon/VideoConfig.h"
@@ -162,8 +163,34 @@ public:
     std::atomic<u32> draw_count{0};
     std::atomic<u32> submit_count{0};
     std::atomic<u32> pipelines_created{0};
+    std::atomic<u32> sampler_cache_hits{0};
+    std::atomic<u32> sampler_cache_misses{0};
+    std::atomic<u32> efb_load_passes{0};
+    std::atomic<u32> efb_clear_passes{0};
+    std::atomic<u32> efb_discard_passes{0};
+    std::atomic<u32> other_passes{0};
+    std::atomic<bool> timing_enabled{false};
+    std::atomic<u32> worker_commands{0};
+    std::atomic<u32> worker_drains{0};
+    std::atomic<u64> worker_drain_wait_us{0};
+    std::atomic<u32> worker_full_waits{0};
+    std::atomic<u64> worker_busy_us{0};
+    std::atomic<u32> worker_max_depth{0};
+    std::atomic<u32> worker_owner_violations{0};
   };
   PerfCounters& GetPerfCounters() { return m_perf_counters; }
+
+  // Per-draw timing helpers. Returns 0 when timing is disabled, and AddPerfTiming ignores 0.
+  u64 PerfTimingStart() const
+  {
+    return m_perf_counters.timing_enabled.load(std::memory_order_relaxed) ? Common::Timer::NowUs() :
+                                                                            0;
+  }
+  static void AddPerfTiming(std::atomic<u64>& counter, u64 start_us)
+  {
+    if (start_us != 0)
+      counter.fetch_add(Common::Timer::NowUs() - start_us, std::memory_order_relaxed);
+  }
 
   // Helpers for getting constants
   VkDeviceSize GetUniformBufferAlignment() const

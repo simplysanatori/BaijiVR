@@ -76,6 +76,12 @@ public:
   void EmulatorState(bool running);
   void ResetVideoBuffer();
 
+  // Bytes the GPU thread copied from the FIFO but has not decoded yet. Read unlocked.
+  size_t GetVideoBufferPendingBytes() const
+  {
+    return static_cast<size_t>(m_video_buffer_write_ptr.load() - m_video_buffer_read_ptr);
+  }
+
 private:
   void RefreshConfig();
   void ReadDataFromFifo(u32 read_ptr);

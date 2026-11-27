@@ -183,9 +183,9 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
        {tr("Draw Both Eyes at Once"), tr("Faster. Turn it off if one eye looks wrong. Applies "
                                          "from the next game.")}},
       {Config::GFX_VR_EFB_FOVEATION.GetLocation(),
-       {tr("Foveate the Game's Own Picture"),
-        tr("Uses Foveated Rendering earlier in the picture too. Faster in some games, slower in "
-           "others.")}},
+       {tr("Smart Foveated EFB"),
+        tr("Foveates only the game render passes that measure faster on the GPU and caches "
+           "verdicts per game.")}},
       // Performance
       {Config::GFX_VR_DYNAMIC_RESOLUTION.GetLocation(),
        {tr("Dynamic Resolution"),
@@ -237,9 +237,9 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
       {Config::GFX_VR_DONT_CLEAR_SCREEN.GetLocation(),
        {tr("Don't Clear Screen"), tr("Keeps the last picture where the game draws nothing. For "
                                      "games that flicker.")}},
-      {Config::GFX_VR_DISABLE_CPU_CULL.GetLocation(),
-       {tr("Show Missing Objects"),
-        tr("Draws objects that are otherwise left out. A little slower.")}},
+      {Config::GFX_VR_HEAD_CPU_CULL.GetLocation(),
+       {tr("Head-Cone CPU Culling"),
+        tr("Culls draws outside a wide cone around your head before sending them to the GPU.")}},
       {Config::GFX_VR_FRAME_SIZE_FROM_XFB.GetLocation(),
        {tr("Match Shown Picture Size"),
         tr("Takes the size of the picture from what the game shows. Fixes Metroid Prime Trilogy "
@@ -252,6 +252,12 @@ VRSettingsPage::Text VRSettingsPage::GetText(const Config::Location& location)
                                        "item roulette in Mario Kart: Double Dash!!.")}},
       {Config::GFX_VR_DETECT_SKYBOX.GetLocation(),
        {tr("Distant Sky"), tr("Puts a sky that is too close far away.")}},
+      {Config::GFX_VR_SKIP_BACKGROUND_FILL.GetLocation(),
+       {tr("Skip Background Fill"),
+        tr("Drops opaque untextured full-screen quads drawn behind the scene.")}},
+      {Config::GFX_VR_PER_EYE_SCREEN_COPIES.GetLocation(),
+       {tr("Screen Copies Follow Each Eye"),
+        tr("Copies small distorted scene blocks where each eye sees them.")}},
       {Config::GFX_VR_METROID_THERMAL_VISOR_FIX.GetLocation(),
        {tr("Metroid Prime Thermal Visor Fix"),
         tr("Shows the thermal visor in 3D in both eyes.")}},
@@ -620,8 +626,10 @@ QVBoxLayout* VRSettingsPage::AddAdvanced()
   m_auto_native_efb_effects = AddBool(fixes, Immersive, Config::GFX_VR_AUTO_NATIVE_EFB_EFFECTS);
   AddBool(fixes, Immersive, Config::GFX_VR_PANES_ON_SCREEN);
   AddBool(fixes, Immersive, Config::GFX_VR_ORTHO_SCISSOR_FIX);
-  AddBool(fixes, Immersive, Config::GFX_VR_DISABLE_CPU_CULL);
+  AddBool(fixes, Immersive, Config::GFX_VR_HEAD_CPU_CULL);
   AddBool(fixes, Immersive, Config::GFX_VR_DETECT_SKYBOX);
+  AddBool(fixes, Immersive, Config::GFX_VR_SKIP_BACKGROUND_FILL);
+  AddBool(fixes, Immersive, Config::GFX_VR_PER_EYE_SCREEN_COPIES);
   AddBool(fixes, Immersive, Config::GFX_VR_DETECT_RENDER_TARGETS);
   AddBool(fixes, Immersive, Config::GFX_VR_FRAME_SIZE_FROM_XFB);
   AddBool(fixes, Immersive, Config::GFX_VR_DONT_CLEAR_SCREEN);
@@ -968,8 +976,9 @@ void VRPane::ResetSettings()
         Config::GFX_VR_FORCED_VBI_FREQUENCY, Config::GFX_VR_AUTO_VBI_FROM_HMD,
         Config::GFX_VR_USE_VULKAN_MULTIVIEW, Config::GFX_VR_EFB_FOVEATION,
         Config::GFX_VR_MIRROR_VIEW, Config::GFX_VR_PANES_ON_SCREEN,
-        Config::GFX_VR_ORTHO_SCISSOR_FIX, Config::GFX_VR_DISABLE_CPU_CULL,
-        Config::GFX_VR_DETECT_SKYBOX, Config::GFX_VR_DETECT_RENDER_TARGETS,
+        Config::GFX_VR_ORTHO_SCISSOR_FIX, Config::GFX_VR_HEAD_CPU_CULL,
+        Config::GFX_VR_DETECT_SKYBOX, Config::GFX_VR_SKIP_BACKGROUND_FILL,
+        Config::GFX_VR_PER_EYE_SCREEN_COPIES, Config::GFX_VR_DETECT_RENDER_TARGETS,
         Config::GFX_VR_FRAME_SIZE_FROM_XFB, Config::GFX_VR_DONT_CLEAR_SCREEN,
         Config::GFX_VR_METROID_THERMAL_VISOR_FIX, Config::GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX,
         Config::GFX_VR_CLEAR_EFB_COPIES, Config::GFX_VR_HEAD_LOCKED_CURVATURE,

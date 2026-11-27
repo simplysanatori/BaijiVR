@@ -167,6 +167,7 @@ void VideoConfig::Refresh()
   bBorderlessFullscreen = Config::Get(Config::GFX_BORDERLESS_FULLSCREEN);
   bEnableValidationLayer = Config::Get(Config::GFX_ENABLE_VALIDATION_LAYER);
   bBackendMultithreading = Config::Get(Config::GFX_BACKEND_MULTITHREADING);
+  bVulkanRecordingWorker = Config::Get(Config::GFX_VULKAN_RECORDING_WORKER);
   iCommandBufferExecuteInterval = Config::Get(Config::GFX_COMMAND_BUFFER_EXECUTE_INTERVAL);
   bShaderCache = Config::Get(Config::GFX_SHADER_CACHE);
   bWaitForShadersBeforeStarting = Config::Get(Config::GFX_WAIT_FOR_SHADERS_BEFORE_STARTING);
@@ -293,7 +294,9 @@ void VideoConfig::Refresh()
                                         Config::GFX_VR_HEAD_LOCKED_CURVATURE_MAX);
   vr_dont_clear_screen = Config::Get(Config::GFX_VR_DONT_CLEAR_SCREEN);
   vr_load_custom_shaders = Config::Get(Config::GFX_VR_LOAD_CUSTOM_SHADERS);
-  vr_disable_cpu_cull = Config::Get(Config::GFX_VR_DISABLE_CPU_CULL);
+  vr_head_cpu_cull = Config::Get(Config::GFX_VR_HEAD_CPU_CULL);
+  vr_gaze_ram_copies = Config::Get(Config::GFX_VR_GAZE_RAM_COPIES);
+  vr_per_eye_screen_copies = Config::Get(Config::GFX_VR_PER_EYE_SCREEN_COPIES);
 #ifdef BAIJI_STEAMVR
   vr_mirror_view = OpenXRMirrorView::None;
 #else
@@ -326,6 +329,7 @@ void VideoConfig::Refresh()
   vr_detect_render_targets = Config::Get(Config::GFX_VR_DETECT_RENDER_TARGETS);
   vr_ortho_scissor_fix = Config::Get(Config::GFX_VR_ORTHO_SCISSOR_FIX);
   vr_detect_skybox = Config::Get(Config::GFX_VR_DETECT_SKYBOX);
+  vr_skip_background_fill = Config::Get(Config::GFX_VR_SKIP_BACKGROUND_FILL);
   vr_metroid_thermal_visor_fix = Config::Get(Config::GFX_VR_METROID_THERMAL_VISOR_FIX);
   vr_metroid_d3d_thermal_palette_fix =
       Config::Get(Config::GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX);

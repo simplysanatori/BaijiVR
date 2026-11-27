@@ -55,6 +55,8 @@ add_library(videocommon
   CPUCull.cpp
   CPUCull.h
   CPUCullImpl.h
+  DrawDepth.cpp
+  DrawDepth.h
   DriverDetails.cpp
   DriverDetails.h
   EFBInterface.cpp
@@ -353,8 +355,20 @@ if(ENABLE_VR)
     VR/FrameUI/stb_truetype.cpp
     VR/FrameUI/ui_canvas.cpp
     VR/FrameUI/ui_ttf.cpp
+    VR/CameraAnchorMath.cpp
+    VR/CameraAnchorMath.h
+    VR/CameraAnchorSource.cpp
+    VR/CameraAnchorSource.h
+    VR/CameraPitch.cpp
+    VR/CameraPitch.h
     VR/OpenXRManager.cpp
     VR/OpenXRManager.h
+    VR/OverrideSuppression.cpp
+    VR/OverrideSuppression.h
+    VR/PatchFlags.cpp
+    VR/PatchFlags.h
+    VR/PatchHides.cpp
+    VR/PatchHides.h
     VR/Perf/DynamicResolution.cpp
     VR/Perf/DynamicResolution.h
     VR/Perf/PerfTest.cpp

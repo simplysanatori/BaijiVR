@@ -14,6 +14,8 @@
 #include "VideoCommon/MetroidElementClassifier.h"
 #include "VideoCommon/ShaderHunter.h"
 
+class DrawDepthSource;
+
 class ElementsGroupManager
 {
 public:
@@ -60,6 +62,9 @@ public:
     std::string profile_layer_name;
     std::array<u64, 8> textures{};
     std::array<std::string, 8> texture_names{};
+    // The camera depth of the draw's vertices, for min_depth / max_depth. Set by
+    // VertexManagerBase::Flush and valid during that call only: stored copies carry nullptr.
+    const DrawDepthSource* depth = nullptr;
 
     u64 GetHash(ShaderType type) const;
     u64 GetFamily(ShaderType type) const;
@@ -107,15 +112,32 @@ public:
     // updated from a stereo EFB copy. Opt-in because most fullscreen effects are intentionally
     // mono and do not need the extra texture allocation/copies.
     bool preserve_stereo_efb = false;
+    // Any handling: the EFB copies the draw samples show the left eye's picture in both eyes, for
+    // a frozen screen shown on the virtual screen (a pause menu's background). Opt-in because the
+    // copy's texture changes for every draw that samples it afterwards.
+    bool mono_efb_copy = false;
     RuntimeElementSignature runtime_element;
     MetroidElementProfile profile_id = MetroidElementProfile::None;
     std::vector<MetroidElementLayer> profile_layers;
     float element_depth = -1.0f;
     float units_per_meter = -1.0f;
+    // Camera depth limits in game units (<= 0 = no limit): the entry only matches draws whose
+    // vertices are all at least min_depth and at most max_depth from the game camera (a HUD
+    // drawn in perspective just in front of it). Not element_depth, the push into the screen.
+    float min_depth = 0.0f;
+    float max_depth = 0.0f;
     // ScreenPane handling: preserve the game's depth buffer values by default, or use the
     // physically projected VR depth of the re-anchored pane geometry with shared Z composition.
     ScreenPaneDepthMode screen_pane_depth = ScreenPaneDepthMode::Game;
+    // ScreenPane handling (Game and VR depth): the game W, in game units, that lands on the
+    // virtual screen (<= 0 = the model origin's). Needed by HUDs drawn in camera space, whose
+    // model origin is the camera. Depth strength scales the game's depth spread around it in
+    // stereo (1 = as drawn, 0 = flat on the screen plane).
+    float screen_pane_reference_depth = -1.0f;
+    float screen_pane_depth_strength = 1.0f;
     float passthrough_opacity = 0.0f;  // Passthrough handling: element opacity (0 = fully camera)
+    // HeadLocked handling: the hud_* / headlocked_mode keys; unset = plain head-locked.
+    std::optional<ShaderHunter::HeadLockedParams> headlocked;
     // CameraAnchor handling: camera-space offset from the anchor element's origin (meters,
     // right/up/forward, converted with units-per-meter and mapped to view-space axes at capture
     // time) and whether to hide the anchor element itself (e.g. the head mesh in first person).
@@ -143,6 +165,8 @@ public:
     std::vector<SelectedSubgroupSignature> selected_match_filter;
     bool selected_match_filter_excluded = false;
     bool enabled = true;
+    // False for overrides that ship in Sys (LoadOverridesFromINI): they come back on every load,
+    // so they cannot be deleted or renamed in the user's file. Not stored in the ini.
     bool user_defined = true;
     std::string flag_group;
     std::string condition_flag;
@@ -186,8 +210,14 @@ public:
 
   static std::vector<ElementGroupOverride> LoadOverridesFromINI(
       const std::string& game_id, std::optional<u16> revision = std::nullopt);
+  // The Sys files, then the user files, merged by name (later files win).
+  static std::vector<ElementGroupOverride>
+  LoadOverridesFromINIFiles(const std::vector<std::string>& sys_paths,
+                            const std::vector<std::string>& user_paths);
   static void SaveOverridesToINI(const std::string& game_id,
                                  const std::vector<ElementGroupOverride>& overrides);
+  // The overrides of one INI file (no Sys/User merge), e.g. an entry the agent server wrote.
+  static std::vector<ElementGroupOverride> LoadOverridesFromINIFile(const std::string& path);
   static RuntimeElementSignature MakeSelectedMatchFilterSignature(
       const RuntimeElementSignature& signature);
   static StableSubMatchSignature MakeStableSubMatchSignature(const DrawRecord& draw,
@@ -195,8 +225,12 @@ public:
   static SelectedSubgroupSignature MakeSelectedSubgroupSignature(const DrawRecord& draw);
 
   void LoadOverrides(const std::string& game_id);
+  // Makes `overrides` the active list (what LoadOverrides does with the game's INI files).
+  void ApplyOverrideList(const std::string& game_id, std::vector<ElementGroupOverride> overrides);
   void LoadOverridesIfNeeded(const std::string& game_id);
   bool HasOverrides() const;
+  // True when a loaded override moves elements to a VR controller (ControllerAnchor).
+  bool HasControllerAnchorOverrides() const;
 
   void SetPopupOpen(bool open);
   bool IsPopupOpen() const;
@@ -206,6 +240,9 @@ public:
   HuntingOption GetHuntingOption() const;
 
   void SelectSeedCandidate(int index);
+  // The seed candidate (of the last frame) whose group a draw with this signature belongs to,
+  // -1 when none: what a pick on screen selects.
+  int FindSeedCandidate(const RuntimeElementSignature& signature) const;
   void SetSeedGroupMask(bool projection, bool layer, bool viewport, bool scissor,
                         bool render_state);
   void SelectMatch(int index);
@@ -254,15 +291,32 @@ public:
   void CheckClearEFBForDraw(const DrawRecord& draw);
   bool ShouldClearEFBCopy(int width);
 
+  // Everything VertexManagerBase::Flush needs from the overrides for one draw, under one lock:
+  // ShouldSkipByOverride, then (when not skipped) GetOverrideHandling and the parameter query
+  // of that handling, then CheckClearEFBForDraw. Call after the draw's flags are registered.
+  struct DrawResolution
+  {
+    bool skip = false;
+    HandlingType handling = HandlingType::Skip;
+    bool preserve_stereo_efb = false;
+    ScreenPaneDepthMode screen_pane_depth = ScreenPaneDepthMode::Game;
+    u64 screen_pane_group = 0;
+    float screen_pane_reference_depth = -1.0f;
+    float screen_pane_depth_strength = 1.0f;
+    float element_depth = -1.0f;
+    float units_per_meter = -1.0f;
+    float passthrough_opacity = 0.0f;
+    CameraAnchorParams camera_anchor;
+    ControllerAnchorParams controller_anchor;
+    // HeadLocked handling: the parameters of the entry that chose it, when it has any.
+    std::optional<ShaderHunter::HeadLockedParams> headlocked;
+    // The entry that chose the handling has mono_efb_copy.
+    bool mono_efb_copy = false;
+  };
+  DrawResolution ResolveOverrides(const DrawRecord& draw);
+
 private:
   ElementsGroupManager() = default;
-
-  struct StableSubMatchContext
-  {
-    bool valid = false;
-    u32 draw_sequence = 0;
-    StableSubMatchSignature signature;
-  };
 
   struct GroupMask
   {
@@ -281,17 +335,35 @@ private:
   bool MatchesSelectedMatchFilterLocked(const DrawRecord& draw) const;
   bool MatchesSelectedMatchFilterSignatureLocked(const SelectedSubgroupSignature& signature) const;
   std::vector<CurrentMatchCandidate> ResolveSelectedMatchDisplayDrawsLocked() const;
-  StableSubMatchSignature GetStableSubMatchSignatureLocked(const DrawRecord& draw) const;
   bool DoesEntryBaseMatch(const ElementGroupOverride& entry, const DrawRecord& draw) const;
   bool DoesSelectedMatchFilterPass(const ElementGroupOverride& entry, const DrawRecord& draw) const;
   bool DoesEntryMatch(const ElementGroupOverride& entry, const DrawRecord& draw,
                       bool include_condition) const;
   bool DoesTextureFilterPass(const DrawRecord& draw, const ElementGroupOverride& entry) const;
 
+  bool ShouldSkipByOverrideLocked(const DrawRecord& draw) const;
+  HandlingType GetOverrideHandlingLocked(const DrawRecord& draw, bool* out_preserve_stereo_efb,
+                                         const ElementGroupOverride** out_entry = nullptr) const;
+  // The entry that gives the draw its handling: the first enabled, matching entry that is not a
+  // Skip or a Flag. nullptr when none matches.
+  const ElementGroupOverride* FindHandlingOverrideLocked(const DrawRecord& draw) const;
+  // The first enabled ScreenPane override matching the draw, or nullptr. *out_group_id is its
+  // index + 1 (0 when none matches).
+  const ElementGroupOverride* FindScreenPaneOverrideLocked(const DrawRecord& draw,
+                                                           u64* out_group_id) const;
+  float GetOverrideElementDepthLocked(const DrawRecord& draw) const;
+  float GetOverrideUnitsPerMeterLocked(const DrawRecord& draw) const;
+  float GetOverridePassthroughOpacityLocked(const DrawRecord& draw) const;
+  bool GetOverrideCameraAnchorLocked(const DrawRecord& draw, CameraAnchorParams* out_params) const;
+  bool GetOverrideControllerAnchorLocked(const DrawRecord& draw,
+                                         ControllerAnchorParams* out_params) const;
+  void CheckClearEFBForDrawLocked(const DrawRecord& draw);
+
   mutable std::mutex m_mutex;
   int m_popup_open_count = 0;
   std::atomic_bool m_popup_open = false;
   std::atomic_bool m_has_overrides = false;
+  std::atomic_bool m_has_controller_anchor_overrides = false;
   bool m_hunt_enabled = false;
   HuntingOption m_hunting_option = HuntingOption::Skip;
   RuntimeElementSignature m_seed_signature{};
@@ -318,9 +390,9 @@ private:
 
   std::vector<ElementGroupOverride> m_overrides;
   std::string m_loaded_game_id;
-
-  mutable std::unordered_map<u64, int> m_stable_submatch_occurrence_counters;
-  mutable StableSubMatchContext m_current_stable_submatch;
+  // The whole list given to ApplyOverrideList, re-applied when VR::OverrideSuppression changes.
+  std::vector<ElementGroupOverride> m_applied_overrides;
+  u64 m_suppression_generation = 0;
 
   // Clear EFB pending state (video thread): armed by CheckClearEFBForDraw, consumed by the next
   // ShouldClearEFBCopy.

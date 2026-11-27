@@ -310,6 +310,9 @@ static void BPWritten(PixelShaderManager& pixel_shader_manager, XFStateManager& 
       // bpmem.zcontrol.pixel_format to PixelFormat::Z24 is when the game wants to copy from ZBuffer
       // (Zbuffer uses 24-bit Format)
       bool is_depth_copy = bpmem.zcontrol.pixel_format == PixelFormat::Z24;
+      // VR: a pane copied whole to a texture is a render target for the viewport classifier.
+      if (g_ActiveConfig.stereo_mode == StereoMode::OpenXR)
+        VR::NotifyVRTextureCopyRegion(srcRect.left, srcRect.top, srcRect.right, srcRect.bottom);
       g_texture_cache->CopyRenderTargetToTexture(
           destAddr, PE_copy.tp_realFormat(), copy_width, copy_height, destStride, is_depth_copy,
           srcRect, PE_copy.intensity_fmt && PE_copy.auto_conv, PE_copy.half_scale, 1.0f,

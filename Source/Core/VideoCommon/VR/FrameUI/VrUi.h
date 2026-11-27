@@ -309,10 +309,10 @@ private:
   bool m_draw_exit = false;
   std::optional<MenuState> m_draw_request;
   bool m_saves_request = false;
-  std::optional<GameMods::List> m_mods_request;
+  std::optional<int> m_mods_request;
   std::optional<std::pair<std::string, FilePurpose>> m_files_request;
   std::optional<FileListing> m_files;
-  std::optional<std::pair<GameMods::List, std::vector<GameMods::Item>>> m_mods;
+  std::optional<std::pair<int, std::vector<GameMods::Item>>> m_mods;
   std::optional<MenuSaves> m_saves;
   std::optional<std::pair<Perf::Stats, StatsPicture>> m_stats_request;
   std::vector<u32> m_stats_drawn;

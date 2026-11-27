@@ -41,6 +41,10 @@ namespace BPFunctions
 // scan out (Mario Galaxy), so the clear height wrongly triggers expansion during normal gameplay.
 static int s_vr_frame_active_height = 0;
 
+// Set while SetVRScreenRectViewport installs its scissor, which the orthographic scissor
+// expansion below must leave as it is.
+static bool s_vr_exact_scissor = false;
+
 void FlushPipeline()
 {
   g_vertex_manager->Flush();
@@ -105,6 +109,12 @@ static RangeList ComputeScissorRanges(int start, int end, int offset, int efb_di
   }
 
   return ranges;
+}
+
+VR::VRScissor ToVRScissor(const ScissorPos& top_left, const ScissorPos& bottom_right)
+{
+  return {static_cast<int>(top_left.x), static_cast<int>(top_left.y),
+          static_cast<int>(bottom_right.x), static_cast<int>(bottom_right.y)};
 }
 }  // namespace
 
@@ -203,7 +213,8 @@ void SetScissorAndViewport(FramebufferManager* frame_buffer_manager, ScissorPos 
     const int x_off = scissor_offset.x << 1;
     const int y_off = scissor_offset.y << 1;
     const VR::VRFrameRegion frame = VR::GetVRFrameRegion();
-    const VR::VRViewportClass vp_class = VR::ClassifyVRViewport(viewport, x_off, y_off);
+    const VR::VRViewportClass vp_class = VR::ClassifyVRViewport(
+        viewport, ToVRScissor(scissor_top_left, scissor_bottom_right), x_off, y_off);
 
     if (g_ActiveConfig.vr_panes_on_screen && g_ActiveConfig.vr_virtual_screen && frame.valid &&
         vp_class == VR::VRViewportClass::HudElement)
@@ -221,6 +232,23 @@ void SetScissorAndViewport(FramebufferManager* frame_buffer_manager, ScissorPos 
       viewport.yOrig = static_cast<float>(y_off + frame.top) + frame.height * 0.5f;
       viewport.wd = frame.width * 0.5f;
       viewport.ht = -frame.height * 0.5f;
+    }
+    else if (frame.valid && vp_class == VR::VRViewportClass::DisplacedScene &&
+             static_cast<int>(scissor_bottom_right.x) - static_cast<int>(scissor_top_left.x) + 1 >=
+                 frame.width * 9 / 10 &&
+             static_cast<int>(scissor_bottom_right.y) - static_cast<int>(scissor_top_left.y) + 1 >=
+                 frame.height * 9 / 10)
+    {
+      // Scene panned with the scissor offset (PSO under its menus). The eye projections already
+      // place it around the player, so undo the pan: the game's viewport and scissor are moved
+      // the same way, and both go back over the displayed frame. A small scissor means a pane
+      // recentred by the offset instead (PSO minimap), whose raster state is left alone.
+      viewport.xOrig = static_cast<float>(x_off + frame.left) + std::fabs(viewport.wd);
+      viewport.yOrig = static_cast<float>(y_off + frame.top) + std::fabs(viewport.ht);
+      scissor_top_left.x = static_cast<u32>(x_off + frame.left);
+      scissor_top_left.y = static_cast<u32>(y_off + frame.top);
+      scissor_bottom_right.x = static_cast<u32>(x_off + frame.left + frame.width - 1);
+      scissor_bottom_right.y = static_cast<u32>(y_off + frame.top + frame.height - 1);
     }
     else if (g_ActiveConfig.vr_remove_bars && g_ActiveConfig.vr_frame_size_from_xfb)
     {
@@ -305,7 +333,7 @@ void SetScissorAndViewport(FramebufferManager* frame_buffer_manager, ScissorPos 
   // coordinates and will incorrectly clip the VR-reprojected content. Expand both X and Y
   // to the full active area so all VR virtual-screen content is visible.
   else if (g_ActiveConfig.stereo_mode == StereoMode::OpenXR &&
-           g_ActiveConfig.vr_ortho_scissor_fix &&
+           g_ActiveConfig.vr_ortho_scissor_fix && !s_vr_exact_scissor &&
            xfmem.projection.type == ProjectionType::Orthographic)
   {
     const int x_off = scissor_offset.x << 1;
@@ -316,7 +344,8 @@ void SetScissorAndViewport(FramebufferManager* frame_buffer_manager, ScissorPos 
     const bool rtt_exempt = [&] {
       if (!g_ActiveConfig.vr_detect_render_targets)
         return false;
-      const VR::VRViewportClass vp_class = VR::ClassifyVRViewport(viewport, x_off, y_off);
+      const VR::VRViewportClass vp_class = VR::ClassifyVRViewport(
+          viewport, ToVRScissor(scissor_top_left, scissor_bottom_right), x_off, y_off);
       return vp_class == VR::VRViewportClass::RenderToTexture ||
              vp_class == VR::VRViewportClass::Offscreen;
     }();
@@ -466,6 +495,88 @@ bool SetVRPaneScreenViewport(FramebufferManager* frame_buffer_manager)
   viewport.yOrig = static_cast<float>(y_off + frame.top) + frame.height * 0.5f;
   viewport.wd = frame.width * 0.5f;
   viewport.ht = -frame.height * 0.5f;
+  SetScissorAndViewport(frame_buffer_manager, scissor_top_left, scissor_bottom_right,
+                        bpmem.scissorOffset, viewport);
+  return true;
+}
+
+bool SetVRScreenRectViewport(FramebufferManager* frame_buffer_manager,
+                             const std::array<float, 4>& eye_rect)
+{
+  const VR::VRFrameRegion frame = VR::GetVRFrameRegion();
+  if (!frame.valid || frame.width <= 0 || frame.height <= 0)
+    return false;
+
+  // The eye images show the displayed frame: NDC x right, y up, over its rectangle.
+  const float half_width = frame.width * 0.5f;
+  const float half_height = frame.height * 0.5f;
+  const auto to_x = [&](float ndc) {
+    return std::clamp(static_cast<int>(std::lround(half_width + ndc * half_width)), 0, frame.width);
+  };
+  const auto to_y = [&](float ndc) {
+    return std::clamp(static_cast<int>(std::lround(half_height - ndc * half_height)), 0,
+                      frame.height);
+  };
+  // A pixel of margin: the box is rounded to whole EFB pixels.
+  const int left = std::max(to_x(eye_rect[0]) - 1, 0);
+  const int right = std::max(std::min(to_x(eye_rect[1]) + 1, frame.width), left + 1);
+  const int top = std::max(to_y(eye_rect[3]) - 1, 0);
+  const int bottom = std::max(std::min(to_y(eye_rect[2]) + 1, frame.height), top + 1);
+
+  const int x_off = bpmem.scissorOffset.x << 1;
+  const int y_off = bpmem.scissorOffset.y << 1;
+  ScissorPos scissor_top_left = bpmem.scissorTL;
+  ScissorPos scissor_bottom_right = bpmem.scissorBR;
+  scissor_top_left.x = static_cast<u32>(x_off + frame.left + left);
+  scissor_top_left.y = static_cast<u32>(y_off + frame.top + top);
+  scissor_bottom_right.x = static_cast<u32>(x_off + frame.left + right - 1);
+  scissor_bottom_right.y = static_cast<u32>(y_off + frame.top + bottom - 1);
+
+  Viewport viewport = xfmem.viewport;
+  viewport.xOrig = static_cast<float>(x_off + frame.left) + half_width;
+  viewport.yOrig = static_cast<float>(y_off + frame.top) + half_height;
+  viewport.wd = half_width;
+  viewport.ht = -half_height;
+  s_vr_exact_scissor = true;
+  SetScissorAndViewport(frame_buffer_manager, scissor_top_left, scissor_bottom_right,
+                        bpmem.scissorOffset, viewport);
+  s_vr_exact_scissor = false;
+  return true;
+}
+
+bool SetVRFullViewBandViewport(FramebufferManager* frame_buffer_manager)
+{
+  // Only where SetScissorAndViewport expands the scene's perspective draws (the legacy path).
+  if (g_ActiveConfig.stereo_mode != StereoMode::OpenXR || !g_ActiveConfig.vr_remove_bars ||
+      g_ActiveConfig.vr_frame_size_from_xfb)
+  {
+    return false;
+  }
+  const int x_off = bpmem.scissorOffset.x << 1;
+  const int y_off = bpmem.scissorOffset.y << 1;
+  const Viewport& game_viewport = xfmem.viewport;
+  const int active_width =
+      static_cast<int>((game_viewport.xOrig - static_cast<float>(x_off)) * 2.0f);
+  int active_height = static_cast<int>((game_viewport.yOrig - static_cast<float>(y_off)) * 2.0f);
+  if (active_width < static_cast<int>(EFB_WIDTH) * 9 / 10 ||
+      std::fabs(game_viewport.wd) * 2.0f < static_cast<float>(active_width) * 0.9f)
+  {
+    return false;
+  }
+  if (s_vr_frame_active_height > active_height)
+    active_height = s_vr_frame_active_height;
+  // A band: the viewport is shorter than the active area.
+  if (active_height <= 0 || std::fabs(game_viewport.ht) * 2.0f >= active_height - 1.0f)
+    return false;
+
+  ScissorPos scissor_top_left = bpmem.scissorTL;
+  ScissorPos scissor_bottom_right = bpmem.scissorBR;
+  scissor_top_left.y = static_cast<u32>(y_off);
+  scissor_bottom_right.y = static_cast<u32>(y_off + active_height - 1);
+  Viewport viewport = game_viewport;
+  const float half = static_cast<float>(active_height) * 0.5f;
+  viewport.yOrig = static_cast<float>(y_off) + half;
+  viewport.ht = viewport.ht < 0 ? -half : half;
   SetScissorAndViewport(frame_buffer_manager, scissor_top_left, scissor_bottom_right,
                         bpmem.scissorOffset, viewport);
   return true;

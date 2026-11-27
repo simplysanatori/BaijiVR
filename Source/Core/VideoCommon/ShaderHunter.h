@@ -3,9 +3,10 @@
 
 #pragma once
 
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -16,6 +17,8 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
+
+class DrawDepthSource;
 
 // 3DMigoto-lite shader hunting: cycle through shaders used per frame and skip selected ones.
 // Thread-safe: video thread calls Register/ShouldSkip/OnFrameEnd, UI thread calls Next/Prev/Get*.
@@ -88,6 +91,34 @@ public:
     float roll_deg = 0.0f;
   };
 
+  // HeadLocked handling: how an entry places its draws in front of the head. Shared transport
+  // type, like CameraAnchorParams. The defaults are plain head-locked: the game's 2D screen in
+  // front of the head.
+  struct HeadLockedParams
+  {
+    // Perspective draws keep their 3D shape: their view-space geometry is placed in front of the
+    // head (a 3D HUD) instead of being flattened onto the head-locked screen.
+    bool perspective = false;
+    // Units per meter of the draw: the global value times this (0 = unchanged).
+    float scale = 0.0f;
+    // Scale and shift of the head-locked projection (1, 1, 0, 0 = unchanged).
+    float width = 1.0f;
+    float height = 1.0f;
+    float right = 0.0f;
+    float up = 0.0f;
+    // A 3D HUD's models share one reference depth per frame, which keeps their relative depth.
+    // Anchors give it: the farthest anchor origin (view z, negative) within the range wins.
+    bool anchor = false;
+    float anchor_z_min = -std::numeric_limits<float>::infinity();
+    float anchor_z_max = std::numeric_limits<float>::infinity();
+    // Placed at its own origin's depth instead of the shared one (a radar or minimap whose
+    // geometry spans a large depth).
+    bool self_center = false;
+    // The reference depth is kept per context (0 default, 1 combat, 2 menu), so menu models do
+    // not inherit the combat HUD's depth.
+    int context = 0;
+  };
+
   enum class HuntingOption
   {
     Skip = 0,
@@ -125,7 +156,14 @@ public:
     bool use_viewport = false;
     bool use_scissor = false;
     bool use_render_state = false;
+    bool use_load = false;
     int ortho_layer = 0;
+    // The draw's projection load: how many projection loads its frame used before its own
+    // (Hydra's debug_projNum). An entry with use_load matches loads load_min to load_max
+    // (-1: no upper bound).
+    int projection_load = 0;
+    int load_min = 0;
+    int load_max = -1;
     int viewport_x = 0;
     int viewport_y = 0;
     int viewport_width = 0;
@@ -140,6 +178,18 @@ public:
     int zfunc = 0;
     bool blend_color_update = false;
     bool blend_alpha_update = false;
+    // Pattern only: the render state matches whatever the draw's alpha write, for games that
+    // turn it off in some scenes (Metroid Prime 2's dark world).
+    bool any_alpha_update = false;
+    // Pattern only: the alpha test matches by its compare functions and logic, whatever its two
+    // reference values, for effects that animate them (the Metroid Prime scan lens).
+    bool any_alpha_ref = false;
+    // A draw: 1 when it samples a texture copied from the EFB, 2 when that copy is reduced (at
+    // most half the EFB in each direction: a blur or bloom buffer, not a copy of the whole screen
+    // drawn back), else 0. A pattern: -1 matches any draw, 0 only draws sampling no EFB copy, 1
+    // draws sampling one (1 or 2), 2 draws sampling a reduced one. A generic 2D entry can leave the
+    // EFB effects (blur, bloom) to AutoNativeEfbEffects with 0, and skip a blur with 2.
+    int efb_copy = -1;
   };
 
   struct HighlightedDraw
@@ -154,6 +204,20 @@ public:
 
   // --- Video thread ---
   u64 RegisterShader(ShaderType type, u64 hash, const u8* uid_data, size_t uid_size);
+  // Family signature of a shader UID. A pure function of the UID bytes, so callers can cache
+  // it per UID instead of recomputing it for every draw.
+  static u64 ComputeFamilySignature(ShaderType type, const u8* uid_data, size_t uid_size);
+  struct DrawShaderInfo
+  {
+    u64 hash = 0;    // CRC32 of the complete UID bytes
+    u64 family = 0;  // ComputeFamilySignature of the same UID
+    const u8* uid_data = nullptr;
+    size_t uid_size = 0;
+  };
+  // Registers a draw's vertex, pixel and geometry shaders under one lock. Equivalent to three
+  // RegisterShader calls with precomputed family signatures.
+  void RegisterDrawShaders(const DrawShaderInfo& vs, const DrawShaderInfo& ps,
+                           const DrawShaderInfo& gs);
   void RegisterDrawCombination(u64 vs_hash, u64 ps_hash, u64 gs_hash);
   void OnFrameEnd();
   bool ShouldSkipDraw(u64 vs_hash, u64 ps_hash, u64 gs_hash);
@@ -186,6 +250,9 @@ public:
   void SetCurrentDrawSignature(const RuntimeElementSignature& signature);
   void SetCurrentDrawTextures(const std::array<u64, 8>& hashes,
                               const std::array<std::string, 8>& names);
+  // The camera depth of the draw being resolved, for min_depth / max_depth (nullptr: entries
+  // with those keys do not match). Valid until the draw's Flush returns; Flush clears it.
+  void SetCurrentDrawDepth(const DrawDepthSource* depth) { m_current_draw_depth = depth; }
 
   // --- Persistent overrides (per-game INI) ---
   struct ShaderOverride
@@ -200,6 +267,11 @@ public:
     RuntimeElementSignature runtime_element;
     float element_depth = -1.0f;  // Per-override within-element depth (-1 = use global)
     float units_per_meter = -1.0f;  // Per-override UPM for UnitsPerMeter handling (-1 = global)
+    // Camera depth limits in game units (<= 0 = no limit): the entry only matches draws whose
+    // vertices are all at least min_depth and at most max_depth from the game camera (a HUD
+    // drawn in perspective just in front of it, sharing its shaders with world objects).
+    float min_depth = 0.0f;
+    float max_depth = 0.0f;
     float passthrough_opacity = 0.0f;  // Passthrough handling: element opacity (0 = fully camera)
     // CameraAnchor handling: offset from the element's origin (meters, right/up/forward),
     // whether to hide the anchor element, how much of its orientation to follow (+ a fixed yaw
@@ -232,15 +304,26 @@ public:
   // Static INI helpers (used by both ShaderHunter and ShaderOverrideWidget)
   static std::vector<ShaderOverride> LoadOverridesFromINI(
       const std::string& game_id, std::optional<u16> revision = std::nullopt);
+  // The Sys files, then the user files, merged by name (later files win).
+  static std::vector<ShaderOverride>
+  LoadOverridesFromINIFiles(const std::vector<std::string>& sys_paths,
+                            const std::vector<std::string>& user_paths);
   static void SaveOverridesToINI(const std::string& game_id,
                                  const std::vector<ShaderOverride>& overrides);
+  // The overrides of one INI file (no Sys/User merge), e.g. an entry the agent server wrote.
+  static std::vector<ShaderOverride> LoadOverridesFromINIFile(const std::string& path);
 
   // Runtime override management
   void LoadOverrides(const std::string& game_id);
+  // Makes `overrides` the active list (what LoadOverrides does with the game's INI files). Video
+  // thread: the draw path reads the tables this rebuilds without a lock.
+  void ApplyOverrideList(const std::string& game_id, std::vector<ShaderOverride> overrides);
   void LoadOverridesIfNeeded(const std::string& game_id);
   void AddAndSaveOverride(const std::string& game_id, const std::string& name, ShaderType type,
                           u64 hash, HandlingType handling);
   bool HasOverrides() const;
+  // True when a loaded override moves elements to a VR controller (ControllerAnchor).
+  bool HasControllerAnchorOverrides() const;
   bool NeedsShaderFamilySignatures() const;
   bool NeedsTextureHashes() const;
 
@@ -275,6 +358,8 @@ public:
   void RegisterFlags(u64 vs_hash, u64 ps_hash, u64 gs_hash);
   void RegisterExternalFlag(const std::string& flag_name);
   bool IsFlagActive(const std::string& flag_name) const;
+  // The flags VR game patches raise, as the overrides see them this frame (video thread).
+  std::vector<std::string> GetActivePatchFlags() const;
   // Video-thread snapshot for OSD display.
   struct FlagStatus
   {
@@ -331,12 +416,23 @@ public:
 
   HuntingStatus GetHuntingStatusForOSD() const;
   std::optional<RuntimeElementSignature> GetSelectedRuntimeElementSignature() const;
-  bool SaveSelectedShaderOverride(const std::string& game_id, HandlingType handling);
+  // Saves the hunted shader as an override named `name` ("Shader <hash>" when empty) and reloads
+  // the overrides. An override of that name for the same shader is replaced; when another shader
+  // has the name, a number is appended. `units_per_meter` is the scale for UnitsPerMeter
+  // handling; <= 0 uses the current global value. Returns the override's name, or nothing when
+  // no shader is selected or, in Shader Family mode, its family signature is not known yet.
+  std::optional<std::string> SaveSelectedShaderOverride(const std::string& game_id,
+                                                        HandlingType handling,
+                                                        float units_per_meter = -1.0f,
+                                                        const std::string& name = {});
 
 private:
   ShaderHunter() = default;
 
   static constexpr int TYPE_COUNT = static_cast<int>(ShaderType::Count);
+
+  void RegisterShaderLocked(ShaderType type, u64 hash, u64 family_signature, const u8* uid_data,
+                            size_t uid_size);
 
   mutable std::mutex m_mutex;
   bool m_enabled = false;
@@ -370,7 +466,11 @@ private:
   // hash → ControllerAnchor params
   std::unordered_map<u64, ControllerAnchorParams> m_controller_anchors;
   std::string m_loaded_game_id;
+  // The whole list given to ApplyOverrideList, re-applied when VR::OverrideSuppression changes.
+  std::vector<ShaderOverride> m_applied_overrides;
+  u64 m_suppression_generation = 0;
   std::atomic_bool m_has_overrides = false;
+  std::atomic_bool m_has_controller_anchor_overrides = false;
   std::atomic_bool m_needs_shader_family_signatures = false;
   std::atomic_bool m_needs_texture_hashes = false;
 
@@ -385,10 +485,17 @@ private:
     std::string flag_group;
     std::vector<u64> texture_hashes;
     bool texture_hashes_excluded = false;
+    float min_depth = 0.0f;
+    float max_depth = 0.0f;
   };
   std::vector<FlagRule> m_flag_rules;  // flag activation rules
   std::unordered_set<std::string> m_flags_seen_this_frame; // flags seen in current frame
   std::unordered_map<std::string, int> m_flag_age;        // flag → 0 if active (from previous frame)
+  // Flags raised by VR game patches (VR::PatchFlags), taken in OnFrameEnd when they change. Not
+  // cleared by ApplyOverrideList: the patch, not the lists, owns them.
+  std::unordered_set<std::string> m_patch_flags;
+  u64 m_patch_flags_generation = 0;
+  bool IsFlagActiveLocked(const std::string& flag_name) const;
 
   // Debug logging: log override matches once per unique draw combo per frame
   bool m_debug_logging = false;
@@ -413,6 +520,8 @@ private:
     u32 family_version;               // scheme of the persisted family_signature
     std::string condition_flag;
     bool condition_inverted;
+    float min_depth;  // camera depth limits (<= 0 = none)
+    float max_depth;
   };
   std::vector<ConditionalOverride> m_conditional_overrides;
 
@@ -428,6 +537,7 @@ private:
   // Texture tracking: current draw's bound textures + per-element capture during hunting.
   std::array<u64, 8> m_current_draw_textures{};
   std::array<std::string, 8> m_current_draw_texture_names{};
+  const DrawDepthSource* m_current_draw_depth = nullptr;
   RuntimeElementSignature m_current_draw_signature{};
   RuntimeElementSignature m_selected_draw_signature{};
   std::array<std::unordered_map<u64, u64>, TYPE_COUNT> m_shader_family_signatures{};

@@ -325,6 +325,10 @@ std::vector<SettingRow> MakeGraphicsRows()
                       "Display in the headset.",
                       {{"Off", 0.0f}, {"Low", 1.0f}, {"Medium", 2.0f}, {"High", 3.0f}}),
            SettingStore::VRFile, RowDisplay::Immersive, Applies::NextGame),
+      With(MakeRow(SmartFoveatedEFB, SECTION, RowKind::Switch, "Smart Foveated EFB",
+                   "Foveates only EFB passes that measure faster on the GPU and caches results "
+                   "per game."),
+           SettingStore::VRFile, RowDisplay::Immersive, Applies::NextGame),
       With(MakeSlider(Gamma, SECTION, "Gamma", "Darkens a picture that is too bright.",
                       {Config::GFX_VR_GAMMA_MIN, Config::GFX_VR_GAMMA_MAX,
                        Config::GFX_VR_GAMMA_STEP},
@@ -341,6 +345,9 @@ std::vector<SettingRow> MakeGraphicsRows()
       With(MakeRow(SkipOverwrittenClears, SECTION, RowKind::Switch, "Skip Overwritten Clears",
                    "Leaves out clears of the picture that are drawn over anyway."),
            SettingStore::VRFile, RowDisplay::Immersive),
+      With(MakeRow(VulkanRecordingWorker, SECTION, RowKind::Switch, "Vulkan Recording Worker",
+                   "Records Vulkan draws on a helper thread to take work off the video thread."),
+           SettingStore::Global, RowDisplay::Any, Applies::NextGame),
       With(MakeRow(PinEmulationThreads, SECTION, RowKind::Switch, "Pin Emulation Threads",
                    "Keeps the main emulation threads on the fastest CPU cores."),
            SettingStore::Global, RowDisplay::Any, Applies::NextGame),
@@ -432,6 +439,21 @@ std::vector<SettingRow> MakeImmersiveRows()
       SettingStore::VRFile, DISPLAY));
   rows.push_back(With(MakeRow(RemoveBars, SECTION, RowKind::Switch, "Remove Cinematic Bars",
                               "Removes the black bars at the top and bottom."),
+                      SettingStore::VRFile, DISPLAY));
+  rows.push_back(With(MakeRow(HeadCPUCull, SECTION, RowKind::Switch, "Head-Cone CPU Culling",
+                              "Culls off-screen triangles against your headset's wider view."),
+                      SettingStore::VRFile, DISPLAY));
+  rows.push_back(With(MakeSlider(WiimoteMotionPitch, SECTION, "Wii Remote Pitch",
+                                 "Tilts the VR controller's Wii Remote motion orientation.",
+                                 {-45.0f, 45.0f, 1.0f}, FormatDegrees),
+                      SettingStore::VRFile));
+  rows.push_back(With(MakeRow(PerEyeScreenCopies, SECTION, RowKind::Switch,
+                              "Screen Copies Follow Each Eye",
+                              "Moves small distorted screen-copy effects (like Metroid Prime "
+                              "charged shots) to match each eye."),
+                      SettingStore::VRFile, DISPLAY));
+  rows.push_back(With(MakeRow(SkipBackgroundFill, SECTION, RowKind::Switch, "Skip Background Fill",
+                              "Drops opaque untextured full-screen background fill quads."),
                       SettingStore::VRFile, DISPLAY));
   return rows;
 }
@@ -557,10 +579,12 @@ const std::vector<Binding>& GetBindings()
       Bind(SettingId::EFBCopiesToTexture, Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM),
       Bind(SettingId::XFBCopiesToTexture, Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM),
       Bind(SettingId::FoveatedRendering, Config::GFX_VR_FOVEATION_LEVEL),
+      Bind(SettingId::SmartFoveatedEFB, Config::GFX_VR_EFB_FOVEATION),
       Bind(SettingId::Gamma, Config::GFX_VR_GAMMA),
       Bind(SettingId::NonBlockingEFBCopies, Config::GFX_VR_ASYNC_EFB_COPIES),
       Bind(SettingId::NonBlockingPerfQueries, Config::GFX_VR_NON_BLOCKING_PERF_QUERIES),
       Bind(SettingId::SkipOverwrittenClears, Config::GFX_VR_SKIP_OVERWRITTEN_CLEARS),
+      Bind(SettingId::VulkanRecordingWorker, Config::GFX_VULKAN_RECORDING_WORKER),
       Bind(SettingId::PinEmulationThreads, Config::GFX_VR_PIN_EMULATION_CORES),
       Bind(SettingId::PerformanceHint, Config::GFX_VR_PERFORMANCE_HINT),
       Bind(SettingId::PerformanceLog, Config::GFX_VR_PERF_LOG),
@@ -576,6 +600,10 @@ const std::vector<Binding>& GetBindings()
       Bind(SettingId::HeadTracking, Config::GFX_VR_TRACKING_MODE),
       Bind(SettingId::HudDepth, Config::GFX_VR_HUD_THICKNESS),
       Bind(SettingId::RemoveBars, Config::GFX_VR_REMOVE_BARS),
+      Bind(SettingId::HeadCPUCull, Config::GFX_VR_HEAD_CPU_CULL),
+      Bind(SettingId::WiimoteMotionPitch, Config::GFX_VR_WIIMOTE_MOTION_PITCH),
+      Bind(SettingId::PerEyeScreenCopies, Config::GFX_VR_PER_EYE_SCREEN_COPIES),
+      Bind(SettingId::SkipBackgroundFill, Config::GFX_VR_SKIP_BACKGROUND_FILL),
       Bind(SettingId::ShowStats, Config::GFX_VR_SHOW_STATS),
       Bind(SettingId::StatsPosition, Config::GFX_VR_STATS_POSITION),
   };

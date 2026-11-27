@@ -8,6 +8,7 @@
 #include <cmath>
 
 #include "Common/Logging/Log.h"
+#include "VideoCommon/BPMemory.h"
 #include "VideoCommon/VideoCommon.h"
 #include "VideoCommon/XFMemory.h"
 
@@ -36,9 +37,50 @@ size_t s_scene_region_sample_count = 0;
 VRFrameRegion s_last_presentation_source{};
 VRFrameRegion s_last_presentation_xfb{};
 
+// The distinct rectangles (EFB pixels) of the EFB->texture copies of the frame being drawn, and
+// of the last completed frames, which the classifier reads. Several frames, because a game can
+// render its panes on alternate frames: Wii Sports Resort's Wakeboarding copies a 152x114
+// reflection on one frame and a 304x228 view under the water on the next.
+constexpr size_t MAX_TEXTURE_COPIES = 16;
+constexpr size_t TEXTURE_COPY_FRAMES = 4;
+struct TextureCopies
+{
+  std::array<MathUtil::Rectangle<int>, MAX_TEXTURE_COPIES> rects{};
+  size_t count = 0;
+};
+TextureCopies s_pending_texture_copies{};
+std::array<TextureCopies, TEXTURE_COPY_FRAMES> s_recent_texture_copies{};
+size_t s_next_recent_texture_copies = 0;
+
 bool SameRegion(const VRFrameRegion& a, const VRFrameRegion& b)
 {
   return a.left == b.left && a.top == b.top && a.width == b.width && a.height == b.height;
+}
+
+// Whether the viewport is a pane at the EFB's top-left corner which one of the last completed
+// frames copied whole to a texture: Wii Sports' Boxing draws each boxer of its "VS" screen in a
+// 350x456 pane there, blurs it and copies it, then composes both copies on the screen.
+bool IsCopiedPane(const Viewport& v, int x_off, int y_off)
+{
+  const int left = static_cast<int>(std::lround(v.xOrig - std::fabs(v.wd))) - x_off;
+  const int top = static_cast<int>(std::lround(v.yOrig - std::fabs(v.ht))) - y_off;
+  const int right = left + static_cast<int>(std::lround(2.0f * std::fabs(v.wd)));
+  const int bottom = top + static_cast<int>(std::lround(2.0f * std::fabs(v.ht)));
+  if (std::abs(left) > 1 || std::abs(top) > 1)
+    return false;
+  for (const TextureCopies& frame_copies : s_recent_texture_copies)
+  {
+    for (size_t i = 0; i < frame_copies.count; ++i)
+    {
+      const MathUtil::Rectangle<int>& copy = frame_copies.rects[i];
+      if (std::abs(copy.left - left) <= 1 && std::abs(copy.top - top) <= 1 &&
+          std::abs(copy.right - right) <= 1 && std::abs(copy.bottom - bottom) <= 1)
+      {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 }  // namespace
 
@@ -53,6 +95,9 @@ void NotifyVRXFBCopyRegion(int left, int top, int right, int bottom)
   {
     // First copy of a new frame (games emit strips top-down; a copy starting at or above
     // the pending union restarts the accumulation). Commit the finished union.
+    s_recent_texture_copies[s_next_recent_texture_copies] = s_pending_texture_copies;
+    s_next_recent_texture_copies = (s_next_recent_texture_copies + 1) % TEXTURE_COPY_FRAMES;
+    s_pending_texture_copies = {};
     if (s_pending.valid)
     {
       if (!SameRegion(s_pending, s_current))
@@ -89,6 +134,29 @@ void ResetVRFrameRegion()
   s_scene_region_sample_count = 0;
   s_last_presentation_source = VRFrameRegion{};
   s_last_presentation_xfb = VRFrameRegion{};
+  s_pending_texture_copies = {};
+  s_recent_texture_copies = {};
+  s_next_recent_texture_copies = 0;
+}
+
+void NotifyVRTextureCopyRegion(int left, int top, int right, int bottom)
+{
+  if (right <= left || bottom <= top)
+    return;
+  const MathUtil::Rectangle<int> rect{left, top, right, bottom};
+  for (size_t i = 0; i < s_pending_texture_copies.count; ++i)
+  {
+    if (s_pending_texture_copies.rects[i] == rect)
+      return;
+  }
+  if (s_pending_texture_copies.count < MAX_TEXTURE_COPIES)
+    s_pending_texture_copies.rects[s_pending_texture_copies.count++] = rect;
+}
+
+VRScissor GetVRScissor()
+{
+  return {static_cast<int>(bpmem.scissorTL.x), static_cast<int>(bpmem.scissorTL.y),
+          static_cast<int>(bpmem.scissorBR.x), static_cast<int>(bpmem.scissorBR.y)};
 }
 
 // Port of Hydra's SetViewportType (VertexShaderManager.cpp), measured against the XFB
@@ -97,8 +165,13 @@ void ResetVRFrameRegion()
 //  - "full" means >= 90% of the frame extent, anchored within the remaining 10%.
 //  - Full-width bands that aren't split-screen halves are LETTERBOXED (this includes
 //    Metroid Prime's morph-ball 640x358 viewport, which must stay head-tracked).
-//  - Square, edge-anchored, multiple-of-8 viewports are render-to-texture passes.
-VRViewportClass ClassifyVRViewport(const Viewport& v, int x_off, int y_off)
+//  - Square, edge-anchored, multiple-of-8 viewports are render-to-texture passes, and so are
+//    draws scissored to a small box at the top-left corner and split-screen or HUD panes at the
+//    top-left corner which the game copies whole to a texture.
+namespace
+{
+VRViewportClass ClassifyVRViewportShape(const Viewport& v, const VRScissor& scissor, int x_off,
+                                        int y_off)
 {
   const VRFrameRegion frame = GetVRFrameRegion();
   if (!frame.valid)
@@ -128,10 +201,51 @@ VRViewportClass ClassifyVRViewport(const Viewport& v, int x_off, int y_off)
   {
     return VRViewportClass::RenderToTexture;
   }
+  // A draw clipped by its scissor to a small box at the frame's top-left corner, whatever its
+  // viewport: the Mii library (RFL) composes faces, colour swatches and icons there with an
+  // orthographic projection over the whole frame and a 8x8 to 256x256 scissor (Wii Sports,
+  // Mario Kart Wii), then copies the box to a texture.
+  const float scissor_left = static_cast<float>(scissor.left - x_off - frame.left);
+  const float scissor_top = static_cast<float>(scissor.top - y_off - frame.top);
+  const float scissor_width = static_cast<float>(scissor.right - scissor.left + 1);
+  const float scissor_height = static_cast<float>(scissor.bottom - scissor.top + 1);
+  if (scissor_left == 0.0f && scissor_top == 0.0f && scissor_width >= 1.0f &&
+      scissor_height >= 1.0f && scissor_width <= 256.0f && scissor_height <= 256.0f &&
+      scissor_width < width && scissor_height < height)
+  {
+    return VRViewportClass::RenderToTexture;
+  }
   // Zelda Twilight Princess renders the map screen's coloured highlights with this
   // strange viewport (makes no sense as a real one).
   if (width == 457.0f && height == 341.0f && left == 0.0f && top == 0.0f)
     return VRViewportClass::RenderToTexture;
+
+  // A viewport the size of the frame, moved further from the frame origin than the 10%
+  // tolerance below but still overlapping the frame, together with a scissor covering the same
+  // rectangle: the game pans the whole scene with the scissor offset (PSO slides it aside to
+  // make room for its menus). It is still the main scene, not an offscreen pass;
+  // SetScissorAndViewport puts it back over the frame. A viewport moved inside a scissor that
+  // stays put places one element instead (Mario Golf's menu icons), and smaller moves (screen
+  // shake, a pixel or two between the scene and the XFB copy) stay MainScene.
+  const bool viewport_matches_scissor =
+      std::fabs((v.xOrig - std::fabs(v.wd)) - static_cast<float>(scissor.left)) <= 1.0f &&
+      std::fabs((v.yOrig - std::fabs(v.ht)) - static_cast<float>(scissor.top)) <= 1.0f &&
+      std::fabs((v.xOrig + std::fabs(v.wd)) - static_cast<float>(scissor.right + 1)) <= 1.0f &&
+      std::fabs((v.yOrig + std::fabs(v.ht)) - static_cast<float>(scissor.bottom + 1)) <= 1.0f;
+  if (std::fabs(width - screen_width) < 1.0f && std::fabs(height - screen_height) < 1.0f &&
+      (std::fabs(left) > max_left || std::fabs(top) > max_top) && left < screen_width &&
+      top < screen_height && left + width > 0.0f && top + height > 0.0f && viewport_matches_scissor)
+  {
+    return VRViewportClass::DisplacedScene;
+  }
+
+  // Entirely outside the displayed region, whatever its shape: nobody sees it, the game copies it
+  // out (Wii Sports Resort lights its Miis with two 32x32 textures drawn in a 608x72 band under
+  // its 456-line frame).
+  if (left >= screen_width || top >= screen_height || left + width <= 0.0f || top + height <= 0.0f)
+  {
+    return VRViewportClass::Offscreen;
+  }
 
   // Full width: fullscreen, letterboxed, or top/bottom split-screen.
   if (width >= min_screen_width)
@@ -186,19 +300,27 @@ VRViewportClass ClassifyVRViewport(const Viewport& v, int x_off, int y_off)
     return VRViewportClass::HudElement;
   }
 
-  // Entirely outside the displayed region.
-  if (left >= screen_width || top >= screen_height || left + width <= 0.0f ||
-      top + height <= 0.0f)
-  {
-    return VRViewportClass::Offscreen;
-  }
-
   return VRViewportClass::HudElement;
 }
+}  // namespace
 
-void ObserveVRPerspectiveViewport(const Viewport& v, int x_off, int y_off)
+VRViewportClass ClassifyVRViewport(const Viewport& v, const VRScissor& scissor, int x_off,
+                                   int y_off)
 {
-  const VRViewportClass vclass = ClassifyVRViewport(v, x_off, y_off);
+  const VRViewportClass vclass = ClassifyVRViewportShape(v, scissor, x_off, y_off);
+  // A real split-screen pane goes to the screen with the rest of the frame. One the game copies
+  // to a texture renders natively, so that the copy holds what the game drew.
+  if ((vclass == VRViewportClass::SplitScreen || vclass == VRViewportClass::HudElement) &&
+      IsCopiedPane(v, x_off, y_off))
+  {
+    return VRViewportClass::RenderToTexture;
+  }
+  return vclass;
+}
+
+void ObserveVRPerspectiveViewport(const Viewport& v, const VRScissor& scissor, int x_off, int y_off)
+{
+  const VRViewportClass vclass = ClassifyVRViewport(v, scissor, x_off, y_off);
   if (vclass != VRViewportClass::MainScene && vclass != VRViewportClass::Letterboxed)
     return;
 
@@ -298,9 +420,9 @@ bool ConsumeVRPresentationSourceRegion(const VRFrameRegion& xfb_source,
   {
     INFO_LOG_FMT(VIDEO,
                  "VR_FRAME: presentation samples EFB {}x{} at ({},{}) into XFB {}x{} at ({},{})",
-                 presentation_source->width, presentation_source->height,
-                 presentation_source->left, presentation_source->top, xfb_source.width,
-                 xfb_source.height, xfb_source.left, xfb_source.top);
+                 presentation_source->width, presentation_source->height, presentation_source->left,
+                 presentation_source->top, xfb_source.width, xfb_source.height, xfb_source.left,
+                 xfb_source.top);
     s_last_presentation_source = *presentation_source;
     s_last_presentation_xfb = xfb_source;
   }
@@ -326,8 +448,52 @@ std::array<float, 4> CalculateVRPaneRemap(const Viewport& viewport, int x_off, i
           -(viewport_center_y - frame_center_y) / frame_half_height};
 }
 
-float CalculateVRPaneReferenceW(float model_origin_view_z, float projection_z,
-                                float projection_w)
+std::array<float, 4> CalculateVRPaneClip(int scissor_left, int scissor_top, int scissor_right,
+                                         int scissor_bottom, int x_off, int y_off,
+                                         const VRFrameRegion& frame)
+{
+  std::array<float, 4> clip{-VR_PANE_CLIP_OPEN, VR_PANE_CLIP_OPEN, -VR_PANE_CLIP_OPEN,
+                            VR_PANE_CLIP_OPEN};
+  if (!frame.valid || frame.width <= 0 || frame.height <= 0)
+    return clip;
+
+  const float frame_half_width = static_cast<float>(frame.width) * 0.5f;
+  const float frame_half_height = static_cast<float>(frame.height) * 0.5f;
+  const float frame_center_x = static_cast<float>(frame.left) + frame_half_width;
+  const float frame_center_y = static_cast<float>(frame.top) + frame_half_height;
+
+  // Pixel edges in EFB coordinates.
+  const int left = scissor_left - x_off;
+  const int top = scissor_top - y_off;
+  const int right = scissor_right - x_off + 1;
+  const int bottom = scissor_bottom - y_off + 1;
+
+  if (left > frame.left)
+    clip[0] = (static_cast<float>(left) - frame_center_x) / frame_half_width;
+  if (right < frame.left + frame.width)
+    clip[1] = (static_cast<float>(right) - frame_center_x) / frame_half_width;
+  if (bottom < frame.top + frame.height)
+    clip[2] = -(static_cast<float>(bottom) - frame_center_y) / frame_half_height;
+  if (top > frame.top)
+    clip[3] = -(static_cast<float>(top) - frame_center_y) / frame_half_height;
+  return clip;
+}
+
+std::array<float, 4> CalculateVRPaneRect(const Viewport& viewport, int scissor_left,
+                                         int scissor_top, int scissor_right, int scissor_bottom,
+                                         int x_off, int y_off, const VRFrameRegion& frame)
+{
+  const std::array<float, 4> remap = CalculateVRPaneRemap(viewport, x_off, y_off, frame);
+  std::array<float, 4> rect = CalculateVRPaneClip(scissor_left, scissor_top, scissor_right,
+                                                  scissor_bottom, x_off, y_off, frame);
+  rect[0] = std::max(rect[0], remap[2] - std::fabs(remap[0]));
+  rect[1] = std::min(rect[1], remap[2] + std::fabs(remap[0]));
+  rect[2] = std::max(rect[2], remap[3] - std::fabs(remap[1]));
+  rect[3] = std::min(rect[3], remap[3] + std::fabs(remap[1]));
+  return rect;
+}
+
+float CalculateVRPaneReferenceW(float model_origin_view_z, float projection_z, float projection_w)
 {
   if (std::isfinite(model_origin_view_z) && model_origin_view_z < -1.0e-4f)
     return -model_origin_view_z;
@@ -337,14 +503,119 @@ float CalculateVRPaneReferenceW(float model_origin_view_z, float projection_z,
   {
     const float far_distance = projection_w / projection_z;
     const float near_distance = far_distance * projection_z / (projection_z - 1.0f);
-    if (std::isfinite(near_distance) && std::isfinite(far_distance) &&
-        near_distance > 1.0e-4f && far_distance > near_distance)
+    if (std::isfinite(near_distance) && std::isfinite(far_distance) && near_distance > 1.0e-4f &&
+        far_distance > near_distance)
     {
       return std::sqrt(near_distance * far_distance);
     }
   }
 
   return 1.0f;
+}
+
+std::array<float, 2> MapGameNDCToEyeNDC(const std::array<float, 6>& game_projection,
+                                        const VREyeTangents& eye, float x, float y)
+{
+  // LoadProjectionMatrix puts raw[1] and raw[3] in the z column and -z in w, so the game's
+  // NDC is raw[0] * tan - raw[1]. The eye's is GetEyeProjectionRows' asymmetric frustum.
+  const float tan_x = (x + game_projection[1]) / game_projection[0];
+  const float tan_y = (y + game_projection[3]) / game_projection[2];
+  return {2.0f * (tan_x - eye.left) / (eye.right - eye.left) - 1.0f,
+          2.0f * (tan_y - eye.down) / (eye.up - eye.down) - 1.0f};
+}
+
+std::array<float, 2> MapGameNDCToEyeViewNDC(const std::array<float, 6>& game_projection,
+                                            const VREyeViewRows& eye, float x, float y)
+{
+  // The direction (tan_x, tan_y, -1) in the game's view space; see MapGameNDCToEyeNDC.
+  const float tan_x = (x + game_projection[1]) / game_projection[0];
+  const float tan_y = (y + game_projection[3]) / game_projection[2];
+  const auto dot = [tan_x, tan_y](const std::array<float, 4>& row) {
+    return row[0] * tan_x + row[1] * tan_y - row[2];
+  };
+  const float w = -dot(eye.z);
+  if (!(w > 0.0f))
+    return {NAN, NAN};
+  return {dot(eye.x) / w, dot(eye.y) / w};
+}
+
+bool IsVRCentredCopyRectangle(const MathUtil::Rectangle<int>& rect, const VRFrameRegion& frame)
+{
+  return frame.valid && std::abs(rect.left + rect.right - 2 * frame.left - frame.width) <= 4 &&
+         std::abs(rect.top + rect.bottom - 2 * frame.top - frame.height) <= 4 &&
+         rect.GetWidth() * 2 <= frame.width && rect.GetHeight() * 2 <= frame.height;
+}
+
+bool IsVRReticleCopyRectangle(const MathUtil::Rectangle<int>& rect, const VRFrameRegion& frame)
+{
+  if (!frame.valid)
+    return false;
+  const bool small_inside = rect.GetWidth() * 4 <= frame.width &&
+                            rect.GetHeight() * 4 <= frame.height && rect.left > frame.left &&
+                            rect.top > frame.top && rect.right < frame.left + frame.width &&
+                            rect.bottom < frame.top + frame.height;
+  return IsVRCentredCopyRectangle(rect, frame) || small_inside;
+}
+
+bool IsVRPerEyeCopyRectangle(const MathUtil::Rectangle<int>& rect, const VRFrameRegion& frame)
+{
+  return frame.valid && rect.GetWidth() > 0 && rect.GetHeight() > 0 &&
+         rect.GetWidth() * 3 <= frame.width && rect.GetHeight() * 2 <= frame.height;
+}
+
+namespace
+{
+// Moves the rectangle so that its centre goes where map(game NDC) says, in the frame's pixels.
+template <typename Map>
+MathUtil::Rectangle<int> MoveCopyRectangle(const MathUtil::Rectangle<int>& rect,
+                                           const VRFrameRegion& frame, const Map& map)
+{
+  const float center_x = (rect.left + rect.right) * 0.5f;
+  const float center_y = (rect.top + rect.bottom) * 0.5f;
+  const auto [eye_x, eye_y] = map(2.0f * (center_x - frame.left) / frame.width - 1.0f,
+                                  1.0f - 2.0f * (center_y - frame.top) / frame.height);
+  if (!std::isfinite(eye_x) || !std::isfinite(eye_y))
+    return rect;
+
+  const int dx = std::clamp(
+      static_cast<int>(std::lround(frame.left + (eye_x + 1.0f) * 0.5f * frame.width - center_x)),
+      frame.left - rect.left, frame.left + frame.width - rect.right);
+  const int dy = std::clamp(
+      static_cast<int>(std::lround(frame.top + (1.0f - eye_y) * 0.5f * frame.height - center_y)),
+      frame.top - rect.top, frame.top + frame.height - rect.bottom);
+  return {rect.left + dx, rect.top + dy, rect.right + dx, rect.bottom + dy};
+}
+}  // namespace
+
+MathUtil::Rectangle<int> MapVRGazeCopyRectangle(const MathUtil::Rectangle<int>& rect,
+                                                const VRFrameRegion& frame,
+                                                const std::array<float, 6>& game_projection,
+                                                const VREyeTangents& eye)
+{
+  if (!frame.valid || rect.GetWidth() > frame.width || rect.GetHeight() > frame.height ||
+      game_projection[0] == 0.0f || game_projection[2] == 0.0f || eye.right <= eye.left ||
+      eye.up <= eye.down)
+  {
+    return rect;
+  }
+  return MoveCopyRectangle(rect, frame, [&](float x, float y) {
+    return MapGameNDCToEyeNDC(game_projection, eye, x, y);
+  });
+}
+
+MathUtil::Rectangle<int> MapVRViewCopyRectangle(const MathUtil::Rectangle<int>& rect,
+                                                const VRFrameRegion& frame,
+                                                const std::array<float, 6>& game_projection,
+                                                const VREyeViewRows& eye)
+{
+  if (!frame.valid || rect.GetWidth() > frame.width || rect.GetHeight() > frame.height ||
+      game_projection[0] == 0.0f || game_projection[2] == 0.0f)
+  {
+    return rect;
+  }
+  return MoveCopyRectangle(rect, frame, [&](float x, float y) {
+    return MapGameNDCToEyeViewNDC(game_projection, eye, x, y);
+  });
 }
 
 const char* GetVRViewportClassName(VRViewportClass vclass)
@@ -363,6 +634,8 @@ const char* GetVRViewportClassName(VRViewportClass vclass)
     return "RenderToTexture";
   case VRViewportClass::Offscreen:
     return "Offscreen";
+  case VRViewportClass::DisplacedScene:
+    return "DisplacedScene";
   }
   return "Unknown";
 }

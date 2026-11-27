@@ -65,15 +65,41 @@ struct OpenXRControllerState
   float thumbstick_x = 0.0f;
   float thumbstick_y = 0.0f;
   OpenXRPoseState aim_pose;
+  // Aim pose at the input sample time (measured "now") instead of the predicted display time.
+  // Pointing UIs ray-cast with it: prediction extrapolates fast wrist motion and sprays the ray.
+  OpenXRPoseState pointer_pose;
   OpenXRPoseState grip_pose;
   OpenXRVelocityState grip_velocity;
   OpenXRScreenHit screen_hit;
+  // The aim pose relative to the game camera, in meters (+X right, +Y up, -Z forward of the
+  // camera): the same chain the Controller Anchor and the eyes use (recenter, camera height and
+  // forward, Camera Anchor). Invalid in flat-screen mode, where there is no game view to match.
+  OpenXRPoseState view_pose;
+  // The same without the game camera's pitch that the VR view removes (a VR patch's camera pitch
+  // source): relative to the camera's level frame. Equal to view_pose without a source.
+  OpenXRPoseState level_view_pose;
+  // The aim pose relative to the camera rig, in meters, before the Camera Anchor (rig axes: +X
+  // right, +Y up, -Z forward, from the eyes' home position). view_pose is the latched anchor
+  // times this: a VR patch that composes its own anchor uses it with that anchor, the one of the
+  // game state it reads. Invalid in flat-screen mode.
+  OpenXRPoseState rig_pose;
+  // That pitch (radians, + up), 0 without a source: the virtual screen and the pointer are turned
+  // up by it about the reference space's X axis.
+  float screen_pitch = 0.0f;
 };
 
 struct OpenXRInputSnapshot
 {
   std::array<OpenXRControllerState, 2> controllers{};
   OpenXRPoseState head_pose;  // HMD head orientation for IR pointer reference
+  // The center of the eyes relative to the game camera, in meters, by the chain of
+  // OpenXRControllerState::view_pose: where the eyes render from. Invalid in flat-screen mode.
+  OpenXRPoseState head_view_pose;
+  // The game units per meter the view poses were computed with (the Camera Anchor's own scale
+  // while it holds the camera); 0 before any.
+  float view_units_per_meter = 0.0f;
+  // The center of the eyes relative to the camera rig (OpenXRControllerState::rig_pose).
+  OpenXRPoseState head_rig_pose;
   bool runtime_active = false;
   uint64_t generation = 0;
   std::array<std::string, 2> interaction_profiles;  // Active profile path per hand
@@ -86,6 +112,9 @@ struct OpenXRInputSnapshot
 struct OpenXRHapticsState
 {
   std::array<float, 2> amplitude{};
+  // One-shot haptic pulses (e.g. from VR patches), consumed by the XR pacing thread.
+  std::array<float, 2> pulse_amplitude{};
+  std::array<int64_t, 2> pulse_duration_ns{};
 };
 
 class OpenXRInputState final
@@ -96,6 +125,8 @@ public:
     std::lock_guard lk(s_state_mutex);
     return s_state;
   }
+
+  static OpenXRInputSnapshot GetGameSnapshot() { return GetSnapshot(); }
 
   static void SetControllers(const std::array<OpenXRControllerState, 2>& controllers,
                              bool runtime_active,
@@ -113,11 +144,17 @@ public:
                              const OpenXRPoseState& head_pose,
                              const std::array<std::string, 2>& profiles,
                              bool focused,
-                             int64_t sample_time_ns = 0)
+                             int64_t sample_time_ns = 0,
+                             const OpenXRPoseState& head_view_pose = {},
+                             float view_units_per_meter = 0.0f,
+                             const OpenXRPoseState& head_rig_pose = {})
   {
     std::lock_guard lk(s_state_mutex);
     s_state.controllers = controllers;
     s_state.head_pose = head_pose;
+    s_state.head_view_pose = head_view_pose;
+    s_state.view_units_per_meter = view_units_per_meter;
+    s_state.head_rig_pose = head_rig_pose;
     s_state.runtime_active = runtime_active;
     s_state.interaction_profiles = profiles;
     s_state.session_focused = focused;
@@ -192,6 +229,27 @@ public:
 
     std::lock_guard lk(s_state_mutex);
     s_haptics.amplitude[hand_index] = Clamp01(amplitude);
+  }
+
+  // Queue a single short vibration on one hand, independent of game rumble.
+  static void PulseHaptic(std::size_t hand_index, float amplitude, int64_t duration_ns)
+  {
+    if (hand_index >= s_haptics.pulse_amplitude.size())
+      return;
+
+    std::lock_guard lk(s_state_mutex);
+    s_haptics.pulse_amplitude[hand_index] = Clamp01(amplitude);
+    s_haptics.pulse_duration_ns[hand_index] = duration_ns;
+  }
+
+  // Returns the haptics state and clears the queued one-shot pulses.
+  static OpenXRHapticsState TakeHaptics()
+  {
+    std::lock_guard lk(s_state_mutex);
+    const OpenXRHapticsState haptics = s_haptics;
+    s_haptics.pulse_amplitude = {};
+    s_haptics.pulse_duration_ns = {};
+    return haptics;
   }
 
 private:

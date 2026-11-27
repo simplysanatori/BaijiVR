@@ -11,6 +11,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_dolphin_test(CrashRecordTest CrashRecordTest.cpp)
 endif()
 
+if(ENABLE_VR)
+  add_dolphin_test(WiimoteMotionTrackerTest HW/WiimoteMotionTrackerTest.cpp)
+  add_dolphin_test(VRPatchTest VRPatch/VRPatchTest.cpp)
+  add_dolphin_test(ArmCannonPatchTest VRPatch/ArmCannonPatchTest.cpp)
+  add_dolphin_test(FirstPersonPatchTest VRPatch/FirstPersonPatchTest.cpp)
+  add_dolphin_test(FrameRatePatchTest VRPatch/FrameRatePatchTest.cpp)
+  add_dolphin_test(MetroidStatePatchTest VRPatch/MetroidStatePatchTest.cpp)
+endif()
+
 add_dolphin_test(DSPAcceleratorTest DSP/DSPAcceleratorTest.cpp)
 add_dolphin_test(DSPAssemblyTest
   DSP/DSPAssemblyTest.cpp

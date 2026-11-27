@@ -37,26 +37,33 @@ ShaderHunter::RuntimeElementSignature MakePerspectiveSignature()
   signature.blend_alpha_update = true;
   return signature;
 }
-}  // namespace
 
-TEST(RuntimeElementMatcher, PerspectiveProjectionAllowsOneQuantizationStep)
+// Only the projection load group, as an entry that tells same-state draws apart by their order.
+ShaderHunter::RuntimeElementSignature MakeLoadPattern(int load_min, int load_max)
 {
-  const auto pattern = MakePerspectiveSignature();
-  auto candidate = pattern;
-  candidate.perspective_hfov_x100 += 1;
-  candidate.perspective_vfov_x100 -= 1;
-  candidate.perspective_near_x1000 += 1;
-  candidate.perspective_far_x100 -= 1;
-
-  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, candidate));
+  ShaderHunter::RuntimeElementSignature pattern;
+  pattern.valid = true;
+  pattern.use_load = true;
+  pattern.load_min = load_min;
+  pattern.load_max = load_max;
+  return pattern;
 }
 
-TEST(RuntimeElementMatcher, PerspectiveProjectionRejectsLargerDifferences)
+ShaderHunter::RuntimeElementSignature DrawAtLoad(int load)
+{
+  ShaderHunter::RuntimeElementSignature candidate = MakePerspectiveSignature();
+  candidate.projection_load = load;
+  return candidate;
+}
+}  // namespace
+
+TEST(RuntimeElementMatcher, PerspectiveProjectionIsExact)
 {
   const auto pattern = MakePerspectiveSignature();
-  auto candidate = pattern;
-  candidate.perspective_hfov_x100 += 2;
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, pattern));
 
+  auto candidate = pattern;
+  candidate.perspective_hfov_x100 += 1;
   EXPECT_FALSE(RuntimeElementMatcher::Matches(pattern, candidate));
 }
 
@@ -67,4 +74,109 @@ TEST(RuntimeElementMatcher, NonProjectionGroupsRemainExact)
   candidate.viewport_width += 1;
 
   EXPECT_FALSE(RuntimeElementMatcher::Matches(pattern, candidate));
+}
+
+TEST(RuntimeElementMatcher, AlphaWriteCanBeIgnored)
+{
+  auto pattern = MakePerspectiveSignature();
+  auto candidate = pattern;
+  candidate.blend_alpha_update = false;
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(pattern, candidate));
+
+  pattern.any_alpha_update = true;
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, candidate));
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, pattern));
+  // The rest of the render state still has to match.
+  candidate.zfunc = 7;
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(pattern, candidate));
+}
+
+TEST(RuntimeElementMatcher, AlphaTestReferencesCanBeIgnored)
+{
+  auto pattern = MakePerspectiveSignature();
+  pattern.alpha_test_hex = 0x0044000b;
+  auto candidate = pattern;
+  candidate.alpha_test_hex = 0x00440003;  // the same test, another reference
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(pattern, candidate));
+
+  pattern.any_alpha_ref = true;
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, candidate));
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, pattern));
+  // The compare functions and the logic still have to match.
+  candidate.alpha_test_hex = 0x007f0003;
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(pattern, candidate));
+}
+
+TEST(RuntimeElementMatcher, EfbCopySamplingCanBeRequired)
+{
+  auto pattern = MakePerspectiveSignature();
+  auto text = pattern;
+  text.efb_copy = 0;
+  auto blur = pattern;  // the same state, sampling a copy of the frame
+  blur.efb_copy = 1;
+  // By default an entry takes both.
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, text));
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, blur));
+
+  pattern.efb_copy = 0;
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, text));
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(pattern, blur));
+  pattern.efb_copy = 1;
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(pattern, text));
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, blur));
+  // Whatever the groups the entry matches.
+  pattern.use_projection = pattern.use_render_state = false;
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(pattern, text));
+}
+
+// A blur or bloom chain samples reduced copies (Wii Sports' Boxing: 320x228 and smaller); a menu
+// frozen behind a dialog is a copy of the whole screen drawn back. 2 takes only the first.
+TEST(RuntimeElementMatcher, ReducedEfbCopySamplingCanBeRequired)
+{
+  auto pattern = MakePerspectiveSignature();
+  auto redraw = pattern;
+  redraw.efb_copy = 1;
+  auto blur = pattern;
+  blur.efb_copy = 2;
+  auto text = pattern;
+  text.efb_copy = 0;
+
+  pattern.efb_copy = 2;
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, blur));
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(pattern, redraw));
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(pattern, text));
+  // Entries saved before still take every draw sampling a copy.
+  pattern.efb_copy = 1;
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, blur));
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, redraw));
+  pattern.efb_copy = 0;
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(pattern, blur));
+}
+
+TEST(RuntimeElementMatcher, ProjectionLoadMatchesItsRange)
+{
+  const auto exact = MakeLoadPattern(4, 4);
+  EXPECT_TRUE(RuntimeElementMatcher::HasActiveGroups(exact));
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(exact, DrawAtLoad(3)));
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(exact, DrawAtLoad(4)));
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(exact, DrawAtLoad(5)));
+
+  const auto range = MakeLoadPattern(2, 7);
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(range, DrawAtLoad(1)));
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(range, DrawAtLoad(2)));
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(range, DrawAtLoad(7)));
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(range, DrawAtLoad(8)));
+
+  // -1: no upper bound.
+  const auto from_three = MakeLoadPattern(3, -1);
+  EXPECT_FALSE(RuntimeElementMatcher::Matches(from_three, DrawAtLoad(2)));
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(from_three, DrawAtLoad(250)));
+}
+
+TEST(RuntimeElementMatcher, ProjectionLoadIsIgnoredUnlessUsed)
+{
+  // Entries saved before the key existed match draws at any load.
+  const auto pattern = MakePerspectiveSignature();
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, DrawAtLoad(0)));
+  EXPECT_TRUE(RuntimeElementMatcher::Matches(pattern, DrawAtLoad(12)));
 }

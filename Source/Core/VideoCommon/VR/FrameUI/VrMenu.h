@@ -227,7 +227,7 @@ struct MenuState
   std::string pad_profile;  // empty: the mapping of every game
   PadEditView edit;
 
-  int mods_list = 0;  // Mods, Textures
+  int mods_list = 0;  // Mods, Textures, VR Patches
   int mods_page = 0;
   bool mods_ready = false;
   bool mods_changed = false;

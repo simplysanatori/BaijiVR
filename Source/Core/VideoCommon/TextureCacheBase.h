@@ -136,6 +136,17 @@ struct TCacheEntry
   bool should_force_safe_hashing = false;  // for XFB
   bool is_xfb_copy = false;
   bool is_xfb_container = false;
+  // VR: this XFB copy resampled the scene's lines over all of its own
+  // (VR::ConsumeVRPresentationSourceRegion), so the eyes' picture is the whole copy, not just
+  // the lines the VI shows of it.
+  bool vr_scene_fills_copy = false;
+  // VR: every layer of this EFB copy holds the left eye's picture (ApplyVRMonoEFBCopy).
+  bool vr_mono_layers = false;
+  // VR: the same block taken where each eye sees it, and per eye how far (native EFB pixels,
+  // x and y) from the game's rectangle (PerEyeScreenCopies).
+  std::unique_ptr<AbstractTexture> vr_per_eye_texture;
+  std::unique_ptr<AbstractFramebuffer> vr_per_eye_framebuffer;
+  std::optional<std::array<std::array<int, 2>, 2>> vr_eye_offsets;
   u64 id = 0;
   u32 content_semaphore = 0;  // Counts up
 
@@ -172,7 +183,13 @@ struct TCacheEntry
   u64 pending_efb_copy_sync_time_us = 0;
   u32 pending_efb_copy_sync_frame = 0;
 
-  std::string texture_info_name = "";
+  // The texture dump name. Assign through SetTextureInfoName so the parsed dump-name hash
+  // stays in sync; GetOverrideHash() is read for every bound texture of every draw.
+  void SetTextureInfoName(std::string name);
+  const std::string& GetTextureInfoName() const { return m_texture_info_name; }
+  // XXH64 from the dump name when it has one (matches dump filenames and override INIs),
+  // otherwise the live content hash, which changes with EFB/palette content.
+  u64 GetOverrideHash() const { return m_texture_name_hash != 0 ? m_texture_name_hash : hash; }
 
   VideoCommon::CustomAsset::TimeType last_load_time;
   std::shared_ptr<HiresTexture> hires_texture;
@@ -243,6 +260,11 @@ struct TCacheEntry
   u32 GetNumLayers() const { return texture->GetConfig().layers; }
   AbstractTextureFormat GetFormat() const { return texture->GetConfig().format; }
   void DoState(PointerWrap& p);
+
+private:
+  std::string m_texture_info_name;
+  // Only the parsed dump-name hash is cached; the fallback content hash is always read live.
+  u64 m_texture_name_hash = 0;
 };
 
 using RcTcacheEntry = std::shared_ptr<TCacheEntry>;
@@ -304,6 +326,12 @@ public:
   // Fullscreen override opt-in: repair a one-layer texture which was partially updated from a
   // same-address stereo EFB copy, then rebind the promoted texture for the current draw.
   bool ApplyVRPreserveStereoEFBFix(u32 stage);
+  // Override opt-in (mono_efb_copy): a stereo EFB copy bound at this stage takes its left eye's
+  // picture in every layer, once per copy, and is rebound for the current draw.
+  bool ApplyVRMonoEFBCopy(u32 stage);
+  // PerEyeScreenCopies: binds the per-eye block of the EFB copy bound at this stage for the
+  // current draw and returns how far it was moved per eye (TCacheEntry::vr_eye_offsets).
+  std::optional<std::array<std::array<int, 2>, 2>> ApplyVRPerEyeCopy(u32 stage);
   void CopyRenderTargetToTexture(u32 dstAddr, EFBCopyFormat dstFormat, u32 width, u32 height,
                                  u32 dstStride, bool is_depth_copy,
                                  const MathUtil::Rectangle<int>& srcRect, bool isIntensity,
@@ -360,11 +388,12 @@ protected:
                        const MathUtil::Rectangle<int>& src_rect, bool scale_by_half,
                        bool linear_filter, float y_scale, float gamma, bool clamp_top,
                        bool clamp_bottom, const std::array<u32, 3>& filter_coefficients);
-  virtual void CopyEFBToCacheEntry(RcTcacheEntry& entry, bool is_depth_copy,
-                                   const MathUtil::Rectangle<int>& src_rect, bool scale_by_half,
-                                   bool linear_filter, EFBCopyFormat dst_format, bool is_intensity,
-                                   float gamma, bool clamp_top, bool clamp_bottom,
-                                   const std::array<u32, 3>& filter_coefficients);
+  virtual void CopyEFBToCacheEntry(
+      RcTcacheEntry& entry, bool is_depth_copy, const MathUtil::Rectangle<int>& src_rect,
+      bool scale_by_half, bool linear_filter, EFBCopyFormat dst_format, bool is_intensity,
+      float gamma, bool clamp_top, bool clamp_bottom, const std::array<u32, 3>& filter_coefficients,
+      bool vr_mono_layers = false,
+      const std::optional<MathUtil::Rectangle<int>>& vr_right_src_rect = std::nullopt);
 
   alignas(16) u8* m_temp = nullptr;
   size_t m_temp_size = 0;
@@ -389,6 +418,8 @@ private:
                                    bool custom_arbitrary_mipmaps, bool skip_texture_dump);
 
   RcTcacheEntry GetXFBFromCache(u32 address, u32 width, u32 height, u32 stride);
+  // VR: the XFB copy at this address among the game's last ones (m_vr_recent_xfb_copies).
+  RcTcacheEntry GetVRRecentXFBCopy(u32 address, u32 width, u32 height, u32 stride) const;
 
   RcTcacheEntry ApplyPaletteToEntry(RcTcacheEntry& entry, const u8* palette, TLUTFormat tlutfmt);
 
@@ -402,6 +433,13 @@ private:
 
   RcTcacheEntry AllocateCacheEntry(const TextureConfig& config);
   std::optional<TexPoolEntry> AllocateTexture(const TextureConfig& config);
+  // PerEyeScreenCopies: the copy's block taken again from each eye's rectangle into the entry's
+  // per-eye texture.
+  void CopyVRPerEyeBlock(RcTcacheEntry& entry, const MathUtil::Rectangle<int>& src_rect,
+                         bool scale_by_half, bool linear_filter, EFBCopyFormat dst_format,
+                         bool is_intensity, float gamma, bool clamp_top, bool clamp_bottom,
+                         const CopyFilterCoefficients::Values& filter_coefficients,
+                         const std::array<MathUtil::Rectangle<int>, 2>& rects);
   TexPool::iterator FindMatchingTextureFromPool(const TextureConfig& config);
   TexAddrCache::iterator GetTexCacheIter(TCacheEntry* entry);
 
@@ -528,6 +566,13 @@ private:
   EFBCopyStats m_efb_copy_stats;
   u32 m_efb_copy_frame = 0;
   u32 m_efb_copy_events_logged = 0;
+
+  // VR sessions: the game's last XFB copies, for a present that runs after the next frame's
+  // first copies (dual core, with the video thread behind the CPU). Kept until the game presents
+  // MAX_VR_RECENT_XFB_PRESENTS frames without a new XFB copy.
+  std::array<RcTcacheEntry, 2> m_vr_recent_xfb_copies;
+  u32 m_vr_presents_since_xfb_copy = 0;
+  static constexpr u32 MAX_VR_RECENT_XFB_PRESENTS = 8;
 
   // Staging texture used for readbacks.
   // We store this in the class so that the same staging texture can be used for multiple

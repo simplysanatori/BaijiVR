@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,6 +23,7 @@ struct CustomPixelShaderContents;
 class CustomShaderCache;
 class DataReader;
 class GeometryShaderManager;
+enum class MetroidElementLayer;
 enum class MetroidElementProfile;
 class NativeVertexFormat;
 class PixelShaderManager;
@@ -111,8 +114,24 @@ public:
 
   PrimitiveType GetCurrentPrimitiveType() const { return m_current_primitive_type; }
   void AddIndices(OpcodeDecoder::Primitive primitive, u32 num_vertices);
+  // How RunVertices may CPU-cull draws with the current state. Stock is Dolphin's cull against
+  // the game's projection (per-game CPUCull, outside VR). In VR the headset does not show the
+  // game's projection, so only the head-following cone is used: ConeOnly for draws known to be
+  // rendered from the head's point of view, ConeAndGame (cull only what is outside the cone and
+  // also culled by the game's projection) for draws that may end up on the virtual screen or
+  // head-locked.
+  enum class CpuCullPlan : u8
+  {
+    None,
+    Stock,
+    ConeOnly,
+    ConeAndGame,
+  };
+  CpuCullPlan GetCpuCullPlan();
+  // Per-frame part of GetCpuCullPlan's decision, plus the once-a-second statistics line.
+  void UpdateVRCullPolicy();
   bool AreAllVerticesCulled(VertexLoaderBase* loader, OpcodeDecoder::Primitive primitive,
-                            const u8* src, u32 count);
+                            const u8* src, u32 count, CpuCullPlan plan);
   virtual DataReader PrepareForAdditionalData(OpcodeDecoder::Primitive primitive, u32 count,
                                               u32 stride, bool cullall);
   /// Switch cullall off after a call to PrepareForAdditionalData with cullall true
@@ -123,6 +142,9 @@ public:
 
   void Flush();
   bool HasSendableVertices() const { return !m_is_flushed && !m_cull_all; }
+  // The current draw holds vertex data a hide code's pink preview matches
+  // (HideObjectEngine::SetPinkPreview): it is drawn pink.
+  void MarkPinkPreviewBatch() { m_pink_preview_batch = true; }
 
   void DoState(PointerWrap& p);
 
@@ -174,6 +196,17 @@ public:
   // Call at the end of a frame.
   void OnEndFrame();
 
+  // Called when the game writes the projection (XF registers). The Metroid Prime 2 GC profile
+  // counts these loads, as Hydra's rules do.
+  void OnProjectionLoaded() { m_projection_load_pending = true; }
+
+  // The projection of the last perspective draw of the 3D scene: rendered stereo from the
+  // head, not head-locked or moved to a screen. Recorded only with GazeRamCopies.
+  const std::optional<std::array<float, 6>>& GetVRSceneProjection() const
+  {
+    return m_vr_scene_projection;
+  }
+
 protected:
   // When utility uniforms are used, the GX uniforms need to be re-written afterwards.
   static void InvalidateConstants();
@@ -211,6 +244,16 @@ protected:
 
   VideoCommon::GXPipelineUid m_current_pipeline_config;
   VideoCommon::GXUberPipelineUid m_current_uber_pipeline_config;
+  // Shader hunter/override identities of the current specialized UIDs (CRC32 of the UID bytes and
+  // family signature), computed on first use and dropped when the UID changes.
+  struct CachedShaderIds
+  {
+    std::optional<u64> crc;
+    std::optional<u64> family;
+  };
+  CachedShaderIds m_vs_override_ids;
+  CachedShaderIds m_ps_override_ids;
+  CachedShaderIds m_gs_override_ids;
   const AbstractPipeline* m_current_pipeline_object = nullptr;
   bool m_current_pipeline_is_uber = false;
   PrimitiveType m_current_primitive_type = PrimitiveType::Points;
@@ -235,19 +278,41 @@ private:
   void UpdatePipelineConfig();
   void UpdatePipelineObject();
 
+  const AbstractPipeline*
+  GetCustomPipeline(const CustomPixelShaderContents& custom_pixel_shader_contents,
+                    const VideoCommon::GXPipelineUid& current_pipeline_config,
+                    const VideoCommon::GXUberPipelineUid& current_uber_pipeline_config,
+                    const AbstractPipeline* current_pipeline) const;
+
   // Resolve the game's Metroid VR profile once and cache it. The game ID is constant for this
   // VertexManager's lifetime (a new game re-initializes the video backend), so this avoids a
   // per-draw GetGameID() string allocation on the render hot path.
   MetroidElementProfile GetCachedMetroidProfile();
 
-  const AbstractPipeline*
-  GetCustomPipeline(const CustomPixelShaderContents& custom_pixel_shader_contents,
-                    const VideoCommon::GXPipelineUid& current_pipeline_config,
-                    const VideoCommon::GXUberPipelineUid& current_uber_pipeline_confi,
-                    const AbstractPipeline* current_pipeline) const;
-
   bool m_is_flushed = true;
   FlushStatistics m_flush_statistics = {};
+
+  // VR head-cone CPU culling (see GetCpuCullPlan). The policy is refreshed once per frame in
+  // OnEndFrame; the projection is copied when a plan is chosen.
+  bool m_vr_cull_allowed = false;
+  bool m_vr_cull_cone_only = false;
+  std::array<std::array<float, 4>, 4> m_vr_cull_projection{};
+  // The pending batch was removed by the head cone / tested with the cone only.
+  bool m_vr_culled_pending = false;
+  bool m_vr_cone_only_pending = false;
+  // Draw calls removed by the head cone this frame. Added to m_draw_counter wherever a draw's
+  // index in the frame identifies it (element matching, Metroid layers), so those match a frame
+  // without culling. EFB-copy and readback bookkeeping keep the raw counter.
+  u32 m_vr_culled_flushes = 0;
+  struct VRCullStats
+  {
+    std::array<u32, 2> tested{};  // [0] = cone and game, [1] = cone only
+    std::array<u32, 2> culled{};
+    u32 culled_draws = 0;
+    u32 misrouted = 0;  // cone-only batches a later route did not render from the head
+    u32 frames = 0;
+  };
+  VRCullStats m_vr_cull_stats;
 
   // CPU access tracking
   u32 m_draw_counter = 0;
@@ -257,14 +322,23 @@ private:
   MetroidElementProfile m_metroid_profile{};  // == MetroidElementProfile::None until resolved
   std::string m_metroid_game_id;              // Cached alongside m_metroid_profile
   bool m_metroid_profile_resolved = false;
+  // Projection loads that draws used this frame (Hydra's debug_projNum), and the Metroid layer
+  // of the current load for the profiles classified once per load.
+  bool m_projection_load_pending = false;
+  u32 m_frame_projection_loads = 0;
+  // The projection load of the last draw Detect Skybox made a sky in this frame.
+  std::optional<u32> m_vr_sky_projection_load;
+  std::optional<MetroidElementLayer> m_metroid_load_layer;
+  std::optional<std::array<float, 6>> m_vr_scene_projection;
   bool m_unflushed_efb_copy = false;
   std::vector<u32> m_cpu_accesses_this_frame;
   std::vector<u32> m_scheduled_command_buffer_kicks;
   bool m_allow_background_execution = true;
 
-  std::unique_ptr<CustomShaderCache> m_custom_shader_cache;
   std::unique_ptr<AbstractShader> m_pink_pixel_shader;
   bool m_force_pink_ps = false;
+  bool m_pink_preview_batch = false;
+  std::unique_ptr<CustomShaderCache> m_custom_shader_cache;
   u64 m_ticks_elapsed = 0;
 
   Common::EventHook m_frame_end_event;

@@ -58,6 +58,7 @@ struct HideObject
   std::string name;
   std::vector<HideObjectEntry> entries;  // Usually 1, but format allows multiple per code
   bool active = true;
+  // False for codes that ship in Sys (LoadFromINI): they cannot be deleted in the user's file.
   bool user_defined = true;
 };
 
@@ -78,7 +79,12 @@ std::optional<HideObjectEntry> BuildEntryFromPrefix(const u8* data, size_t avail
 // --- Static INI helpers (direct file I/O, bypasses IniFile to avoid corruption) ---
 std::vector<HideObject> LoadFromINI(const std::string& game_id,
                                     std::optional<u16> revision = std::nullopt);
+// The Sys files, then the user files, merged by name (later files win).
+std::vector<HideObject> LoadFromINIFiles(const std::vector<std::string>& sys_paths,
+                                         const std::vector<std::string>& user_paths);
 void SaveToINI(const std::string& game_id, const std::vector<HideObject>& codes);
+// The codes of one INI file (no Sys/User merge), e.g. an entry the agent server wrote.
+std::vector<HideObject> LoadCodesFromINIFile(const std::string& path);
 
 // --- Runtime singleton for hide-object matching ---
 class Engine
@@ -105,6 +111,13 @@ public:
 
   // Called from VertexLoaderManager::RunVertices — returns true if src matches any active code
   bool ShouldHide(const u8* src) const;
+
+  // The hunters' pick preview (VR::DrawPick): vertex data starting with one of these lines is
+  // drawn pink instead of hidden, so a picked code shows what it would hide. Empty: none.
+  void SetPinkPreview(const std::vector<HideObjectEntry>& entries);
+  bool HasPinkPreview() const { return m_has_pink_preview.load(std::memory_order_relaxed); }
+  // Called from VertexLoaderManager::RunVertices (video thread), like ShouldHide.
+  bool MatchesPinkPreview(const u8* src) const;
   bool HasCodes() const;
 
 private:
@@ -122,6 +135,10 @@ private:
 
   mutable std::mutex m_capture_mutex;
   std::atomic<bool> m_capture_enabled{false};
+
+  mutable std::mutex m_pink_mutex;
+  std::vector<SkipEntry> m_pink_entries;
+  std::atomic<bool> m_has_pink_preview{false};
   std::vector<SkipEntry> m_pending_capture_prefixes;
   std::vector<CapturedPrefix> m_collecting_capture_prefixes;
   std::vector<CapturedPrefix> m_display_capture_prefixes;

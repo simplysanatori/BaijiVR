@@ -58,6 +58,7 @@ class VRGames;
 class VRModeSwitch;
 class WatchWidget;
 class WiiTASInputWindow;
+class WiimoteMotionTesterWindow;
 class WiiSpeakWindow;
 class LogitechMicWindow;
 struct WindowSystemInfo;
@@ -184,6 +185,7 @@ private:
   void ShowGraphicsWindow();
   void ShowVRWindow();
   void ShowFreeLookWindow();
+  void ShowWiimoteMotionTester();
   void ShowAboutDialog();
   void ShowProblemReport(ProblemReport::Report report);
   void ShowHotkeyDialog();
@@ -274,6 +276,7 @@ private:
   LogitechMicWindow* m_logitech_mic_window = nullptr;
   MappingWindow* m_hotkey_window = nullptr;
   FreeLookWindow* m_freelook_window = nullptr;
+  WiimoteMotionTesterWindow* m_wiimote_motion_tester = nullptr;
 
   VRModeSwitch* m_vr_mode_switch = nullptr;
   VRGames* m_vr_games = nullptr;

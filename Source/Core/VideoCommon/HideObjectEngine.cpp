@@ -155,14 +155,14 @@ static ParsedHideObjectFile LoadFromINIFile(const std::string& path)
       if (!line.empty() && line.back() == '\r')
         line.pop_back();
 
-      if (line == "[HideObjectCodes_Enabled]")
+      // Read every copy of the section: a code pasted with its header in the VR Config editor can
+      // add one after the other sections.
+      if (!line.empty() && line[0] == '[')
       {
-        in_section = true;
-        parsed.has_enable_section = true;
+        in_section = line == "[HideObjectCodes_Enabled]";
+        parsed.has_enable_section |= in_section;
         continue;
       }
-      if (in_section && !line.empty() && line[0] == '[')
-        break;
       if (!in_section || line.empty())
         continue;
       if (line[0] == '$')
@@ -202,13 +202,13 @@ static ParsedHideObjectFile LoadFromINIFile(const std::string& path)
     if (!line.empty() && line.back() == '\r')
       line.pop_back();
 
-    if (line == "[HideObjectCodes]")
+    if (!line.empty() && line[0] == '[')
     {
-      in_section = true;
+      commit_code();
+      has_code = false;
+      in_section = line == "[HideObjectCodes]";
       continue;
     }
-    if (in_section && !line.empty() && line[0] == '[')
-      break;
     if (!in_section || line.empty())
       continue;
 
@@ -294,11 +294,22 @@ static void MergeParsedHideObjectFile(std::vector<HideObject>* result,
     }
   }
 
+  // The codes of this file already follow its enable list. The list only turns on the codes of
+  // earlier files: a user file saved before a code shipped in Sys does not list it, and must not
+  // turn it off.
   if (parsed.has_enable_section)
   {
     for (auto& entry : *result)
-      entry.active = parsed.enabled_names.count(entry.name) > 0;
+    {
+      if (parsed.enabled_names.contains(entry.name))
+        entry.active = true;
+    }
   }
+}
+
+std::vector<HideObject> LoadCodesFromINIFile(const std::string& path)
+{
+  return LoadFromINIFile(path).entries;
 }
 
 std::vector<HideObject> LoadFromINI(const std::string& game_id, std::optional<u16> revision)
@@ -306,16 +317,33 @@ std::vector<HideObject> LoadFromINI(const std::string& game_id, std::optional<u1
   if (game_id.empty())
     return {};
 
+  std::vector<std::string> sys_paths;
+  std::vector<std::string> user_paths;
+  for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(game_id, revision))
+  {
+    sys_paths.push_back(GetSysVRGameSettingsPath(filename));
+    user_paths.push_back(File::GetUserPath(D_GAMESETTINGSVR_IDX) + filename);
+  }
+  return LoadFromINIFiles(sys_paths, user_paths);
+}
+
+std::vector<HideObject> LoadFromINIFiles(const std::vector<std::string>& sys_paths,
+                                         const std::vector<std::string>& user_paths)
+{
   std::vector<HideObject> result;
   std::map<std::string, size_t> index_by_name;
 
-  for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(game_id, revision))
-    MergeParsedHideObjectFile(&result, &index_by_name,
-                              LoadFromINIFile(GetSysVRGameSettingsPath(filename)));
+  for (const std::string& path : sys_paths)
+    MergeParsedHideObjectFile(&result, &index_by_name, LoadFromINIFile(path));
+  const std::map<std::string, size_t> sys_names = index_by_name;
 
-  for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(game_id, revision))
-    MergeParsedHideObjectFile(&result, &index_by_name,
-                              LoadFromINIFile(File::GetUserPath(D_GAMESETTINGSVR_IDX) + filename));
+  for (const std::string& path : user_paths)
+    MergeParsedHideObjectFile(&result, &index_by_name, LoadFromINIFile(path));
+
+  // A code that ships in Sys comes back on every load, even if the user's file (which saves every
+  // code) drops or renames it. Editing it under its name does stick: the user's file wins.
+  for (HideObject& code : result)
+    code.user_defined = !sys_names.contains(code.name);
 
   return result;
 }
@@ -421,6 +449,28 @@ void Engine::ApplyCodes(const std::vector<HideObject>& codes)
   }
 
   m_updating.store(false, std::memory_order_release);
+}
+
+void Engine::SetPinkPreview(const std::vector<HideObjectEntry>& entries)
+{
+  std::vector<SkipEntry> patterns;
+  patterns.reserve(entries.size());
+  for (const HideObjectEntry& entry : entries)
+    patterns.push_back(BuildSkipEntry(entry));
+  std::lock_guard lock(m_pink_mutex);
+  m_pink_entries = std::move(patterns);
+  m_has_pink_preview.store(!m_pink_entries.empty(), std::memory_order_relaxed);
+}
+
+bool Engine::MatchesPinkPreview(const u8* src) const
+{
+  std::lock_guard lock(m_pink_mutex);
+  for (const SkipEntry& entry : m_pink_entries)
+  {
+    if (std::memcmp(src, entry.data(), entry.size()) == 0)
+      return true;
+  }
+  return false;
 }
 
 void Engine::SetCaptureEnabled(bool enabled)

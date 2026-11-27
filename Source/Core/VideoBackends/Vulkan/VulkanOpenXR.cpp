@@ -39,6 +39,7 @@
 #include "Core/Config/GraphicsSettings.h"
 #include "VideoBackends/Vulkan/CommandBufferManager.h"
 #include "VideoBackends/Vulkan/StateTracker.h"
+#include "VideoBackends/Vulkan/VKRecordingWorker.h"
 #include "VideoBackends/Vulkan/VKTexture.h"
 #include "VideoBackends/Vulkan/VulkanContext.h"
 #include "VideoBackends/Vulkan/VulkanOverlay.h"
@@ -1525,6 +1526,7 @@ bool VulkanOpenXR::PrepareFoveationImages(
     const std::vector<XrSwapchainImageFoveationVulkanFB>& fdm_images,
     std::vector<VkImageView>* out_views)
 {
+  DrainRecordingWorkerForDirectAccess();
   out_views->clear();
   out_views->reserve(fdm_images.size());
 
@@ -1950,6 +1952,7 @@ bool VulkanOpenXR::CreateEyeSwapchains(int64_t swapchain_format)
 
 void VulkanOpenXR::DestroySwapchains()
 {
+  DrainRecordingWorkerForDirectAccess();
   m_flat_image_released.store(false, std::memory_order_release);
   m_stereo_pair_released.store(false, std::memory_order_release);
 
@@ -2211,6 +2214,7 @@ std::function<void(VkResult)> VulkanOpenXR::TimeGpuFrame(bool first, bool last)
 
 void VulkanOpenXR::ReleaseEyeTexture(uint32_t eye_index)
 {
+  DrainRecordingWorkerForDirectAccess();
   ASSERT(eye_index < 2);
   if (!m_image_acquired[eye_index])
     return;
@@ -2278,6 +2282,7 @@ void VulkanOpenXR::ReleaseEyeTexture(uint32_t eye_index)
 
 void VulkanOpenXR::ReleaseLayeredTexture()
 {
+  DrainRecordingWorkerForDirectAccess();
   if (!m_layered_image_acquired)
     return;
 
@@ -2312,6 +2317,7 @@ void VulkanOpenXR::ReleaseLayeredTexture()
 
 bool VulkanOpenXR::SubmitFrame()
 {
+  DrainRecordingWorkerForDirectAccess();
   ASSERT(VR::g_openxr != nullptr);
 
 #if defined(ANDROID)
@@ -2480,6 +2486,7 @@ bool VulkanOpenXR::SubmitFrame()
 
 bool VulkanOpenXR::SubmitFlatFrame()
 {
+  DrainRecordingWorkerForDirectAccess();
   ASSERT(VR::g_openxr != nullptr);
 
 #if defined(ANDROID)

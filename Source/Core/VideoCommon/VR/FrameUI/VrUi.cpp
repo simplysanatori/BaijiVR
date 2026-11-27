@@ -41,6 +41,7 @@
 #include "Core/NetPlayProto.h"
 #include "Core/State.h"
 #include "Core/System.h"
+#include "Core/VRPatch/VRPatch.h"
 #include "Core/VRWiiController.h"
 
 #include "InputCommon/InputConfig.h"
@@ -773,7 +774,7 @@ void VrUi::RequestMods()
 {
   {
     std::lock_guard lock(m_draw_mutex);
-    m_mods_request = m_menu.mods_list == 0 ? GameMods::List::Mods : GameMods::List::Textures;
+    m_mods_request = m_menu.mods_list;
   }
   m_draw_cv.notify_one();
 }
@@ -1360,7 +1361,7 @@ void VrUi::UpdateMenu(const Frame& frame, const Controllers& controllers, float 
       m_menu.files.scroll = 0.0f;
     }
     if (auto mods = std::exchange(m_mods, std::nullopt);
-        mods && (mods->first == GameMods::List::Mods) == (m_menu.mods_list == 0))
+        mods && mods->first == m_menu.mods_list)
     {
       m_menu.mods = std::move(mods->second);
       m_menu.mods_ready = true;
@@ -1670,9 +1671,22 @@ void VrUi::ChangeMod(const MenuWidget& widget)
   if (index >= m_menu.mods.size())
     return;
   GameMods::Item& item = m_menu.mods[index];
+  const std::string& game = SConfig::GetInstance().GetGameID();
+  if (m_menu.mods_list == 2)
+  {
+    const bool on = item.state != GameMods::State::On;
+    item.state = on ? GameMods::State::On : GameMods::State::Off;
+    Core::QueueHostJob([game, id = item.id, name = item.name, on](Core::System& system) {
+      if (VRPatch::SetPatchEnabled(game, id, on))
+        VRPatch::ApplyPendingNow(system);
+      else
+        VrUi::PostToast(fmt::format("Could not save {}", name), 5000);
+      ++s_mods_changed;
+    });
+    return;
+  }
   const GameMods::List list =
       m_menu.mods_list == 0 ? GameMods::List::Mods : GameMods::List::Textures;
-  const std::string& game = SConfig::GetInstance().GetGameID();
   if (widget.item == MenuItem::ModGet)
   {
     // It looks the mod up in the catalogue's files.
@@ -2864,11 +2878,40 @@ void VrUi::DrawThread()
     }
     if (m_mods_request)
     {
-      const GameMods::List list = *std::exchange(m_mods_request, std::nullopt);
+      const int list = *std::exchange(m_mods_request, std::nullopt);
       lock.unlock();
       const SConfig& config = SConfig::GetInstance();
-      std::vector<GameMods::Item> items =
-          GameMods::GetItems(list, config.GetGameID(), config.GetRevision());
+      std::vector<GameMods::Item> items;
+      if (list == 2)
+      {
+        for (const VRPatch::PatchInfo& patch :
+             VRPatch::ListPatches(config.GetGameID(), config.GetRevision()))
+        {
+          if (!patch.for_this_game)
+            continue;
+          GameMods::Item item;
+          item.id = patch.id;
+          item.name = patch.manifest && !patch.manifest->title.empty() ? patch.manifest->title :
+                                                                         patch.id;
+          if (!patch.status.empty())
+            item.notes = patch.status;
+          else if (!patch.manifest_error.empty())
+            item.notes = patch.manifest_error;
+          else if (patch.manifest)
+            item.notes = patch.manifest->description;
+          item.author = patch.manifest ? patch.manifest->author : "";
+          item.state = patch.enabled ? GameMods::State::On : GameMods::State::Off;
+          item.downloads = false;
+          item.recommended = patch.origin == VRPatch::PatchOrigin::Sys;
+          items.push_back(std::move(item));
+        }
+      }
+      else
+      {
+        const GameMods::List mod_list =
+            list == 0 ? GameMods::List::Mods : GameMods::List::Textures;
+        items = GameMods::GetItems(mod_list, config.GetGameID(), config.GetRevision());
+      }
       lock.lock();
       m_mods.emplace(list, std::move(items));
       continue;

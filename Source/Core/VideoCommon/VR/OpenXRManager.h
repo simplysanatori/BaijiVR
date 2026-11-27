@@ -27,6 +27,7 @@
 
 #include "Common/Matrix.h"
 #include "Common/VR/OpenXRInputState.h"
+#include "VideoCommon/VR/CameraAnchorMath.h"
 #include "VideoCommon/VR/FrameUI/ScreenPlacement.h"
 #include "VideoCommon/VR/FrameUI/ipd_smoother.h"
 #include "VideoCommon/VR/FrameUI/toast_corner.h"
@@ -453,6 +454,23 @@ public:
       std::array<std::array<float, 4>, 4>& out_proj_rows,
       std::array<std::array<float, 4>, 2>& out_z_rows) const;
 
+  // The game camera's pitch from VR::CameraPitch's source (a VR patch that lets the game tilt its
+  // camera while the VR view stays level). Video thread latches it at the first draw of a frame.
+  void LatchGameCameraPitch();
+  float GetGameCameraPitch() const;
+
+  // Changes whenever the inputs of the projection rows above may have changed: a new
+  // LocateViews (including recenters), a session reset or a Camera Anchor commit. Projection
+  // rows built from one generation stay valid until the next. Video thread only.
+  u64 GetPoseGeneration() const { return m_pose_generation; }
+
+  // CPU culling volume of the game-camera rig (same pose as GetEyeProjectionRows): a symmetric
+  // frustum, as four row-major float4 rows (clip = rows * viewPos, x/y against w), that
+  // contains both eyes' frusta plus a small margin. Returns false while no pose is available
+  // or the eyes diverge too far for a single frustum.
+  bool GetHeadCullProjection(float units_per_meter,
+                             std::array<std::array<float, 4>, 4>& out_rows) const;
+
   // ---- Camera Anchor (Elements Group Override "CameraAnchor" handling) ----
   // Anchors the VR camera to a game element's view-space origin (e.g. a character's
   // head for first-person view). Video-thread only, like m_submitted_eye_views.
@@ -472,6 +490,13 @@ public:
   void SetPendingCameraAnchor(float x, float y, float z, const std::array<float, 9>& rotation,
                               float units_per_meter);
   void CommitCameraAnchorFrame();
+  // A VR patch's anchor (VR::CameraAnchorSource), taken when a game frame starts drawing, with the
+  // game camera's pitch. Video thread only.
+  void LatchCameraAnchorSource();
+  bool IsCameraAnchorEngaged() const;
+  bool HasCameraAnchorBoneHide() const { return m_camera_anchor_hide.hide_radius > 0.0f; }
+  // The hide region of the frame's patch anchor (CameraAnchorMath::IsInHideRegion). Video thread.
+  const CameraAnchorMath::Anchor& GetCameraAnchorHide() const { return m_camera_anchor_hide; }
 
   // World scale everything VR-side must use this frame: the active camera anchor's scale while
   // one is engaged (smoothed, so engaging/releasing glides), else the live global setting.
@@ -543,6 +568,17 @@ public:
 private:
   struct PublishedXRFrame;
 
+  // One eye of the camera rig in game view space: eye-local -> view rotation (row-major; its
+  // columns are the eye's axes, the eye looking down -Z), eye position in game units and the
+  // eye's FOV. Shared by the GS projection rows and the CPU culling frustum.
+  struct EyeRig
+  {
+    std::array<std::array<float, 3>, 3> m;
+    std::array<float, 3> e;
+    XrFovf fov;
+  };
+  std::array<EyeRig, 2> ComputeEyeRigs(float units_per_meter, bool apply_game_camera) const;
+
   void GetEyeProjectionRowsImpl(
       float units_per_meter, bool apply_game_camera,
       std::array<std::array<float, 4>, 4>& out_proj_rows,
@@ -572,7 +608,15 @@ private:
   // (reference space) into game view space. Frame/video-thread only.
   bool MapAimPoseToGameView(const Common::VR::OpenXRPoseState& aim, float units_per_meter,
                             std::array<float, 3>* out_position,
-                            std::array<float, 9>* out_rotation) const;
+                            std::array<float, 9>* out_rotation,
+                            bool remove_camera_pitch = true,
+                            bool apply_camera_anchor = true) const;
+  void ComputeViewPose(const Common::VR::OpenXRPoseState& aim,
+                       Common::VR::OpenXRPoseState* out_pose,
+                       bool remove_camera_pitch = true) const;
+  std::array<float, 3> RigAimPosition(const Common::VR::OpenXRPoseState& aim) const;
+  void ComputeRigPose(const Common::VR::OpenXRPoseState& aim,
+                      Common::VR::OpenXRPoseState* out_pose) const;
   // Computes the intersection of the aim ray with the virtual screen (flat panel quad in
   // flat-screen mode, ortho virtual screen otherwise), using the same transform chain the
   // renderer uses to place that screen.
@@ -665,6 +709,15 @@ private:
   float m_camera_anchor_pending_upm = 0.0f;
   float m_camera_anchor_target_upm = 0.0f;
   float m_camera_anchor_upm = 0.0f;
+  // The frame being drawn took a VR patch's anchor (LatchCameraAnchorSource), and its bone hide.
+  bool m_camera_anchor_from_source = false;
+  CameraAnchorMath::Anchor m_camera_anchor_hide;
+  int m_camera_anchor_latches = 0;
+  int m_camera_anchor_latches_behind = 0;
+  int m_camera_anchor_latches_rebased = 0;
+  u64 m_pose_generation = 0;  // Video thread only; see GetPoseGeneration.
+  // LatchGameCameraPitch: read on the video thread, used on the pacing thread too.
+  std::atomic<float> m_game_camera_pitch{0.0f};
 
   // Cached xrGetInstanceProcAddr result for the platform time-conversion function
   // (xrConvertWin32PerformanceCounterToTimeKHR / xrConvertTimespecTimeToTimeKHR).
@@ -804,6 +857,7 @@ private:
   std::array<XrSpace, 2> m_aim_spaces{XR_NULL_HANDLE, XR_NULL_HANDLE};
   std::array<XrSpace, 2> m_grip_spaces{XR_NULL_HANDLE, XR_NULL_HANDLE};
   std::array<bool, 2> m_haptics_active{false, false};
+  std::array<u64, 2> m_haptic_pulse_until_us{0, 0};
   std::array<XrPath, 2> m_logged_interaction_profiles{XR_NULL_PATH, XR_NULL_PATH};
 
   std::array<XrViewConfigurationView, 2> m_view_config_views{};

@@ -15,11 +15,16 @@
 #include "Common/Hash.h"
 #include "Common/Logging/Log.h"
 #include "Core/ConfigLoaders/GameConfigLoader.h"
+#include "VideoCommon/ConstantManager.h"
+#include "VideoCommon/DrawDepth.h"
 #include "VideoCommon/GeometryShaderGen.h"
 #include "VideoCommon/PixelShaderGen.h"
 #include "VideoCommon/ShaderGenCommon.h"
+#include "VideoCommon/VR/OverrideSuppression.h"
+#include "VideoCommon/VR/PatchFlags.h"
 #include "VideoCommon/VertexShaderGen.h"
 #include "VideoCommon/VideoConfig.h"
+#include "VideoCommon/XFMemory.h"
 
 namespace
 {
@@ -90,6 +95,13 @@ u64 ComputeVertexFamilySignature(const vertex_shader_uid_data& uid)
 {
   u64 signature = FAMILY_HASH_OFFSET;
 
+  // Game-derived vertex configuration only. Deliberately excluded so signatures survive shader
+  // updates and match across devices: code_version (bumped on every generator change), vs_expand
+  // (backend capability, differs between PC and Quest), and lighting.light_mask (scene-variant as
+  // games toggle lights at runtime).
+  //
+  // Upstream repacked vertex_shader_uid_data (PR 14789: 28 bytes, per-texgen union, UV presence
+  // folded into texcoord_elem_count). Family signatures are persisted in VR profiles
   // Game-derived vertex configuration only. Deliberately excluded so signatures survive shader
   // updates and match across devices: code_version (bumped on every generator change), vs_expand
   // (backend capability, differs between PC and Quest), and lighting.light_mask (scene-variant as
@@ -211,6 +223,27 @@ u64 ShaderHunter::RegisterShader(ShaderType type, u64 hash, const u8* uid_data, 
   const u64 family_signature = ComputeShaderFamilySignature(type, uid_data, uid_size);
 
   std::lock_guard lock(m_mutex);
+  RegisterShaderLocked(type, hash, family_signature, uid_data, uid_size);
+  return family_signature;
+}
+
+u64 ShaderHunter::ComputeFamilySignature(ShaderType type, const u8* uid_data, size_t uid_size)
+{
+  return ComputeShaderFamilySignature(type, uid_data, uid_size);
+}
+
+void ShaderHunter::RegisterDrawShaders(const DrawShaderInfo& vs, const DrawShaderInfo& ps,
+                                       const DrawShaderInfo& gs)
+{
+  std::lock_guard lock(m_mutex);
+  RegisterShaderLocked(ShaderType::Vertex, vs.hash, vs.family, vs.uid_data, vs.uid_size);
+  RegisterShaderLocked(ShaderType::Pixel, ps.hash, ps.family, ps.uid_data, ps.uid_size);
+  RegisterShaderLocked(ShaderType::Geometry, gs.hash, gs.family, gs.uid_data, gs.uid_size);
+}
+
+void ShaderHunter::RegisterShaderLocked(ShaderType type, u64 hash, u64 family_signature,
+                                        const u8* uid_data, size_t uid_size)
+{
   const int t = static_cast<int>(type);
   if (hash != 0 && family_signature != 0)
     m_shader_family_signatures[t][hash] = family_signature;
@@ -221,8 +254,6 @@ u64 ShaderHunter::RegisterShader(ShaderType type, u64 hash, const u8* uid_data, 
   // Cache UID bytes for later shader source regeneration (dump)
   if (m_enabled && m_uid_cache[t].find(hash) == m_uid_cache[t].end() && uid_data && uid_size > 0)
     m_uid_cache[t][hash] = std::vector<u8>(uid_data, uid_data + uid_size);
-
-  return family_signature;
 }
 
 std::optional<u64> ShaderHunter::GetShaderFamilySignature(ShaderType type, u64 hash) const
@@ -295,6 +326,29 @@ void ShaderHunter::OnFrameEnd()
   for (const auto& flag : m_flags_seen_this_frame)
     m_flag_age[flag] = 0;
   m_flags_seen_this_frame.clear();
+
+  // Flags raised by VR game patches (the game's state read from memory): the published set,
+  // active until the patch lowers them. Kept apart from the draw flags, which list re-applies
+  // clear.
+  const u64 patch_flags_generation = VR::PatchFlags::GetGeneration();
+  if (patch_flags_generation != m_patch_flags_generation)
+  {
+    m_patch_flags_generation = patch_flags_generation;
+    std::unordered_set<std::string> flags;
+    for (std::string& flag : VR::PatchFlags::Snapshot())
+      flags.insert(std::move(flag));
+    for (const auto& flag : flags)
+    {
+      if (!m_patch_flags.contains(flag))
+        INFO_LOG_FMT(VIDEO, "ShaderHunter: Flag '{}' raised by a VR patch", flag);
+    }
+    for (const auto& flag : m_patch_flags)
+    {
+      if (!flags.contains(flag))
+        INFO_LOG_FMT(VIDEO, "ShaderHunter: Flag '{}' lowered by a VR patch", flag);
+    }
+    m_patch_flags = std::move(flags);
+  }
 
   // Clear debug logging per-frame dedup set
   m_debug_logged_combos.clear();
@@ -869,14 +923,14 @@ LoadShaderOverridesFromINIFile(const std::string& path)
       if (!line.empty() && line.back() == '\r')
         line.pop_back();
 
-      if (line == "[ShaderOverride_Enable]")
+      // Read every copy of the section: a code pasted with its header in the VR Config editor can
+      // add one after the other sections.
+      if (!line.empty() && line[0] == '[')
       {
-        in_section = true;
-        parsed.has_enable_section = true;
+        in_section = line == "[ShaderOverride_Enable]";
+        parsed.has_enable_section |= in_section;
         continue;
       }
-      if (in_section && !line.empty() && line[0] == '[')
-        break;
       if (!in_section || line.empty())
         continue;
       if (line[0] == '$')
@@ -913,13 +967,13 @@ LoadShaderOverridesFromINIFile(const std::string& path)
     if (!line.empty() && line.back() == '\r')
       line.pop_back();
 
-    if (line == "[ShaderOverride]")
+    if (!line.empty() && line[0] == '[')
     {
-      in_section = true;
+      commit_entry();
+      has_entry = false;
+      in_section = line == "[ShaderOverride]";
       continue;
     }
-    if (in_section && !line.empty() && line[0] == '[')
-      break;
     if (!in_section || line.empty())
       continue;
 
@@ -990,6 +1044,14 @@ LoadShaderOverridesFromINIFile(const std::string& path)
       else if (key == "element_depth")
       {
         current.element_depth = std::stof(value);
+      }
+      else if (key == "min_depth")
+      {
+        current.min_depth = std::stof(value);
+      }
+      else if (key == "max_depth")
+      {
+        current.max_depth = std::stof(value);
       }
       else if (key == "units_per_meter" || key == "upm")
       {
@@ -1157,10 +1219,16 @@ static void MergeParsedShaderOverrideFile(std::vector<ShaderHunter::ShaderOverri
     }
   }
 
+  // The entries of this file already follow its enable list. The list only turns on the overrides
+  // of earlier files: a user file saved before an override shipped in Sys does not list it, and
+  // must not turn it off.
   if (parsed.has_enable_section)
   {
     for (auto& entry : *result)
-      entry.enabled = parsed.enabled_names.count(entry.name) > 0;
+    {
+      if (parsed.enabled_names.contains(entry.name))
+        entry.enabled = true;
+    }
   }
 }
 
@@ -1170,17 +1238,34 @@ ShaderHunter::LoadOverridesFromINI(const std::string& game_id, std::optional<u16
   if (game_id.empty())
     return {};
 
+  std::vector<std::string> sys_paths;
+  std::vector<std::string> user_paths;
+  for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(game_id, revision))
+  {
+    sys_paths.push_back(GetSysVRGameSettingsPath(filename));
+    user_paths.push_back(File::GetUserPath(D_GAMESETTINGSVR_IDX) + filename);
+  }
+  return LoadOverridesFromINIFiles(sys_paths, user_paths);
+}
+
+std::vector<ShaderHunter::ShaderOverride>
+ShaderHunter::LoadOverridesFromINIFiles(const std::vector<std::string>& sys_paths,
+                                        const std::vector<std::string>& user_paths)
+{
   std::vector<ShaderOverride> result;
   std::map<std::string, size_t> index_by_name;
 
-  for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(game_id, revision))
-    MergeParsedShaderOverrideFile(&result, &index_by_name,
-                                  LoadShaderOverridesFromINIFile(GetSysVRGameSettingsPath(filename)));
+  for (const std::string& path : sys_paths)
+    MergeParsedShaderOverrideFile(&result, &index_by_name, LoadShaderOverridesFromINIFile(path));
+  const std::map<std::string, size_t> sys_names = index_by_name;
 
-  for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(game_id, revision))
-    MergeParsedShaderOverrideFile(
-        &result, &index_by_name,
-        LoadShaderOverridesFromINIFile(File::GetUserPath(D_GAMESETTINGSVR_IDX) + filename));
+  for (const std::string& path : user_paths)
+    MergeParsedShaderOverrideFile(&result, &index_by_name, LoadShaderOverridesFromINIFile(path));
+
+  // An override that ships in Sys comes back on every load, even if the user's file (which saves
+  // every override) drops or renames it.
+  for (ShaderOverride& entry : result)
+    entry.user_defined = !sys_names.contains(entry.name);
 
   return result;
 }
@@ -1241,6 +1326,10 @@ void ShaderHunter::SaveOverridesToINI(const std::string& game_id,
     out << "handling=" << handling_str << "\n";
     if (ovr.element_depth >= 0.0f)
       out << "element_depth=" << ovr.element_depth << "\n";
+    if (ovr.min_depth > 0.0f)
+      out << "min_depth=" << ovr.min_depth << "\n";
+    if (ovr.max_depth > 0.0f)
+      out << "max_depth=" << ovr.max_depth << "\n";
     if (ovr.handling == HandlingType::UnitsPerMeter && ovr.units_per_meter > 0.0f)
       out << "units_per_meter=" << ovr.units_per_meter << "\n";
     if (ovr.handling == HandlingType::Passthrough)
@@ -1313,7 +1402,19 @@ void ShaderHunter::SaveOverridesToINI(const std::string& game_id,
 // Runtime override management
 // ============================================================================
 
+std::vector<ShaderHunter::ShaderOverride>
+ShaderHunter::LoadOverridesFromINIFile(const std::string& path)
+{
+  return LoadShaderOverridesFromINIFile(path).entries;
+}
+
 void ShaderHunter::LoadOverrides(const std::string& game_id)
+{
+  ApplyOverrideList(game_id, game_id.empty() ? std::vector<ShaderOverride>{} :
+                                               LoadOverridesFromINI(game_id));
+}
+
+void ShaderHunter::ApplyOverrideList(const std::string& game_id, std::vector<ShaderOverride> all)
 {
   std::lock_guard lock(m_mutex);
 
@@ -1336,24 +1437,33 @@ void ShaderHunter::LoadOverrides(const std::string& game_id)
   m_all_override_hashes.clear();
   m_has_texture_overrides = false;
   m_loaded_game_id = game_id;
+  m_applied_overrides = all;
+  m_suppression_generation = VR::OverrideSuppression::GetGeneration();
   m_has_overrides.store(false, std::memory_order_relaxed);
+  m_has_controller_anchor_overrides.store(false, std::memory_order_relaxed);
   m_needs_shader_family_signatures.store(false, std::memory_order_relaxed);
   m_needs_texture_hashes.store(false, std::memory_order_relaxed);
 
   if (game_id.empty())
     return;
 
-  auto all = LoadOverridesFromINI(game_id);
   bool has_overrides = false;
+  bool has_controller_anchor_overrides = false;
   bool needs_shader_family_signatures = false;
   bool needs_texture_hashes = false;
 
   for (auto& ovr : all)
   {
-    if (!ovr.enabled)
+    if (!ovr.enabled ||
+        VR::OverrideSuppression::IsSuppressed(VR::OverrideSuppression::Kind::Shader, ovr.name))
+    {
       continue;
+    }
 
     has_overrides = true;
+    // Conditional entries included: they are not in m_controller_anchors.
+    if (ovr.handling == HandlingType::ControllerAnchor)
+      has_controller_anchor_overrides = true;
     if (ovr.hash_family_match)
       needs_shader_family_signatures = true;
     if (!ovr.texture_hashes.empty())
@@ -1364,7 +1474,7 @@ void ShaderHunter::LoadOverrides(const std::string& game_id)
     if (!ovr.flag_group.empty())
       m_flag_rules.push_back({ovr.type, ovr.hash, ovr.hash_family_match, ovr.family_signature,
                               ovr.family_version, ovr.flag_group, ovr.texture_hashes,
-                              ovr.texture_hashes_excluded});
+                              ovr.texture_hashes_excluded, ovr.min_depth, ovr.max_depth});
 
     // Flag-only overrides: just set the flag, render normally (no handling change)
     if (ovr.handling == HandlingType::Flag)
@@ -1373,8 +1483,9 @@ void ShaderHunter::LoadOverrides(const std::string& game_id)
       continue;
     }
 
-    // Conditional or texture-conditioned overrides: store separately
-    if (!ovr.condition_flag.empty() || !ovr.texture_hashes.empty() || ovr.hash_family_match)
+    // Conditional, texture- or depth-conditioned overrides: store separately
+    if (!ovr.condition_flag.empty() || !ovr.texture_hashes.empty() || ovr.hash_family_match ||
+        ovr.min_depth > 0.0f || ovr.max_depth > 0.0f)
     {
       if (!ovr.texture_hashes.empty())
         m_has_texture_overrides = true;
@@ -1382,7 +1493,8 @@ void ShaderHunter::LoadOverrides(const std::string& game_id)
           {ovr.hash, ovr.handling, ovr.type, ovr.element_depth, ovr.units_per_meter,
            ovr.passthrough_opacity, MakeCameraAnchorParams(ovr), MakeControllerAnchorParams(ovr),
            ovr.texture_hashes, ovr.texture_hashes_excluded, ovr.hash_family_match,
-           ovr.family_signature, ovr.family_version, ovr.condition_flag, ovr.condition_inverted});
+           ovr.family_signature, ovr.family_version, ovr.condition_flag, ovr.condition_inverted,
+           ovr.min_depth, ovr.max_depth});
       m_overrides.push_back(std::move(ovr));
       continue;
     }
@@ -1443,6 +1555,8 @@ void ShaderHunter::LoadOverrides(const std::string& game_id)
   }
 
   m_has_overrides.store(has_overrides, std::memory_order_relaxed);
+  m_has_controller_anchor_overrides.store(has_controller_anchor_overrides,
+                                          std::memory_order_relaxed);
   m_needs_shader_family_signatures.store(needs_shader_family_signatures,
                                          std::memory_order_relaxed);
   m_needs_texture_hashes.store(needs_texture_hashes, std::memory_order_relaxed);
@@ -1457,7 +1571,19 @@ void ShaderHunter::LoadOverrides(const std::string& game_id)
 void ShaderHunter::LoadOverridesIfNeeded(const std::string& game_id)
 {
   if (game_id == m_loaded_game_id)
+  {
+    // A VR patch started or stopped suppressing overrides: activate the same list again.
+    if (m_suppression_generation != VR::OverrideSuppression::GetGeneration())
+    {
+      std::vector<ShaderOverride> all;
+      {
+        std::lock_guard lock(m_mutex);
+        all = m_applied_overrides;
+      }
+      ApplyOverrideList(game_id, std::move(all));
+    }
     return;
+  }
   LoadOverrides(game_id);
 }
 
@@ -1514,6 +1640,11 @@ void ShaderHunter::AddAndSaveOverride(const std::string& game_id, const std::str
 bool ShaderHunter::HasOverrides() const
 {
   return m_has_overrides.load(std::memory_order_relaxed);
+}
+
+bool ShaderHunter::HasControllerAnchorOverrides() const
+{
+  return m_has_controller_anchor_overrides.load(std::memory_order_relaxed);
 }
 
 bool ShaderHunter::NeedsShaderFamilySignatures() const
@@ -1585,6 +1716,8 @@ void ShaderHunter::RegisterFlags(u64 vs_hash, u64 ps_hash, u64 gs_hash)
     {
       continue;
     }
+    if (!DrawPassesDepthConstraints(m_current_draw_depth, rule.min_depth, rule.max_depth))
+      continue;
     m_flags_seen_this_frame.insert(rule.flag_group);
   }
 }
@@ -1601,7 +1734,19 @@ bool ShaderHunter::IsFlagActive(const std::string& flag_name) const
   std::lock_guard lock(m_mutex);
   if (flag_name.empty())
     return false;
-  return m_flag_age.find(flag_name) != m_flag_age.end();
+  return IsFlagActiveLocked(flag_name);
+}
+
+bool ShaderHunter::IsFlagActiveLocked(const std::string& flag_name) const
+{
+  return m_flag_age.contains(flag_name) || m_patch_flags.contains(flag_name);
+}
+
+std::vector<std::string> ShaderHunter::GetActivePatchFlags() const
+{
+  std::vector<std::string> flags(m_patch_flags.begin(), m_patch_flags.end());
+  std::ranges::sort(flags);
+  return flags;
 }
 
 std::vector<ShaderHunter::FlagStatus> ShaderHunter::GetFlagStatusesForOSD() const
@@ -1614,6 +1759,7 @@ std::vector<ShaderHunter::FlagStatus> ShaderHunter::GetFlagStatusesForOSD() cons
   }
   for (const auto& [flag_name, _] : m_flag_age)
     known_flags.insert(flag_name);
+  known_flags.insert(m_patch_flags.begin(), m_patch_flags.end());
   for (const auto& ovr : m_overrides)
   {
     if (!ovr.condition_flag.empty())
@@ -1626,7 +1772,7 @@ std::vector<ShaderHunter::FlagStatus> ShaderHunter::GetFlagStatusesForOSD() cons
   {
     FlagStatus status;
     status.flag_name = flag_name;
-    status.is_active = m_flag_age.find(flag_name) != m_flag_age.end() ||
+    status.is_active = IsFlagActiveLocked(flag_name) ||
                        m_flags_seen_this_frame.find(flag_name) != m_flags_seen_this_frame.end();
 
     std::unordered_set<std::string> seen_names;
@@ -1690,7 +1836,7 @@ bool ShaderHunter::IsConditionFlagMatch(const ConditionalOverride& cond) const
   if (cond.condition_flag.empty())
     return true;
 
-  const bool is_active = m_flag_age.count(cond.condition_flag) > 0;
+  const bool is_active = IsFlagActiveLocked(cond.condition_flag);
   return cond.condition_inverted ? !is_active : is_active;
 }
 
@@ -1838,6 +1984,8 @@ bool ShaderHunter::ShouldSkipByOverride(u64 vs_hash, u64 ps_hash, u64 gs_hash) c
     if (!DoesTextureFilterPass(m_current_draw_textures, cond.texture_hashes,
                                cond.texture_hashes_excluded))
       continue;
+    if (!DrawPassesDepthConstraints(m_current_draw_depth, cond.min_depth, cond.max_depth))
+      continue;
     if (m_debug_logging)
     {
       const u64 combo = vs_hash ^ (ps_hash * 0x9e3779b97f4a7c15ULL);
@@ -1926,6 +2074,8 @@ ShaderHunter::HandlingType ShaderHunter::GetOverrideHandling(u64 vs_hash, u64 ps
       if (!DoesTextureFilterPass(m_current_draw_textures, cond.texture_hashes,
                                  cond.texture_hashes_excluded))
         continue;
+      if (!DrawPassesDepthConstraints(m_current_draw_depth, cond.min_depth, cond.max_depth))
+        continue;
       result = cond.handling;
       handling_name = cond.handling == HandlingType::Screen      ? "Screen(conditional)" :
                       cond.handling == HandlingType::Fullscreen ||
@@ -1984,6 +2134,8 @@ float ShaderHunter::GetOverrideElementDepth(u64 vs_hash, u64 ps_hash, u64 gs_has
     if (!DoesTextureFilterPass(m_current_draw_textures, cond.texture_hashes,
                                cond.texture_hashes_excluded))
       continue;
+    if (!DrawPassesDepthConstraints(m_current_draw_depth, cond.min_depth, cond.max_depth))
+      continue;
     return cond.element_depth;
   }
   return -1.0f;  // use global
@@ -2013,6 +2165,8 @@ float ShaderHunter::GetOverrideUnitsPerMeter(u64 vs_hash, u64 ps_hash, u64 gs_ha
       continue;
     if (!DoesTextureFilterPass(m_current_draw_textures, cond.texture_hashes,
                                cond.texture_hashes_excluded))
+      continue;
+    if (!DrawPassesDepthConstraints(m_current_draw_depth, cond.min_depth, cond.max_depth))
       continue;
     return cond.units_per_meter;
   }
@@ -2044,6 +2198,8 @@ float ShaderHunter::GetOverridePassthroughOpacity(u64 vs_hash, u64 ps_hash, u64 
       continue;
     if (!DoesTextureFilterPass(m_current_draw_textures, cond.texture_hashes,
                                cond.texture_hashes_excluded))
+      continue;
+    if (!DrawPassesDepthConstraints(m_current_draw_depth, cond.min_depth, cond.max_depth))
       continue;
     return std::clamp(cond.passthrough_opacity, 0.0f, 1.0f);
   }
@@ -2080,6 +2236,8 @@ bool ShaderHunter::GetOverrideControllerAnchor(u64 vs_hash, u64 ps_hash, u64 gs_
     if (!DoesTextureFilterPass(m_current_draw_textures, cond.texture_hashes,
                                cond.texture_hashes_excluded))
       continue;
+    if (!DrawPassesDepthConstraints(m_current_draw_depth, cond.min_depth, cond.max_depth))
+      continue;
     *out_params = cond.controller_anchor;
     return true;
   }
@@ -2115,6 +2273,8 @@ bool ShaderHunter::GetOverrideCameraAnchor(u64 vs_hash, u64 ps_hash, u64 gs_hash
       continue;
     if (!DoesTextureFilterPass(m_current_draw_textures, cond.texture_hashes,
                                cond.texture_hashes_excluded))
+      continue;
+    if (!DrawPassesDepthConstraints(m_current_draw_depth, cond.min_depth, cond.max_depth))
       continue;
     *out_params = cond.anchor;
     return true;
@@ -2404,7 +2564,10 @@ ShaderHunter::GetSelectedRuntimeElementSignature() const
   return m_selected_draw_signature;
 }
 
-bool ShaderHunter::SaveSelectedShaderOverride(const std::string& game_id, HandlingType handling)
+std::optional<std::string> ShaderHunter::SaveSelectedShaderOverride(const std::string& game_id,
+                                                                    HandlingType handling,
+                                                                    float units_per_meter,
+                                                                    const std::string& name)
 {
   ShaderType type = ShaderType::Pixel;
   MatchMode match_mode = MatchMode::ShaderFamily;
@@ -2415,7 +2578,7 @@ bool ShaderHunter::SaveSelectedShaderOverride(const std::string& game_id, Handli
     std::lock_guard lock(m_mutex);
     const int t = static_cast<int>(m_active_type);
     if (game_id.empty() || m_selected_pos[t] < 0 || m_selected_hash[t] == ~0ULL)
-      return false;
+      return std::nullopt;
 
     type = m_active_type;
     match_mode = m_hunting_match_mode;
@@ -2425,12 +2588,21 @@ bool ShaderHunter::SaveSelectedShaderOverride(const std::string& game_id, Handli
 
   const auto family_signature = GetShaderFamilySignature(type, hash);
   if (match_mode == MatchMode::ShaderFamily && !family_signature.has_value())
-    return false;
+    return std::nullopt;
 
   auto all = LoadOverridesFromINI(game_id);
 
   ShaderOverride entry;
-  entry.name = fmt::format("Shader {:08x}", static_cast<u32>(hash));
+  const std::string base_name =
+      name.empty() ? fmt::format("Shader {:08x}", static_cast<u32>(hash)) : name;
+  entry.name = base_name;
+  for (int number = 2;; ++number)
+  {
+    const auto same_name = std::ranges::find(all, entry.name, &ShaderOverride::name);
+    if (same_name == all.end() || (same_name->type == type && same_name->hash == hash))
+      break;
+    entry.name = fmt::format("{} {}", base_name, number);
+  }
   entry.hash = hash;
   entry.type = type;
   entry.handling = handling;
@@ -2446,12 +2618,28 @@ bool ShaderHunter::SaveSelectedShaderOverride(const std::string& game_id, Handli
   if (handling == HandlingType::Flag)
     entry.flag_group = entry.name;
   if (handling == HandlingType::UnitsPerMeter)
-    entry.units_per_meter = g_Config.vr_units_per_meter;
+  {
+    entry.units_per_meter =
+        units_per_meter > 0.0f ? units_per_meter : g_Config.vr_units_per_meter;
+  }
   if (texture_hash != 0)
     entry.texture_hashes.push_back(texture_hash);
 
-  all.push_back(entry);
+  // Saving the same shader under its name again changes its override. (A duplicate name would
+  // load as the last entry anyway.)
+  const auto existing = std::ranges::find(all, entry.name, &ShaderOverride::name);
+  if (existing != all.end())
+  {
+    // The hunter cannot capture a depth limit: keep the one the entry had.
+    entry.min_depth = existing->min_depth;
+    entry.max_depth = existing->max_depth;
+    *existing = entry;
+  }
+  else
+  {
+    all.push_back(entry);
+  }
   SaveOverridesToINI(game_id, all);
   LoadOverrides(game_id);
-  return true;
+  return entry.name;
 }

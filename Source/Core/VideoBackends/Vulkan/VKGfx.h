@@ -10,7 +10,9 @@
 #include <utility>
 
 #include "Common/CommonTypes.h"
+#include "Common/HookableEvent.h"
 #include "VideoBackends/Vulkan/Constants.h"
+#include "VideoBackends/Vulkan/VKRecordingWorker.h"
 #include "VideoCommon/AbstractGfx.h"
 #include "VideoCommon/Constants.h"
 
@@ -63,6 +65,7 @@ public:
                    bool z_enable, u32 color, u32 z) override;
   bool ClearAdditionalColorAttachments(const MathUtil::Rectangle<int>& target_rc,
                                        u32 color) override;
+  void SkipFrameForVRFoveation() override;
 
   void SetPipeline(const AbstractPipeline* pipeline) override;
   void SetForcePixelShader(const AbstractShader* shader) override;
@@ -92,6 +95,33 @@ public:
   // next render. Use when you want to kick the current buffer to make room for new data.
   void ExecuteCommandBuffer(bool execute_off_thread, bool wait_for_completion = false);
 
+  // Recording worker (see VKRecordingWorker.h). Queued commands cover state binding, render
+  // pass management, draws, clears and compute dispatches; everything else drains first and
+  // then runs on the video thread.
+  bool HasRecordingWorker() const { return m_recording_worker != nullptr; }
+  void DrainRecordingWorker();
+  // Runs one queued command. Called by the worker thread, or directly when there is no worker.
+  void ExecuteRecordCommand(const RecordCommand& command);
+
+  // State-tracker bindings issued by the vertex manager; queued when the worker is active.
+  void RecordSetVertexBuffer(VkBuffer buffer, VkDeviceSize offset, u32 size);
+  void RecordSetIndexBuffer(VkBuffer buffer, VkDeviceSize offset, VkIndexType type);
+  void RecordSetGXUniformBuffer(u32 binding, VkBuffer buffer, u32 offset, u32 size);
+  void RecordSetUtilityUniformBuffer(VkBuffer buffer, u32 offset, u32 size);
+  void RecordSetTexelBuffer(u32 index, VkBufferView view);
+  // Transitions a render target back to shader-read layout once its pass is done. Called for
+  // every bound texture on every draw, so it must stay queued rather than drain.
+  void RecordFinishedRendering(const VKTexture* texture);
+  // Texture-to-staging readback copy (VKStagingTexture::CopyFromTexture). Queued in order with
+  // the draws that produced the source, so EFB peeks and EFB copies to RAM do not drain the
+  // worker; the copy lands in the current command buffer since the worker never submits.
+  void RecordStagingCopyFromTexture(const RecordCommand::StagingCopyFromTextureCmd& copy);
+  // Occlusion query commands of the perf query emulation. Games that use it (Super Mario
+  // Sunshine) bracket every draw with a query, so these must stay queued rather than drain.
+  void RecordBeginQuery(VkQueryPool pool, u32 query, VkQueryControlFlags flags);
+  void RecordEndQuery(VkQueryPool pool, u32 query);
+  void RecordResetQueryPool(VkQueryPool pool, u32 first, u32 count);
+
 private:
   void CheckForSurfaceChange();
   void CheckForSurfaceResize();
@@ -99,7 +129,26 @@ private:
   void ResetSamplerStates();
 
   void OnSwapChainResized();
-  void BindFramebuffer(VKFramebuffer* fb);
+
+  // Queues the command on the worker, or executes it immediately without one. Any pending
+  // uniform bindings are recorded first so they precede the command that uses them.
+  void Record(const RecordCommand& command);
+  void Dispatch(const RecordCommand& command);
+  void FlushPendingGXUniformBuffers();
+  void RecordSetPipeline(const VKPipeline* pipeline);
+
+  // Direct implementations: run on whichever thread currently owns recording.
+  void SetTextureDirect(u32 index, const VKTexture* texture);
+  void BindFramebufferDirect(VKFramebuffer* fb, FramebufferBindMode mode,
+                             const VkClearValue& color_value, const VkClearValue& depth_value);
+  void ClearRegionDirect(const RecordCommand::ClearRegionCmd& clear);
+  void ClearAdditionalColorAttachmentsDirect(
+      const RecordCommand::ClearAdditionalColorAttachmentsCmd& clear);
+  void DrawDirect(u32 base_vertex, u32 num_vertices);
+  void DrawIndexedDirect(u32 base_index, u32 num_indices, u32 base_vertex);
+  void SetComputeImageTextureDirect(u32 index, VKTexture* texture, bool read, bool write);
+  void DispatchComputeShaderDirect(const VKShader* shader, u32 groups_x, u32 groups_y,
+                                   u32 groups_z);
 
   void ClearForcedPipelines();
 
@@ -116,5 +165,29 @@ private:
 
   // Keep a copy of sampler states to avoid cache lookups every draw
   std::array<SamplerState, VideoCommon::MAX_PIXEL_SHADER_SAMPLERS> m_sampler_states = {};
+
+  // Video-thread mirrors of state the tracker would ignore anyway, so unchanged values never
+  // become queued commands. Valid because every change to that tracker state goes through here.
+  const VKPipeline* m_last_recorded_pipeline = nullptr;
+  VkViewport m_last_recorded_viewport = {};
+  VkRect2D m_last_recorded_scissor = {};
+  bool m_viewport_recorded = false;
+  bool m_scissor_recorded = false;
+  VkBuffer m_last_recorded_vertex_buffer = VK_NULL_HANDLE;
+  VkDeviceSize m_last_recorded_vertex_offset = 0;
+  u32 m_last_recorded_vertex_size = 0;
+  VkBuffer m_last_recorded_index_buffer = VK_NULL_HANDLE;
+  VkDeviceSize m_last_recorded_index_offset = 0;
+  VkIndexType m_last_recorded_index_type = VK_INDEX_TYPE_UINT16;
+  bool m_index_buffer_recorded = false;
+
+  // GX uniform bindings arrive per stage but are recorded as one command per draw.
+  RecordCommand::SetGXUniformBuffersCmd m_pending_gx_uniforms = {};
+
+  // Frame boundary for selective EFB foveation, recorded in order with the passes.
+  Common::EventHook m_efb_frame_end_event;
+
+  // Declared last so it drains and joins before any state above is destroyed.
+  std::unique_ptr<RecordingWorker> m_recording_worker;
 };
 }  // namespace Vulkan

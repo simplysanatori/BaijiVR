@@ -96,6 +96,9 @@ extern const Info<bool> GFX_DISABLE_FOG;
 extern const Info<bool> GFX_BORDERLESS_FULLSCREEN;
 extern const Info<bool> GFX_ENABLE_VALIDATION_LAYER;
 extern const Info<bool> GFX_BACKEND_MULTITHREADING;
+// Vulkan only: record state binds and draws on a helper thread (see VKRecordingWorker.h).
+// Read when the backend starts; changing it needs a backend restart.
+extern const Info<bool> GFX_VULKAN_RECORDING_WORKER;
 extern const Info<int> GFX_COMMAND_BUFFER_EXECUTE_INTERVAL;
 // Depth of the backend's command list/buffer ring (D3D12 command lists, Vulkan command
 // buffers). Read once at device init, so a change applies on the next emulation start.
@@ -226,7 +229,13 @@ extern const Info<int> GFX_VR_STATS_POSITION;
 extern const Info<float> GFX_VR_HEAD_LOCKED_CURVATURE;
 extern const Info<bool> GFX_VR_DONT_CLEAR_SCREEN;
 extern const Info<bool> GFX_VR_LOAD_CUSTOM_SHADERS;
-extern const Info<bool> GFX_VR_DISABLE_CPU_CULL;
+extern const Info<bool> GFX_VR_HEAD_CPU_CULL;
+extern const Info<float> GFX_VR_WIIMOTE_MOTION_PITCH;
+extern const Info<int> GFX_VR_GAZE_RAM_COPIES;
+static constexpr int GFX_VR_GAZE_RAM_COPIES_OFF = 0;
+static constexpr int GFX_VR_GAZE_RAM_COPIES_HEAD = 1;
+static constexpr int GFX_VR_GAZE_RAM_COPIES_VIEW = 2;
+extern const Info<bool> GFX_VR_PER_EYE_SCREEN_COPIES;
 extern const Info<OpenXRMirrorView> GFX_VR_MIRROR_VIEW;
 extern const Info<OpenXRReferenceSpaceMode> GFX_VR_REFERENCE_SPACE_MODE;
 extern const Info<OpenXRTrackingMode> GFX_VR_TRACKING_MODE;
@@ -267,6 +276,7 @@ extern const Info<bool> GFX_VR_PANES_ON_SCREEN;
 extern const Info<bool> GFX_VR_DETECT_RENDER_TARGETS;
 extern const Info<bool> GFX_VR_ORTHO_SCISSOR_FIX;
 extern const Info<bool> GFX_VR_DETECT_SKYBOX;
+extern const Info<bool> GFX_VR_SKIP_BACKGROUND_FILL;
 extern const Info<bool> GFX_VR_METROID_THERMAL_VISOR_FIX;
 extern const Info<bool> GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX;
 extern const Info<bool> GFX_VR_PASSTHROUGH;
@@ -309,6 +319,10 @@ static constexpr int GFX_VR_FORCED_VBI_FREQUENCY_OFF = 0;
 static constexpr int GFX_VR_FORCED_VBI_FREQUENCY_72 = 72;
 static constexpr int GFX_VR_FORCED_VBI_FREQUENCY_90 = 90;
 static constexpr int GFX_VR_FORCED_VBI_FREQUENCY_120 = 120;
+// The UIs offer 72/90/120; a profile or a VR patch can ask for any rate in this range (a patch
+// that sets a game's frame rate to the headset's: 80 or 144 Hz).
+static constexpr int GFX_VR_FORCED_VBI_FREQUENCY_MIN = 30;
+static constexpr int GFX_VR_FORCED_VBI_FREQUENCY_MAX = 240;
 static constexpr int GFX_VR_REQUESTED_REFRESH_RATE_AUTO = 0;
 static constexpr int GFX_VR_REQUESTED_REFRESH_RATE_60 = 60;
 static constexpr int GFX_VR_REQUESTED_REFRESH_RATE_72 = 72;
@@ -323,16 +337,13 @@ static constexpr float GFX_VR_GAMMA_STEP = 0.1f;
 
 inline int NormalizeVRForcedVBIFrequency(int frequency)
 {
-  switch (frequency)
+  if (frequency == GFX_VR_FORCED_VBI_FREQUENCY_AUTO ||
+      (frequency >= GFX_VR_FORCED_VBI_FREQUENCY_MIN &&
+       frequency <= GFX_VR_FORCED_VBI_FREQUENCY_MAX))
   {
-  case GFX_VR_FORCED_VBI_FREQUENCY_AUTO:
-  case GFX_VR_FORCED_VBI_FREQUENCY_72:
-  case GFX_VR_FORCED_VBI_FREQUENCY_90:
-  case GFX_VR_FORCED_VBI_FREQUENCY_120:
     return frequency;
-  default:
-    return GFX_VR_FORCED_VBI_FREQUENCY_OFF;
   }
+  return GFX_VR_FORCED_VBI_FREQUENCY_OFF;
 }
 
 inline int ChooseClosestVRForcedVBIFrequency(float refresh_rate_hz)

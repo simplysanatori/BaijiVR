@@ -320,6 +320,11 @@ int PinCurrentThreadToPerformanceCore(ThreadCoreRole role)
     // 3rd fast core — inside that set, and off the EmuCPU/EmuVideo cores (top two).
     slot = 2;
     break;
+  case ThreadCoreRole::VideoRecording:
+    // Pure recording work: a fourth fast core when the device has one, otherwise it wraps
+    // onto the EmuCPU core. A rejected pin just leaves the thread unpinned.
+    slot = 3;
+    break;
   }
   const int count = static_cast<int>(s_performance_cores.size());
   const int core = s_performance_cores[count - 1 - (slot % count)];
@@ -408,6 +413,7 @@ int PinCurrentThreadToPerformanceCore(ThreadCoreRole role)
     break;
   case ThreadCoreRole::VRPacing:
   case ThreadCoreRole::VRSubmit:
+  case ThreadCoreRole::VideoRecording:
     core = s_plan.selection.light;
     break;
   }

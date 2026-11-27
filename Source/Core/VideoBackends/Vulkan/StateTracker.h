@@ -9,10 +9,12 @@
 
 #include "Common/CommonTypes.h"
 #include "VideoBackends/Vulkan/Constants.h"
+#include "VideoBackends/Vulkan/SamplerDescriptorSetCache.h"
 #include "VideoCommon/Constants.h"
 
 namespace Vulkan
 {
+class EFBFoveationScheduler;
 class VKFramebuffer;
 class VKShader;
 class VKPipeline;
@@ -46,9 +48,16 @@ public:
   void SetImageTexture(u32 index, VkImageView view);
 
   void UnbindTexture(VkImageView view);
+  // The view is about to be destroyed: unbind it and forget the cached sampler sets that use it.
+  void OnImageViewDestroyed(VkImageView view);
 
   // Set dirty flags on everything to force re-bind at next draw time.
   void InvalidateCachedState();
+  // Drops every cached GX sampler set; call before samplers they reference are destroyed.
+  void InvalidateSamplerDescriptorCache() { RetireSamplerSetPool(); }
+
+  void UpdateSamplerBindingHash(u32 index);
+  void RebuildSamplerBindingHash();
 
   // Ends a render pass if we're currently in one.
   // When Bind() is next called, the pass will be restarted.
@@ -76,6 +85,15 @@ public:
 
   // Returns true if the specified rectangle is inside the current render area (used for clears).
   bool IsWithinRenderArea(s32 x, s32 y, u32 width, u32 height) const;
+
+  // Selective EFB foveation (EFBFoveationScheduler): the emulated frame ended, and whether the
+  // open render pass is an EFB pass running with the density map.
+  void OnEFBFrameEnd(u32 efb_scale, s32 foveation_level);
+  void OnEFBFoveationSkipFrame();
+  bool InFoveatedEFBPass() const { return InRenderPass() && m_pass_timed && m_pass_density_map; }
+  void NoteSkippedKick();
+  // The open render pass is about to end for a command buffer submit (VKGfx::ExecuteCommandBuffer).
+  void NoteSubmitSplit();
 
 private:
   // Number of descriptor sets for game draws.
@@ -121,6 +139,17 @@ private:
 
   void UpdateDescriptorSet();
   void UpdateGXDescriptorSet();
+
+  // Whether the render pass about to begin on m_framebuffer uses the density map, and the
+  // selective-foveation bookkeeping that goes with it.
+  bool BeginPassDensityMap(VkCommandBuffer command_buffer);
+
+  // Cached GX sampler sets come from a pool of their own, so they survive submits and frames
+  // (the per-frame pools are reset whenever their frame resources come around again).
+  // Allocation returns VK_NULL_HANDLE once that pool is full; the next InvalidateCachedState
+  // then retires it. Retiring clears the cache and hands the pool to deferred destruction.
+  VkDescriptorSet AllocateCachedSamplerSet();
+  void RetireSamplerSetPool();
   void UpdateUtilityDescriptorSet();
   void UpdateComputeDescriptorSet();
 
@@ -154,6 +183,14 @@ private:
   std::array<VkDescriptorSet, NUM_GX_DESCRIPTOR_SETS> m_gx_descriptor_sets = {};
   std::array<VkDescriptorSet, NUM_UTILITY_DESCRIPTOR_SETS> m_utility_descriptor_sets = {};
   VkDescriptorSet m_compute_descriptor_set = VK_NULL_HANDLE;
+  SamplerDescriptorSetCache<VideoCommon::MAX_PIXEL_SHADER_SAMPLERS> m_sampler_descriptor_cache;
+  static constexpr u32 SAMPLER_SET_POOL_SIZE = 2048;
+  VkDescriptorPool m_sampler_set_pool = VK_NULL_HANDLE;
+  u32 m_sampler_set_pool_used = 0;
+  bool m_sampler_set_pool_exhausted = false;
+  // Hash of m_bindings.samplers, maintained per slot so a draw does not rehash all bindings.
+  std::array<size_t, VideoCommon::MAX_PIXEL_SHADER_SAMPLERS> m_sampler_slot_hashes{};
+  size_t m_sampler_bindings_hash = 0;
 
   // rasterization
   VkViewport m_viewport = {0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
@@ -166,5 +203,13 @@ private:
   VKFramebuffer* m_framebuffer = nullptr;
   VkRenderPass m_current_render_pass = VK_NULL_HANDLE;
   VkRect2D m_framebuffer_render_area = {};
+  bool m_in_clear_pass = false;
+
+  // The open render pass uses the density map; the bound pipeline is the twin for that.
+  bool m_pass_density_map = false;
+  bool m_pipeline_density_map = false;
+  // The open render pass is a selectively foveated EFB pass, timed by m_efb_foveation.
+  bool m_pass_timed = false;
+  std::unique_ptr<EFBFoveationScheduler> m_efb_foveation;
 };
 }  // namespace Vulkan

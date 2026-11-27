@@ -48,7 +48,7 @@ GeometryShaderUid GetGeometryShaderUid(PrimitiveType primitive_type)
   GeometryShaderUid out;
 
   geometry_shader_uid_data* const uid_data = out.GetUidData();
-  uid_data->code_version = 37;
+  uid_data->code_version = 39;
   uid_data->primitive_type = static_cast<u32>(primitive_type);
   uid_data->numTexGens = xfmem.numTexGen.numTexGens;
 
@@ -323,9 +323,10 @@ ShaderCode GenerateGeometryShaderCode(APIType api_type, const ShaderHostConfig& 
       // This must happen BEFORE the VR projection so the per-eye IPD offset (baked
       // into the projection rows' w component) is not affected — only the world
       // geometry is mirrored.  This preserves correct stereo while reversing the
-      // triangle winding to match the game's adjusted cull mode.
+      // triangle winding to match the game's adjusted cull mode.  The same for Y
+      // (stereoparams.y = -1): a projection that flips Y back from a Y-down view space.
       out.Write("\t\tfloat4 vp = f.viewPos;\n");
-      out.Write("\t\tvp.x *= " I_STEREOPARAMS ".x;\n");
+      out.Write("\t\tvp.xy *= " I_STEREOPARAMS ".xy;\n");
       // cstereo.z is the world-position weight: 1.0 = normal, 0.0 = skybox.  The per-eye
       // position offset (IPD + head translation) is baked into the .w component of the
       // projection rows, applied only because vp.w == 1.  Zeroing vp.w for a skybox draw drops
@@ -536,6 +537,15 @@ ShaderCode GenerateGeometryShaderCode(APIType api_type, const ShaderHostConfig& 
         else
           out.Write("\t\tf.clipDist0 = f.pos.z + f.pos.w;\n\t\tf.clipDist1 = -f.pos.z;\n");
       }
+      out.Write("\t}}\n");
+
+      // Fullscreen, moved in each eye (cstereo.w == 0.25, PerEyeScreenCopies): a block of the
+      // scene the game copied and draws back in place, where that eye sees it. The eye's NDC
+      // offset is ceye_proj[eye * 2].xy, in the console's convention like the VS's position.
+      out.Write("\telse if (" I_STEREOPARAMS ".w > 0.125f)\n");
+      out.Write("\t{{\n");
+      out.Write("\t\tf.pos.xy += " I_EYE_PROJ "[eye * 2].xy * sign(" I_VR_PIXELCENTER
+                ".xy * float2(1.0, -1.0)) * f.pos.w;\n");
       out.Write("\t}}\n");
     }
     else

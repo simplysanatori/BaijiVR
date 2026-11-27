@@ -60,6 +60,11 @@
 #include "VideoCommon/VertexManagerBase.h"
 #include "VideoCommon/VideoCommon.h"
 #include "VideoCommon/VideoConfig.h"
+#include "VideoCommon/XFMemory.h"
+#ifdef ENABLE_VR
+#include "VideoCommon/VR/OpenXRManager.h"
+#include "VideoCommon/VR/VRFrameRegion.h"
+#endif
 
 static const u64 TEXHASH_INVALID = 0;
 // Sonic the Fighters (inside Sonic Gems Collection) loops a 64 frames animation
@@ -254,6 +259,7 @@ void TextureCacheBase::Invalidate()
     bind.reset();
   m_textures_by_hash.clear();
   m_textures_by_address.clear();
+  m_vr_recent_xfb_copies = {};
 
   m_texture_pool.clear();
 }
@@ -707,8 +713,10 @@ void TextureCacheBase::DoState(PointerWrap& p)
 {
   // Flush all pending XFB copies before either loading or saving.
   FlushEFBCopies();
-  // A loaded state replaces guest RAM: delivered copies no longer describe it.
+  // A loaded state replaces guest RAM: delivered copies no longer describe it, nor recent XFB
+  // copies the frames it presents.
   m_delivered_efb_copies.clear();
+  m_vr_recent_xfb_copies = {};
 
   p.Do(m_last_entry_id);
 
@@ -1244,27 +1252,28 @@ SamplerState TextureCacheBase::GetSamplerState(u32 index, float custom_tex_scale
   return state;
 }
 
+void TCacheEntry::SetTextureInfoName(std::string name)
+{
+  const auto xxh = TextureInfo::ParseTextureHash(name);
+  m_texture_name_hash = xxh.value_or(0);
+  m_texture_info_name = std::move(name);
+}
+
 u64 TextureCacheBase::GetBoundTextureHash(u32 stage) const
 {
   if (stage >= m_bound_textures.size() || !m_bound_textures[stage])
     return 0;
 
-  // Return the XXH64 hash from the texture dump name if available (matches dump filenames).
-  // Fall back to internal hash if name is empty or unparseable.
-  const auto& name = m_bound_textures[stage]->texture_info_name;
-  if (!name.empty())
-  {
-    if (const auto xxh = TextureInfo::ParseTextureHash(name); xxh && *xxh != 0)
-      return *xxh;
-  }
-  return m_bound_textures[stage]->hash;
+  // The XXH64 from the texture dump name if available (matches dump filenames), else the
+  // internal hash. The name hash is parsed once when the name is assigned.
+  return m_bound_textures[stage]->GetOverrideHash();
 }
 
 std::string TextureCacheBase::GetBoundTextureName(u32 stage) const
 {
   if (stage >= m_bound_textures.size() || !m_bound_textures[stage])
     return {};
-  return m_bound_textures[stage]->texture_info_name;
+  return m_bound_textures[stage]->GetTextureInfoName();
 }
 
 bool TextureCacheBase::IsBoundEfbCopy(u32 stage, u32* native_width, u32* native_height) const
@@ -1377,6 +1386,93 @@ bool TextureCacheBase::ApplyVRPreserveStereoEFBFix(u32 stage)
   destination->texture->FinishedRendering();
   g_gfx->SetTexture(stage, destination->texture.get());
   return true;
+}
+
+bool TextureCacheBase::ApplyVRMonoEFBCopy(u32 stage)
+{
+  if (g_ActiveConfig.stereo_mode != StereoMode::OpenXR || stage >= m_bound_textures.size() ||
+      !m_bound_textures[stage])
+  {
+    return false;
+  }
+
+  RcTcacheEntry& entry = m_bound_textures[stage];
+  if (entry->vr_mono_layers)
+  {
+    g_gfx->SetTexture(stage, entry->texture.get());
+    return false;
+  }
+  if (!entry->is_efb_copy || entry->is_xfb_copy || entry->GetNumLayers() < 2 || entry->IsLocked())
+    return false;
+
+  const TextureConfig config = entry->texture->GetConfig();
+  std::optional<TexPoolEntry> mono = AllocateTexture(config);
+  if (!mono)
+  {
+    WARN_LOG_FMT(VIDEO, "VR_MONO_EFB_COPY: stage={} failed to allocate a {}x{} texture", stage,
+                 config.width, config.height);
+    return false;
+  }
+  for (u32 layer = 0; layer < config.layers; ++layer)
+  {
+    for (u32 level = 0; level < config.levels; ++level)
+    {
+      const MathUtil::Rectangle<int> rect = config.GetMipRect(level);
+      mono->texture->CopyRectangleFromTexture(entry->texture.get(), rect, 0, level, rect, layer,
+                                              level);
+    }
+  }
+  mono->texture->FinishedRendering();
+
+  entry->texture.swap(mono->texture);
+  entry->framebuffer.swap(mono->framebuffer);
+  m_texture_pool.emplace(config,
+                         TexPoolEntry(std::move(mono->texture), std::move(mono->framebuffer)));
+  entry->vr_mono_layers = true;
+  g_gfx->SetTexture(stage, entry->texture.get());
+  return true;
+}
+
+std::optional<std::array<std::array<int, 2>, 2>> TextureCacheBase::ApplyVRPerEyeCopy(u32 stage)
+{
+  if (stage >= m_bound_textures.size() || !m_bound_textures[stage])
+    return std::nullopt;
+  const RcTcacheEntry& entry = m_bound_textures[stage];
+  if (!entry->vr_eye_offsets || !entry->vr_per_eye_texture)
+    return std::nullopt;
+  g_gfx->SetTexture(stage, entry->vr_per_eye_texture.get());
+  return entry->vr_eye_offsets;
+}
+
+void TextureCacheBase::CopyVRPerEyeBlock(RcTcacheEntry& entry,
+                                         const MathUtil::Rectangle<int>& src_rect,
+                                         bool scale_by_half, bool linear_filter,
+                                         EFBCopyFormat dst_format, bool is_intensity, float gamma,
+                                         bool clamp_top, bool clamp_bottom,
+                                         const CopyFilterCoefficients::Values& filter_coefficients,
+                                         const std::array<MathUtil::Rectangle<int>, 2>& rects)
+{
+  const TextureConfig config = entry->texture->GetConfig();
+  if (!entry->vr_per_eye_texture || entry->vr_per_eye_texture->GetConfig() != config)
+  {
+    std::optional<TexPoolEntry> allocated = AllocateTexture(config);
+    if (!allocated)
+      return;
+    entry->vr_per_eye_texture = std::move(allocated->texture);
+    entry->vr_per_eye_framebuffer = std::move(allocated->framebuffer);
+  }
+
+  entry->texture.swap(entry->vr_per_eye_texture);
+  entry->framebuffer.swap(entry->vr_per_eye_framebuffer);
+  CopyEFBToCacheEntry(entry, false, rects[0], scale_by_half, linear_filter, dst_format,
+                      is_intensity, gamma, clamp_top, clamp_bottom,
+                      GetVRAMCopyFilterCoefficients(filter_coefficients), false, rects[1]);
+  entry->texture.swap(entry->vr_per_eye_texture);
+  entry->framebuffer.swap(entry->vr_per_eye_framebuffer);
+
+  entry->vr_eye_offsets = std::array<std::array<int, 2>, 2>{
+      {{rects[0].left - src_rect.left, rects[0].top - src_rect.top},
+       {rects[1].left - src_rect.left, rects[1].top - src_rect.top}}};
 }
 
 bool TextureCacheBase::IsBoundMetroidPrime2DarkTexture(u32 stage) const
@@ -1619,15 +1715,15 @@ TCacheEntry* TextureCacheBase::LoadImpl(u32 stage, bool force_reload)
     return nullptr;
 
   entry->frameCount = FRAMECOUNT_INVALID;
-  if (entry->texture_info_name.empty())
+  if (entry->GetTextureInfoName().empty())
   {
-    entry->texture_info_name = texture_info.CalculateTextureName().GetFullName();
+    entry->SetTextureInfoName(texture_info.CalculateTextureName().GetFullName());
 
     if (g_ActiveConfig.bGraphicMods)
     {
-      GraphicsModActionData::TextureLoad texture_load{entry->texture_info_name};
+      GraphicsModActionData::TextureLoad texture_load{entry->GetTextureInfoName()};
       for (const auto& action :
-           g_graphics_mod_manager->GetTextureLoadActions(entry->texture_info_name))
+           g_graphics_mod_manager->GetTextureLoadActions(entry->GetTextureInfoName()))
       {
         action->OnTextureLoad(&texture_load);
       }
@@ -1943,7 +2039,7 @@ RcTcacheEntry TextureCacheBase::GetTexture(const int textureCacheSafetyColorSamp
                          has_arbitrary_mipmaps, skip_texture_dump);
   entry->hires_texture = std::move(hires_texture);
   entry->last_load_time = load_time;
-  entry->texture_info_name = std::move(texture_name);
+  entry->SetTextureInfoName(std::move(texture_name));
   return entry;
 }
 
@@ -2146,6 +2242,12 @@ RcTcacheEntry TextureCacheBase::CreateTextureEntry(
 static void GetDisplayRectForXFBEntry(TCacheEntry* entry, u32 width, u32 height,
                                       MathUtil::Rectangle<int>* display_rect)
 {
+  // VR: the eye projections fill the scene's lines, which this copy spread over all of its own.
+  // The VI may show fewer (with ImmediateXFB off): showing only those would crop and stretch
+  // the eyes' picture, and the world would swim as the head turns.
+  if (entry->vr_scene_fills_copy)
+    height = entry->native_height;
+
   // Scale the sub-rectangle to the full resolution of the texture.
   display_rect->left = 0;
   display_rect->top = 0;
@@ -2168,6 +2270,9 @@ RcTcacheEntry TextureCacheBase::GetXFBTexture(u32 address, u32 width, u32 height
     return {};
   }
 
+  m_vr_presents_since_xfb_copy =
+      std::min(m_vr_presents_since_xfb_copy + 1, MAX_VR_RECENT_XFB_PRESENTS + 1);
+
   // Do we currently have a mutable version of this XFB copy in VRAM?
   RcTcacheEntry entry = GetXFBFromCache(address, width, height, stride);
   if (entry && !entry->IsLocked())
@@ -2181,6 +2286,15 @@ RcTcacheEntry TextureCacheBase::GetXFBTexture(u32 address, u32 width, u32 height
     GetDisplayRectForXFBEntry(entry.get(), width, height, display_rect);
     return entry;
   }
+
+#ifdef ENABLE_VR
+  // The game's copy of this frame, which later copies made the cache drop.
+  if (RcTcacheEntry recent = GetVRRecentXFBCopy(address, width, height, stride))
+  {
+    GetDisplayRectForXFBEntry(recent.get(), width, height, display_rect);
+    return recent;
+  }
+#endif
 
   // Create a new VRAM texture, and fill it with the data from guest RAM.
   entry = AllocateCacheEntry(TextureConfig(width, height, 1, 1, 1, AbstractTextureFormat::RGBA8,
@@ -2222,7 +2336,7 @@ RcTcacheEntry TextureCacheBase::GetXFBTexture(u32 address, u32 width, u32 height
     const std::string id = fmt::format("{}x{}", width, height);
     if (g_ActiveConfig.bGraphicMods)
     {
-      entry->texture_info_name = fmt::format("{}_{}", XFB_DUMP_PREFIX, id);
+      entry->SetTextureInfoName(fmt::format("{}_{}", XFB_DUMP_PREFIX, id));
     }
 
     if (g_ActiveConfig.bDumpXFBTarget)
@@ -2268,6 +2382,25 @@ RcTcacheEntry TextureCacheBase::GetXFBFromCache(u32 address, u32 width, u32 heig
     ++iter;
   }
 
+  return {};
+}
+
+RcTcacheEntry TextureCacheBase::GetVRRecentXFBCopy(u32 address, u32 width, u32 height,
+                                                   u32 stride) const
+{
+  if (!g_ActiveConfig.VRSessionActive() ||
+      m_vr_presents_since_xfb_copy > MAX_VR_RECENT_XFB_PRESENTS)
+  {
+    return {};
+  }
+  for (const RcTcacheEntry& entry : m_vr_recent_xfb_copies)
+  {
+    if (entry && entry->addr == address && entry->memory_stride == stride &&
+        entry->native_width >= width && entry->native_height >= height)
+    {
+      return entry;
+    }
+  }
   return {};
 }
 
@@ -2668,6 +2801,7 @@ void TextureCacheBase::CopyRenderTargetToTexture(
       {
         entry->should_force_safe_hashing = is_xfb_copy;
         entry->SetXfbCopy(dstStride);
+        entry->vr_scene_fills_copy = vram_source_rect != nullptr;
       }
       else
       {
@@ -2698,15 +2832,70 @@ void TextureCacheBase::CopyRenderTargetToTexture(
       {
         CopyEFBToCacheEntry(entry, is_depth_copy, vram_src_rect, scaleByHalf, vram_linear_filter,
                             dstFormat, isIntensity, gamma, clamp_top, clamp_bottom,
-                            GetVRAMCopyFilterCoefficients(filter_coefficients));
+                            GetVRAMCopyFilterCoefficients(filter_coefficients), false, std::nullopt);
       }
+#ifdef ENABLE_VR
+      entry->vr_eye_offsets.reset();
+      if (!size_clear && !element_clear && g_ActiveConfig.vr_per_eye_screen_copies &&
+          !is_xfb_copy && !is_depth_copy && dstFormat == EFBCopyFormat::RGBA8 &&
+          g_ActiveConfig.stereo_mode == StereoMode::OpenXR && !g_ActiveConfig.vr_flat_screen &&
+          VR::g_openxr && VR::g_openxr->IsSessionRunning())
+      {
+        const std::optional<std::array<float, 6>>& projection =
+            g_vertex_manager->GetVRSceneProjection();
+        const VR::VRFrameRegion frame = VR::GetVRFrameRegion();
+        if (projection && frame.valid)
+        {
+          const int x_off = bpmem.scissorOffset.x << 1;
+          const int y_off = bpmem.scissorOffset.y << 1;
+          const VR::VRViewportClass viewport_class =
+              VR::ClassifyVRViewport(xfmem.viewport, VR::GetVRScissor(), x_off, y_off);
+          std::optional<VR::VRFrameRegion> scene;
+          if (viewport_class == VR::VRViewportClass::MainScene)
+          {
+            scene = frame;
+          }
+          else if (viewport_class == VR::VRViewportClass::Letterboxed)
+          {
+            scene = VR::VRFrameRegion{
+                .left = static_cast<int>(
+                            std::lround(xfmem.viewport.xOrig - std::fabs(xfmem.viewport.wd))) -
+                        x_off,
+                .top = static_cast<int>(
+                           std::lround(xfmem.viewport.yOrig - std::fabs(xfmem.viewport.ht))) -
+                       y_off,
+                .width = static_cast<int>(std::lround(2.0f * std::fabs(xfmem.viewport.wd))),
+                .height = static_cast<int>(std::lround(2.0f * std::fabs(xfmem.viewport.ht))),
+                .valid = true};
+          }
+          if (scene && VR::IsVRPerEyeCopyRectangle(srcRect, *scene))
+          {
+            std::array<std::array<float, 4>, 4> rows;
+            std::array<std::array<float, 4>, 2> z_rows;
+            VR::g_openxr->GetEyeProjectionRows(VR::g_openxr->GetEffectiveUnitsPerMeter(), rows,
+                                               z_rows);
+            const std::array<MathUtil::Rectangle<int>, 2> per_eye_rects{
+                VR::MapVRViewCopyRectangle(srcRect, *scene, *projection,
+                                           {.x = rows[0], .y = rows[1], .z = z_rows[0]}),
+                VR::MapVRViewCopyRectangle(srcRect, *scene, *projection,
+                                           {.x = rows[2], .y = rows[3], .z = z_rows[1]})};
+            if (per_eye_rects[0] != srcRect || per_eye_rects[1] != srcRect)
+            {
+              CopyVRPerEyeBlock(entry, srcRect, scaleByHalf, linear_filter, dstFormat, isIntensity,
+                                gamma, clamp_top, clamp_bottom, filter_coefficients,
+                                per_eye_rects);
+            }
+          }
+        }
+      }
+#endif
 
       if (is_xfb_copy && (g_ActiveConfig.bDumpXFBTarget || g_ActiveConfig.bGraphicMods))
       {
         const std::string id = fmt::format("{}x{}", tex_w, tex_h);
         if (g_ActiveConfig.bGraphicMods)
         {
-          entry->texture_info_name = fmt::format("{}_{}", XFB_DUMP_PREFIX, id);
+          entry->SetTextureInfoName(fmt::format("{}_{}", XFB_DUMP_PREFIX, id));
         }
 
         if (g_ActiveConfig.bDumpXFBTarget)
@@ -2722,7 +2911,7 @@ void TextureCacheBase::CopyRenderTargetToTexture(
         const std::string id = fmt::format("{}x{}_{}", tex_w, tex_h, static_cast<int>(baseFormat));
         if (g_ActiveConfig.bGraphicMods)
         {
-          entry->texture_info_name = fmt::format("{}_{}", EFB_DUMP_PREFIX, id);
+          entry->SetTextureInfoName(fmt::format("{}_{}", EFB_DUMP_PREFIX, id));
         }
 
         if (g_ActiveConfig.bDumpEFBTarget)
@@ -2872,6 +3061,14 @@ void TextureCacheBase::CopyRenderTargetToTexture(
   {
     const u64 hash = entry->CalculateHash();
     entry->SetHashes(hash, hash);
+#ifdef ENABLE_VR
+    if (is_xfb_copy && g_ActiveConfig.VRSessionActive())
+    {
+      std::shift_right(m_vr_recent_xfb_copies.begin(), m_vr_recent_xfb_copies.end(), 1);
+      m_vr_recent_xfb_copies[0] = entry;
+      m_vr_presents_since_xfb_copy = 0;
+    }
+#endif
     m_textures_by_address.emplace(dstAddr, std::move(entry));
   }
 }
@@ -3417,12 +3614,11 @@ bool TextureCacheBase::CreateUtilityTextures()
   return true;
 }
 
-void TextureCacheBase::CopyEFBToCacheEntry(RcTcacheEntry& entry, bool is_depth_copy,
-                                           const MathUtil::Rectangle<int>& src_rect,
-                                           bool scale_by_half, bool linear_filter,
-                                           EFBCopyFormat dst_format, bool is_intensity, float gamma,
-                                           bool clamp_top, bool clamp_bottom,
-                                           const std::array<u32, 3>& filter_coefficients)
+void TextureCacheBase::CopyEFBToCacheEntry(
+    RcTcacheEntry& entry, bool is_depth_copy, const MathUtil::Rectangle<int>& src_rect,
+    bool scale_by_half, bool linear_filter, EFBCopyFormat dst_format, bool is_intensity,
+    float gamma, bool clamp_top, bool clamp_bottom, const std::array<u32, 3>& filter_coefficients,
+    bool vr_mono_layers, const std::optional<MathUtil::Rectangle<int>>& vr_right_src_rect)
 {
   // Flush EFB pokes first, as they're expected to be included.
   g_framebuffer_manager->FlushEFBPokes();
@@ -3440,9 +3636,20 @@ void TextureCacheBase::CopyEFBToCacheEntry(RcTcacheEntry& entry, bool is_depth_c
   const auto scaled_src_rect = g_framebuffer_manager->ConvertEFBRectangle(src_rect);
   const auto framebuffer_rect = g_gfx->ConvertFramebufferRectangle(
       scaled_src_rect, g_framebuffer_manager->GetEFBFramebuffer());
-  AbstractTexture* src_texture =
-      is_depth_copy ? g_framebuffer_manager->ResolveEFBDepthTexture(framebuffer_rect) :
-                      g_framebuffer_manager->ResolveEFBColorTexture(framebuffer_rect);
+  // VR: the right eye's layer from its own rectangle (PerEyeScreenCopies); both are resolved.
+  const auto right_framebuffer_rect =
+      vr_right_src_rect ? g_gfx->ConvertFramebufferRectangle(
+                              g_framebuffer_manager->ConvertEFBRectangle(*vr_right_src_rect),
+                              g_framebuffer_manager->GetEFBFramebuffer()) :
+                          framebuffer_rect;
+  const MathUtil::Rectangle<int> resolve_rect{
+      std::min(framebuffer_rect.left, right_framebuffer_rect.left),
+      std::min(framebuffer_rect.top, right_framebuffer_rect.top),
+      std::max(framebuffer_rect.right, right_framebuffer_rect.right),
+      std::max(framebuffer_rect.bottom, right_framebuffer_rect.bottom)};
+  AbstractTexture* src_texture = is_depth_copy ?
+                                     g_framebuffer_manager->ResolveEFBDepthTexture(resolve_rect) :
+                                     g_framebuffer_manager->ResolveEFBColorTexture(resolve_rect);
   AbstractTexture* coverage_texture = nullptr;
   if (!is_depth_copy && dst_format == EFBCopyFormat::XFB &&
       g_ActiveConfig.VRPassthroughEnabled())
@@ -3465,8 +3672,12 @@ void TextureCacheBase::CopyEFBToCacheEntry(RcTcacheEntry& entry, bool is_depth_c
     float clamp_bottom;
     float pixel_height;
     float vr_scene_alpha;
+    float vr_layer_scale;
+    float vr_layer_offset_x;
+    float vr_layer_offset_y;
+    float padding;
   };
-  Uniforms uniforms;
+  Uniforms uniforms = {};
   const float rcp_efb_width = 1.0f / static_cast<float>(g_framebuffer_manager->GetEFBWidth());
   const u32 efb_height = g_framebuffer_manager->GetEFBHeight();
   const float rcp_efb_height = 1.0f / static_cast<float>(efb_height);
@@ -3489,6 +3700,12 @@ void TextureCacheBase::CopyEFBToCacheEntry(RcTcacheEntry& entry, bool is_depth_c
   uniforms.vr_scene_alpha = g_ActiveConfig.VRPassthroughEnabled() ?
                                 g_ActiveConfig.vr_passthrough_scene_opacity :
                                 1.0f;
+  // The source layer is the destination's times this: 0 copies the left eye into every layer.
+  uniforms.vr_layer_scale = vr_mono_layers ? 0.0f : 1.0f;
+  // The source position is moved by the layer times this: the right eye's rectangle.
+  uniforms.vr_layer_offset_x =
+      (right_framebuffer_rect.left - framebuffer_rect.left) * rcp_efb_width;
+  uniforms.vr_layer_offset_y = (right_framebuffer_rect.top - framebuffer_rect.top) * rcp_efb_height;
   g_vertex_manager->UploadUtilityUniforms(&uniforms, sizeof(uniforms));
 
   // Use the copy pipeline to render the VRAM copy.

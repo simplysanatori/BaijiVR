@@ -4,6 +4,7 @@
 #include "VideoCommon/ElementsGroupManager.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <fstream>
@@ -11,6 +12,7 @@
 #include <map>
 #include <set>
 #include <sstream>
+#include <string_view>
 
 #include <fmt/format.h>
 
@@ -18,7 +20,9 @@
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Core/ConfigLoaders/GameConfigLoader.h"
+#include "VideoCommon/DrawDepth.h"
 #include "VideoCommon/RuntimeElementMatcher.h"
+#include "VideoCommon/VR/OverrideSuppression.h"
 
 namespace
 {
@@ -135,6 +139,12 @@ bool ParseRuntimeElementSignatureField(ShaderHunter::RuntimeElementSignature* si
     signature->use_scissor = (value == "1" || value == "true");
   else if (key == "sig_use_render_state")
     signature->use_render_state = (value == "1" || value == "true");
+  else if (key == "sig_use_load")
+    signature->use_load = (value == "1" || value == "true");
+  else if (key == "sig_load_min")
+    signature->load_min = ParseGroupedInt(value);
+  else if (key == "sig_load_max")
+    signature->load_max = ParseGroupedInt(value);
   else if (key == "sig_layer")
     signature->ortho_layer = ParseGroupedInt(value);
   else if (key == "sig_vp_x")
@@ -165,6 +175,12 @@ bool ParseRuntimeElementSignatureField(ShaderHunter::RuntimeElementSignature* si
     signature->blend_color_update = (value == "1" || value == "true");
   else if (key == "sig_blend_alpha")
     signature->blend_alpha_update = (value == "1" || value == "true");
+  else if (key == "sig_any_alpha_write")
+    signature->any_alpha_update = (value == "1" || value == "true");
+  else if (key == "sig_any_alpha_ref")
+    signature->any_alpha_ref = (value == "1" || value == "true");
+  else if (key == "sig_efb_copy")
+    signature->efb_copy = std::clamp(ParseGroupedInt(value), -1, 2);
   else
     return false;
 
@@ -191,6 +207,13 @@ void SaveRuntimeElementSignature(std::ostringstream& out,
   out << prefix << "sig_use_viewport=" << (sig.use_viewport ? 1 : 0) << "\n";
   out << prefix << "sig_use_scissor=" << (sig.use_scissor ? 1 : 0) << "\n";
   out << prefix << "sig_use_render_state=" << (sig.use_render_state ? 1 : 0) << "\n";
+  // Only when used, so that files saved before the key existed are rewritten unchanged.
+  if (sig.use_load)
+  {
+    out << prefix << "sig_use_load=1\n";
+    out << prefix << "sig_load_min=" << sig.load_min << "\n";
+    out << prefix << "sig_load_max=" << sig.load_max << "\n";
+  }
   out << prefix << "sig_layer=" << sig.ortho_layer << "\n";
   out << prefix << "sig_vp_x=" << sig.viewport_x << "\n";
   out << prefix << "sig_vp_y=" << sig.viewport_y << "\n";
@@ -206,6 +229,73 @@ void SaveRuntimeElementSignature(std::ostringstream& out,
   out << prefix << "sig_zfunc=" << sig.zfunc << "\n";
   out << prefix << "sig_blend_color=" << (sig.blend_color_update ? 1 : 0) << "\n";
   out << prefix << "sig_blend_alpha=" << (sig.blend_alpha_update ? 1 : 0) << "\n";
+  if (sig.any_alpha_update)
+    out << prefix << "sig_any_alpha_write=1\n";
+  if (sig.any_alpha_ref)
+    out << prefix << "sig_any_alpha_ref=1\n";
+  if (sig.efb_copy >= 0)
+    out << prefix << "sig_efb_copy=" << sig.efb_copy << "\n";
+}
+
+constexpr std::array<std::string_view, 3> HUD_CONTEXT_NAMES = {"default", "combat", "menu"};
+
+// headlocked_mode=flat|perspective and the hud_* keys of a HeadLocked entry.
+void ParseHeadLockedKey(ShaderHunter::HeadLockedParams* hud, const std::string& key,
+                        const std::string& value)
+{
+  const bool on = value == "1" || value == "true";
+  if (key == "headlocked_mode")
+    hud->perspective = value == "perspective";
+  else if (key == "hud_scale")
+    hud->scale = std::stof(value);
+  else if (key == "hud_width")
+    hud->width = std::stof(value);
+  else if (key == "hud_height")
+    hud->height = std::stof(value);
+  else if (key == "hud_right")
+    hud->right = std::stof(value);
+  else if (key == "hud_up")
+    hud->up = std::stof(value);
+  else if (key == "hud_anchor")
+    hud->anchor = on;
+  else if (key == "hud_anchor_z_min")
+    hud->anchor_z_min = std::stof(value);
+  else if (key == "hud_anchor_z_max")
+    hud->anchor_z_max = std::stof(value);
+  else if (key == "hud_self_center")
+    hud->self_center = on;
+  else if (key == "hud_context")
+  {
+    const auto name = std::ranges::find(HUD_CONTEXT_NAMES, value);
+    hud->context = name != HUD_CONTEXT_NAMES.end() ?
+                       static_cast<int>(name - HUD_CONTEXT_NAMES.begin()) :
+                       std::clamp(ParseGroupedInt(value), 0, 2);
+  }
+}
+
+void SaveHeadLockedKeys(std::ostringstream& out, const ShaderHunter::HeadLockedParams& hud)
+{
+  out << "headlocked_mode=" << (hud.perspective ? "perspective" : "flat") << "\n";
+  if (hud.scale > 0.0f)
+    out << "hud_scale=" << hud.scale << "\n";
+  if (hud.width != 1.0f)
+    out << "hud_width=" << hud.width << "\n";
+  if (hud.height != 1.0f)
+    out << "hud_height=" << hud.height << "\n";
+  if (hud.right != 0.0f)
+    out << "hud_right=" << hud.right << "\n";
+  if (hud.up != 0.0f)
+    out << "hud_up=" << hud.up << "\n";
+  if (hud.anchor)
+    out << "hud_anchor=1\n";
+  if (std::isfinite(hud.anchor_z_min))
+    out << "hud_anchor_z_min=" << hud.anchor_z_min << "\n";
+  if (std::isfinite(hud.anchor_z_max))
+    out << "hud_anchor_z_max=" << hud.anchor_z_max << "\n";
+  if (hud.self_center)
+    out << "hud_self_center=1\n";
+  if (hud.context > 0 && hud.context < static_cast<int>(HUD_CONTEXT_NAMES.size()))
+    out << "hud_context=" << HUD_CONTEXT_NAMES[hud.context] << "\n";
 }
 
 std::vector<u64> ParseTextureHashList(const std::string& value)
@@ -340,6 +430,9 @@ size_t ComputeRuntimeElementKey(const ShaderHunter::RuntimeElementSignature& sig
   HashCombineValue(seed, sig.zfunc);
   HashCombineValue(seed, sig.blend_color_update);
   HashCombineValue(seed, sig.blend_alpha_update);
+  HashCombineValue(seed, sig.any_alpha_update);
+  HashCombineValue(seed, sig.any_alpha_ref);
+  HashCombineValue(seed, sig.efb_copy);
   HashCombineValue(seed, texture_excluded);
   for (const u64 texture_hash : texture_hashes)
     HashCombineValue(seed, texture_hash);
@@ -370,18 +463,18 @@ bool SignaturesEqual(const ShaderHunter::RuntimeElementSignature& lhs,
          lhs.perspective_near_x1000 == rhs.perspective_near_x1000 &&
          lhs.perspective_far_x100 == rhs.perspective_far_x100 &&
          lhs.ortho_left_x100 == rhs.ortho_left_x100 &&
-         lhs.ortho_right_x100 == rhs.ortho_right_x100 &&
-         lhs.ortho_top_x100 == rhs.ortho_top_x100 &&
-         lhs.ortho_bottom_x100 == rhs.ortho_bottom_x100 &&
-         lhs.ortho_layer == rhs.ortho_layer && lhs.viewport_x == rhs.viewport_x &&
-         lhs.viewport_y == rhs.viewport_y && lhs.viewport_width == rhs.viewport_width &&
-         lhs.viewport_height == rhs.viewport_height &&
+         lhs.ortho_right_x100 == rhs.ortho_right_x100 && lhs.ortho_top_x100 == rhs.ortho_top_x100 &&
+         lhs.ortho_bottom_x100 == rhs.ortho_bottom_x100 && lhs.ortho_layer == rhs.ortho_layer &&
+         lhs.viewport_x == rhs.viewport_x && lhs.viewport_y == rhs.viewport_y &&
+         lhs.viewport_width == rhs.viewport_width && lhs.viewport_height == rhs.viewport_height &&
          lhs.scissor_left == rhs.scissor_left && lhs.scissor_top == rhs.scissor_top &&
          lhs.scissor_right == rhs.scissor_right && lhs.scissor_bottom == rhs.scissor_bottom &&
          lhs.alpha_test_hex == rhs.alpha_test_hex && lhs.ztest == rhs.ztest &&
          lhs.zupdate == rhs.zupdate && lhs.zfunc == rhs.zfunc &&
          lhs.blend_color_update == rhs.blend_color_update &&
-         lhs.blend_alpha_update == rhs.blend_alpha_update;
+         lhs.blend_alpha_update == rhs.blend_alpha_update &&
+         lhs.any_alpha_update == rhs.any_alpha_update && lhs.any_alpha_ref == rhs.any_alpha_ref &&
+         lhs.efb_copy == rhs.efb_copy;
 }
 
 bool StableSubMatchSignaturesEqual(const ElementsGroupManager::StableSubMatchSignature& lhs,
@@ -405,15 +498,6 @@ bool StableSubMatchBaseEqual(const ElementsGroupManager::StableSubMatchSignature
   return SignaturesEqual(lhs.runtime_element, rhs.runtime_element) && lhs.vs_family == rhs.vs_family &&
          lhs.ps_family == rhs.ps_family && lhs.gs_family == rhs.gs_family &&
          lhs.texture_hashes == rhs.texture_hashes;
-}
-
-size_t ComputeStableSubMatchBaseKey(const ElementsGroupManager::StableSubMatchSignature& signature)
-{
-  size_t seed = ComputeRuntimeElementKey(signature.runtime_element, signature.texture_hashes, false);
-  HashCombineValue(seed, signature.vs_family);
-  HashCombineValue(seed, signature.ps_family);
-  HashCombineValue(seed, signature.gs_family);
-  return seed;
 }
 
 bool GroupMaskHasActiveGroups(bool projection, bool layer, bool viewport, bool scissor,
@@ -554,6 +638,8 @@ ElementsGroupManager::MakeSelectedMatchFilterSignature(
   filter.use_viewport = true;
   filter.use_scissor = true;
   filter.use_render_state = true;
+  // Whether the draw samples an EFB copy is not one of the groups: match either.
+  filter.efb_copy = -1;
   return filter;
 }
 
@@ -602,14 +688,14 @@ LoadElementGroupOverridesFromINIFile(const std::string& path)
     {
       if (!line.empty() && line.back() == '\r')
         line.pop_back();
-      if (line == "[ElementsGroupOverride_Enable]")
+      // Read every copy of the section: a code pasted with its header in the VR Config editor can
+      // add one after the other sections.
+      if (!line.empty() && line[0] == '[')
       {
-        in_section = true;
-        parsed.has_enable_section = true;
+        in_section = line == "[ElementsGroupOverride_Enable]";
+        parsed.has_enable_section |= in_section;
         continue;
       }
-      if (in_section && !line.empty() && line[0] == '[')
-        break;
       if (!in_section || line.empty())
         continue;
       if (line[0] == '$')
@@ -706,13 +792,13 @@ LoadElementGroupOverridesFromINIFile(const std::string& path)
     if (!line.empty() && line.back() == '\r')
       line.pop_back();
 
-    if (line == "[ElementsGroupOverride]")
+    if (!line.empty() && line[0] == '[')
     {
-      in_section = true;
+      commit_entry();
+      has_entry = false;
+      in_section = line == "[ElementsGroupOverride]";
       continue;
     }
-    if (in_section && !line.empty() && line[0] == '[')
-      break;
     if (!in_section || line.empty())
       continue;
 
@@ -761,11 +847,17 @@ LoadElementGroupOverridesFromINIFile(const std::string& path)
                              HandlingType::Skip;
     else if (key == "preserve_stereo_efb")
       current.preserve_stereo_efb = (value == "1" || value == "true");
+    else if (key == "mono_efb_copy")
+      current.mono_efb_copy = (value == "1" || value == "true");
     // "layer" (manual depth layer) was removed along with Auto Layer Spread / Layer Offset —
     // silently ignored so older INIs still load. (Note: "sig_layer" is a different, still
     // supported key — it is part of the element signature, not the depth layering.)
     else if (key == "element_depth")
       current.element_depth = std::stof(value);
+    else if (key == "min_depth")
+      current.min_depth = std::stof(value);
+    else if (key == "max_depth")
+      current.max_depth = std::stof(value);
     else if (key == "units_per_meter" || key == "upm")
       current.units_per_meter = std::stof(value);
     else if (key == "screen_pane_depth")
@@ -774,8 +866,18 @@ LoadElementGroupOverridesFromINIFile(const std::string& path)
                                   value == "flat" ?
                                       ElementsGroupManager::ScreenPaneDepthMode::Flat :
                                       ElementsGroupManager::ScreenPaneDepthMode::Game;
+    else if (key == "screen_pane_reference_depth")
+      current.screen_pane_reference_depth = std::stof(value);
+    else if (key == "screen_pane_depth_strength")
+      current.screen_pane_depth_strength = std::clamp(std::stof(value), 0.0f, 1.0f);
     else if (key == "passthrough_opacity")
       current.passthrough_opacity = std::clamp(std::stof(value), 0.0f, 1.0f);
+    else if (key == "headlocked_mode" || key.starts_with("hud_"))
+    {
+      if (!current.headlocked)
+        current.headlocked.emplace();
+      ParseHeadLockedKey(&*current.headlocked, key, value);
+    }
     else if (key == "anchor_right")
       current.anchor_right = std::stof(value);
     else if (key == "anchor_up")
@@ -891,10 +993,16 @@ static void MergeParsedElementGroupOverrideFile(
     }
   }
 
+  // The entries of this file already follow its enable list. The list only turns on the overrides
+  // of earlier files: a user file saved before an override shipped in Sys does not list it, and
+  // must not turn it off.
   if (parsed.has_enable_section)
   {
     for (auto& entry : *result)
-      entry.enabled = parsed.enabled_names.count(entry.name) > 0;
+    {
+      if (parsed.enabled_names.contains(entry.name))
+        entry.enabled = true;
+    }
   }
 }
 
@@ -904,17 +1012,40 @@ ElementsGroupManager::LoadOverridesFromINI(const std::string& game_id, std::opti
   if (game_id.empty())
     return {};
 
+  std::vector<std::string> sys_paths;
+  std::vector<std::string> user_paths;
+  for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(game_id, revision))
+  {
+    sys_paths.push_back(GetSysVRGameSettingsPath(filename));
+    user_paths.push_back(File::GetUserPath(D_GAMESETTINGSVR_IDX) + filename);
+  }
+  return LoadOverridesFromINIFiles(sys_paths, user_paths);
+}
+
+std::vector<ElementsGroupManager::ElementGroupOverride>
+ElementsGroupManager::LoadOverridesFromINIFiles(const std::vector<std::string>& sys_paths,
+                                                const std::vector<std::string>& user_paths)
+{
   std::vector<ElementGroupOverride> result;
   std::map<std::string, size_t> index_by_name;
 
-  for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(game_id, revision))
-    MergeParsedElementGroupOverrideFile(
-        &result, &index_by_name, LoadElementGroupOverridesFromINIFile(GetSysVRGameSettingsPath(filename)));
+  for (const std::string& path : sys_paths)
+  {
+    MergeParsedElementGroupOverrideFile(&result, &index_by_name,
+                                        LoadElementGroupOverridesFromINIFile(path));
+  }
+  const std::map<std::string, size_t> sys_names = index_by_name;
 
-  for (const std::string& filename : ConfigLoaders::GetGameIniFilenames(game_id, revision))
-    MergeParsedElementGroupOverrideFile(
-        &result, &index_by_name,
-        LoadElementGroupOverridesFromINIFile(File::GetUserPath(D_GAMESETTINGSVR_IDX) + filename));
+  for (const std::string& path : user_paths)
+  {
+    MergeParsedElementGroupOverrideFile(&result, &index_by_name,
+                                        LoadElementGroupOverridesFromINIFile(path));
+  }
+
+  // An override that ships in Sys comes back on every load, even if the user's file (which saves
+  // every override) drops or renames it.
+  for (ElementGroupOverride& entry : result)
+    entry.user_defined = !sys_names.contains(entry.name);
 
   return result;
 }
@@ -957,18 +1088,32 @@ void ElementsGroupManager::SaveOverridesToINI(const std::string& game_id,
     out << "handling=" << GetHandlingName(entry.handling) << "\n";
     if (entry.handling == HandlingType::Fullscreen && entry.preserve_stereo_efb)
       out << "preserve_stereo_efb=1\n";
+    if (entry.mono_efb_copy)
+      out << "mono_efb_copy=1\n";
     if (entry.element_depth >= 0.0f)
       out << "element_depth=" << entry.element_depth << "\n";
     if (entry.units_per_meter > 0.0f)
       out << "units_per_meter=" << entry.units_per_meter << "\n";
-    if (entry.handling == HandlingType::ScreenPane &&
-        entry.screen_pane_depth != ScreenPaneDepthMode::Game)
+    if (entry.min_depth > 0.0f)
+      out << "min_depth=" << entry.min_depth << "\n";
+    if (entry.max_depth > 0.0f)
+      out << "max_depth=" << entry.max_depth << "\n";
+    if (entry.handling == HandlingType::ScreenPane)
     {
-      out << "screen_pane_depth="
-          << (entry.screen_pane_depth == ScreenPaneDepthMode::VR ? "vr" : "flat") << "\n";
+      if (entry.screen_pane_depth != ScreenPaneDepthMode::Game)
+      {
+        out << "screen_pane_depth="
+            << (entry.screen_pane_depth == ScreenPaneDepthMode::VR ? "vr" : "flat") << "\n";
+      }
+      if (entry.screen_pane_reference_depth > 0.0f)
+        out << "screen_pane_reference_depth=" << entry.screen_pane_reference_depth << "\n";
+      if (entry.screen_pane_depth_strength < 1.0f)
+        out << "screen_pane_depth_strength=" << entry.screen_pane_depth_strength << "\n";
     }
     if (entry.handling == HandlingType::Passthrough)
       out << "passthrough_opacity=" << entry.passthrough_opacity << "\n";
+    if (entry.handling == HandlingType::HeadLocked && entry.headlocked)
+      SaveHeadLockedKeys(out, *entry.headlocked);
     if (entry.handling == HandlingType::CameraAnchor)
     {
       if (entry.anchor_right != 0.0f)
@@ -1061,30 +1206,50 @@ void ElementsGroupManager::SaveOverridesToINI(const std::string& game_id,
   outfile << out.str();
 }
 
+std::vector<ElementsGroupManager::ElementGroupOverride>
+ElementsGroupManager::LoadOverridesFromINIFile(const std::string& path)
+{
+  return LoadElementGroupOverridesFromINIFile(path).entries;
+}
+
 void ElementsGroupManager::LoadOverrides(const std::string& game_id)
+{
+  ApplyOverrideList(game_id, game_id.empty() ? std::vector<ElementGroupOverride>{} :
+                                               LoadOverridesFromINI(game_id));
+}
+
+void ElementsGroupManager::ApplyOverrideList(const std::string& game_id,
+                                             std::vector<ElementGroupOverride> all_overrides)
 {
   std::lock_guard lock(m_mutex);
   m_loaded_game_id = game_id;
   m_overrides.clear();
-  m_stable_submatch_occurrence_counters.clear();
-  m_current_stable_submatch = {};
+  m_applied_overrides = all_overrides;
+  m_suppression_generation = VR::OverrideSuppression::GetGeneration();
   m_clear_next_efb = false;
   m_pending_clear_min = 0;
   m_pending_clear_max = 0;
   if (game_id.empty())
   {
     m_has_overrides.store(false);
+    m_has_controller_anchor_overrides.store(false);
     return;
   }
 
-  const auto all_overrides = LoadOverridesFromINI(game_id);
-  for (const auto& entry : all_overrides)
+  for (auto& entry : all_overrides)
   {
-    if (entry.enabled)
-      m_overrides.push_back(entry);
+    if (entry.enabled &&
+        !VR::OverrideSuppression::IsSuppressed(VR::OverrideSuppression::Kind::Elements, entry.name))
+    {
+      m_overrides.push_back(std::move(entry));
+    }
   }
 
   m_has_overrides.store(!m_overrides.empty());
+  m_has_controller_anchor_overrides.store(
+      std::ranges::any_of(m_overrides, [](const ElementGroupOverride& entry) {
+        return entry.handling == HandlingType::ControllerAnchor;
+      }));
 
   if (!m_overrides.empty())
   {
@@ -1095,17 +1260,33 @@ void ElementsGroupManager::LoadOverrides(const std::string& game_id)
 
 void ElementsGroupManager::LoadOverridesIfNeeded(const std::string& game_id)
 {
+  bool same_game = false;
+  std::vector<ElementGroupOverride> all;
   {
     std::lock_guard lock(m_mutex);
-    if (game_id == m_loaded_game_id)
-      return;
+    same_game = game_id == m_loaded_game_id;
+    if (same_game)
+    {
+      if (m_suppression_generation == VR::OverrideSuppression::GetGeneration())
+        return;
+      // A VR patch started or stopped suppressing overrides: activate the same list again.
+      all = m_applied_overrides;
+    }
   }
-  LoadOverrides(game_id);
+  if (same_game)
+    ApplyOverrideList(game_id, std::move(all));
+  else
+    LoadOverrides(game_id);
 }
 
 bool ElementsGroupManager::HasOverrides() const
 {
   return m_has_overrides.load();
+}
+
+bool ElementsGroupManager::HasControllerAnchorOverrides() const
+{
+  return m_has_controller_anchor_overrides.load();
 }
 
 void ElementsGroupManager::SetPopupOpen(bool open)
@@ -1135,8 +1316,6 @@ void ElementsGroupManager::SetPopupOpen(bool open)
     m_collecting_highlighted_draw.reset();
     m_display_highlighted_draw.reset();
     m_display_highlighted_match_raw_draw_count = 0;
-    m_stable_submatch_occurrence_counters.clear();
-    m_current_stable_submatch = {};
     ClearSeedSelectionLocked();
   }
 
@@ -1196,6 +1375,7 @@ ElementsGroupManager::RuntimeElementSignature ElementsGroupManager::GetMaskedSee
   masked.use_viewport = m_group_mask.viewport;
   masked.use_scissor = m_group_mask.scissor;
   masked.use_render_state = m_group_mask.render_state;
+  masked.efb_copy = -1;
   return masked;
 }
 
@@ -1295,6 +1475,20 @@ void ElementsGroupManager::SelectSeedCandidate(int index)
 {
   std::lock_guard lock(m_mutex);
   SelectSeedCandidateLocked(index);
+}
+
+int ElementsGroupManager::FindSeedCandidate(const RuntimeElementSignature& signature) const
+{
+  std::lock_guard lock(m_mutex);
+  if (!signature.valid)
+    return -1;
+  const RuntimeElementSignature group_signature = GetSeedGroupSignatureLocked(signature);
+  for (size_t i = 0; i < m_display_seed_candidates.size(); ++i)
+  {
+    if (SignaturesEqual(m_display_seed_candidates[i].group_signature, group_signature))
+      return static_cast<int>(i);
+  }
+  return -1;
 }
 
 void ElementsGroupManager::SetSeedGroupMask(bool projection, bool layer, bool viewport,
@@ -1566,6 +1760,7 @@ ElementsGroupManager::PreviewAction ElementsGroupManager::RegisterDraw(const Dra
   if (m_popup_open_count > 0 && m_hunt_enabled)
   {
     DrawRecord recorded = draw;
+    recorded.depth = nullptr;
     recorded.draw_index = static_cast<int>(m_collecting_draws.size());
     m_collecting_draws.push_back(recorded);
 
@@ -1728,9 +1923,6 @@ void ElementsGroupManager::OnFrameEnd()
   {
     m_display_highlighted_match_raw_draw_count = 0;
   }
-
-  m_stable_submatch_occurrence_counters.clear();
-  m_current_stable_submatch = {};
 }
 
 bool ElementsGroupManager::HasActiveHuntLocked() const
@@ -1781,21 +1973,6 @@ ElementsGroupManager::ResolveSelectedMatchDisplayDrawsLocked() const
                                              .raw_draw_count = 0});
   }
   return result;
-}
-
-ElementsGroupManager::StableSubMatchSignature
-ElementsGroupManager::GetStableSubMatchSignatureLocked(const DrawRecord& draw) const
-{
-  if (m_current_stable_submatch.valid && m_current_stable_submatch.draw_sequence == draw.draw_sequence)
-    return m_current_stable_submatch.signature;
-
-  const StableSubMatchSignature base_signature = MakeStableSubMatchSignature(draw, -1);
-  const u64 base_key = static_cast<u64>(ComputeStableSubMatchBaseKey(base_signature));
-  const int occurrence_slot = m_stable_submatch_occurrence_counters[base_key]++;
-  m_current_stable_submatch.valid = true;
-  m_current_stable_submatch.draw_sequence = draw.draw_sequence;
-  m_current_stable_submatch.signature = MakeStableSubMatchSignature(draw, occurrence_slot);
-  return m_current_stable_submatch.signature;
 }
 
 bool ElementsGroupManager::DoesTextureFilterPass(const DrawRecord& draw,
@@ -1854,6 +2031,10 @@ bool ElementsGroupManager::DoesEntryBaseMatch(const ElementGroupOverride& entry,
   if (!DoesTextureFilterPass(draw, entry))
     return false;
 
+  // Last: it may read the draw's vertices back.
+  if (!DrawPassesDepthConstraints(draw.depth, entry.min_depth, entry.max_depth))
+    return false;
+
   return true;
 }
 
@@ -1899,7 +2080,6 @@ bool ElementsGroupManager::DoesEntryMatch(const ElementGroupOverride& entry, con
 void ElementsGroupManager::RegisterFlagsForDraw(const DrawRecord& draw)
 {
   std::lock_guard lock(m_mutex);
-  GetStableSubMatchSignatureLocked(draw);
   for (const auto& entry : m_overrides)
   {
     if (entry.flag_group.empty())
@@ -1918,7 +2098,11 @@ void ElementsGroupManager::RegisterFlagsForDraw(const DrawRecord& draw)
 bool ElementsGroupManager::ShouldSkipByOverride(const DrawRecord& draw) const
 {
   std::lock_guard lock(m_mutex);
-  GetStableSubMatchSignatureLocked(draw);
+  return ShouldSkipByOverrideLocked(draw);
+}
+
+bool ElementsGroupManager::ShouldSkipByOverrideLocked(const DrawRecord& draw) const
+{
   for (const auto& entry : m_overrides)
   {
     if (entry.handling != HandlingType::Skip)
@@ -1939,37 +2123,60 @@ bool ElementsGroupManager::ShouldSkipByOverride(const DrawRecord& draw) const
 ElementsGroupManager::HandlingType ElementsGroupManager::GetOverrideHandling(
     const DrawRecord& draw, bool* out_preserve_stereo_efb) const
 {
+  std::lock_guard lock(m_mutex);
+  return GetOverrideHandlingLocked(draw, out_preserve_stereo_efb);
+}
+
+ElementsGroupManager::HandlingType
+ElementsGroupManager::GetOverrideHandlingLocked(const DrawRecord& draw,
+                                                bool* out_preserve_stereo_efb,
+                                                const ElementGroupOverride** out_entry) const
+{
   if (out_preserve_stereo_efb)
     *out_preserve_stereo_efb = false;
 
-  std::lock_guard lock(m_mutex);
-  GetStableSubMatchSignatureLocked(draw);
+  const ElementGroupOverride* entry = FindHandlingOverrideLocked(draw);
+  if (out_entry)
+    *out_entry = entry;
+  if (!entry)
+    return HandlingType::Skip;
+  if (out_preserve_stereo_efb)
+  {
+    *out_preserve_stereo_efb =
+        entry->handling == HandlingType::Fullscreen && entry->preserve_stereo_efb;
+  }
+  if (ShaderHunter::GetInstance().IsDebugLogging())
+  {
+    INFO_LOG_FMT(VIDEO, "ElementsGroup match(handling): '{}' draw#{} handling={}", entry->name,
+                 draw.draw_index + 1, static_cast<int>(entry->handling));
+  }
+  return entry->handling;
+}
+
+const ElementsGroupManager::ElementGroupOverride*
+ElementsGroupManager::FindHandlingOverrideLocked(const DrawRecord& draw) const
+{
   for (const auto& entry : m_overrides)
   {
     if (entry.handling == HandlingType::Skip || entry.handling == HandlingType::Flag)
       continue;
     if (DoesEntryMatch(entry, draw, true))
-    {
-      const bool preserve_stereo_efb =
-          entry.handling == HandlingType::Fullscreen && entry.preserve_stereo_efb;
-      if (out_preserve_stereo_efb)
-        *out_preserve_stereo_efb = preserve_stereo_efb;
-      if (ShaderHunter::GetInstance().IsDebugLogging())
-      {
-        INFO_LOG_FMT(VIDEO, "ElementsGroup match(handling): '{}' draw#{} handling={}", entry.name,
-                     draw.draw_index + 1, static_cast<int>(entry.handling));
-      }
-      return entry.handling;
-    }
+      return &entry;
   }
-  return HandlingType::Skip;
+  return nullptr;
 }
 
 ElementsGroupManager::ScreenPaneDepthMode
 ElementsGroupManager::GetOverrideScreenPaneDepth(const DrawRecord& draw, u64* out_group_id) const
 {
   std::lock_guard lock(m_mutex);
-  GetStableSubMatchSignatureLocked(draw);
+  const ElementGroupOverride* entry = FindScreenPaneOverrideLocked(draw, out_group_id);
+  return entry ? entry->screen_pane_depth : ScreenPaneDepthMode::Game;
+}
+
+const ElementsGroupManager::ElementGroupOverride*
+ElementsGroupManager::FindScreenPaneOverrideLocked(const DrawRecord& draw, u64* out_group_id) const
+{
   for (size_t index = 0; index < m_overrides.size(); ++index)
   {
     const auto& entry = m_overrides[index];
@@ -1979,18 +2186,22 @@ ElementsGroupManager::GetOverrideScreenPaneDepth(const DrawRecord& draw, u64* ou
     {
       if (out_group_id)
         *out_group_id = static_cast<u64>(index) + 1;
-      return entry.screen_pane_depth;
+      return &entry;
     }
   }
   if (out_group_id)
     *out_group_id = 0;
-  return ScreenPaneDepthMode::Game;
+  return nullptr;
 }
 
 float ElementsGroupManager::GetOverrideElementDepth(const DrawRecord& draw) const
 {
   std::lock_guard lock(m_mutex);
-  GetStableSubMatchSignatureLocked(draw);
+  return GetOverrideElementDepthLocked(draw);
+}
+
+float ElementsGroupManager::GetOverrideElementDepthLocked(const DrawRecord& draw) const
+{
   for (const auto& entry : m_overrides)
   {
     if (entry.element_depth < 0.0f)
@@ -2004,7 +2215,11 @@ float ElementsGroupManager::GetOverrideElementDepth(const DrawRecord& draw) cons
 float ElementsGroupManager::GetOverrideUnitsPerMeter(const DrawRecord& draw) const
 {
   std::lock_guard lock(m_mutex);
-  GetStableSubMatchSignatureLocked(draw);
+  return GetOverrideUnitsPerMeterLocked(draw);
+}
+
+float ElementsGroupManager::GetOverrideUnitsPerMeterLocked(const DrawRecord& draw) const
+{
   for (const auto& entry : m_overrides)
   {
     if (entry.units_per_meter <= 0.0f)
@@ -2018,7 +2233,11 @@ float ElementsGroupManager::GetOverrideUnitsPerMeter(const DrawRecord& draw) con
 float ElementsGroupManager::GetOverridePassthroughOpacity(const DrawRecord& draw) const
 {
   std::lock_guard lock(m_mutex);
-  GetStableSubMatchSignatureLocked(draw);
+  return GetOverridePassthroughOpacityLocked(draw);
+}
+
+float ElementsGroupManager::GetOverridePassthroughOpacityLocked(const DrawRecord& draw) const
+{
   for (const auto& entry : m_overrides)
   {
     if (entry.handling != HandlingType::Passthrough)
@@ -2033,7 +2252,12 @@ bool ElementsGroupManager::GetOverrideCameraAnchor(const DrawRecord& draw,
                                                    CameraAnchorParams* out_params) const
 {
   std::lock_guard lock(m_mutex);
-  GetStableSubMatchSignatureLocked(draw);
+  return GetOverrideCameraAnchorLocked(draw, out_params);
+}
+
+bool ElementsGroupManager::GetOverrideCameraAnchorLocked(const DrawRecord& draw,
+                                                         CameraAnchorParams* out_params) const
+{
   for (const auto& entry : m_overrides)
   {
     if (entry.handling != HandlingType::CameraAnchor)
@@ -2055,7 +2279,12 @@ bool ElementsGroupManager::GetOverrideControllerAnchor(const DrawRecord& draw,
                                                        ControllerAnchorParams* out_params) const
 {
   std::lock_guard lock(m_mutex);
-  GetStableSubMatchSignatureLocked(draw);
+  return GetOverrideControllerAnchorLocked(draw, out_params);
+}
+
+bool ElementsGroupManager::GetOverrideControllerAnchorLocked(
+    const DrawRecord& draw, ControllerAnchorParams* out_params) const
+{
   for (const auto& entry : m_overrides)
   {
     if (entry.handling != HandlingType::ControllerAnchor)
@@ -2077,7 +2306,11 @@ bool ElementsGroupManager::GetOverrideControllerAnchor(const DrawRecord& draw,
 void ElementsGroupManager::CheckClearEFBForDraw(const DrawRecord& draw)
 {
   std::lock_guard lock(m_mutex);
-  GetStableSubMatchSignatureLocked(draw);
+  CheckClearEFBForDrawLocked(draw);
+}
+
+void ElementsGroupManager::CheckClearEFBForDrawLocked(const DrawRecord& draw)
+{
   for (const auto& entry : m_overrides)
   {
     if (!entry.clear_efb)
@@ -2112,6 +2345,54 @@ void ElementsGroupManager::CheckClearEFBForDraw(const DrawRecord& draw)
     }
     return;
   }
+}
+
+ElementsGroupManager::DrawResolution ElementsGroupManager::ResolveOverrides(const DrawRecord& draw)
+{
+  std::lock_guard lock(m_mutex);
+  DrawResolution result;
+  result.skip = ShouldSkipByOverrideLocked(draw);
+  if (!result.skip)
+  {
+    const ElementGroupOverride* handling_entry = nullptr;
+    result.handling = GetOverrideHandlingLocked(draw, &result.preserve_stereo_efb, &handling_entry);
+    result.mono_efb_copy = handling_entry && handling_entry->mono_efb_copy;
+    switch (result.handling)
+    {
+    case HandlingType::ScreenPane:
+      if (const ElementGroupOverride* entry =
+              FindScreenPaneOverrideLocked(draw, &result.screen_pane_group))
+      {
+        result.screen_pane_depth = entry->screen_pane_depth;
+        result.screen_pane_reference_depth = entry->screen_pane_reference_depth;
+        result.screen_pane_depth_strength = entry->screen_pane_depth_strength;
+      }
+      break;
+    case HandlingType::HeadLocked:
+      result.headlocked = handling_entry->headlocked;
+      result.element_depth = GetOverrideElementDepthLocked(draw);
+      break;
+    case HandlingType::Screen:
+      result.element_depth = GetOverrideElementDepthLocked(draw);
+      break;
+    case HandlingType::UnitsPerMeter:
+      result.units_per_meter = GetOverrideUnitsPerMeterLocked(draw);
+      break;
+    case HandlingType::Passthrough:
+      result.passthrough_opacity = GetOverridePassthroughOpacityLocked(draw);
+      break;
+    case HandlingType::CameraAnchor:
+      GetOverrideCameraAnchorLocked(draw, &result.camera_anchor);
+      break;
+    case HandlingType::ControllerAnchor:
+      GetOverrideControllerAnchorLocked(draw, &result.controller_anchor);
+      break;
+    default:
+      break;
+    }
+  }
+  CheckClearEFBForDrawLocked(draw);
+  return result;
 }
 
 bool ElementsGroupManager::ShouldClearEFBCopy(int width)

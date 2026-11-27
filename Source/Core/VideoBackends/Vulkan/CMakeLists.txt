@@ -4,6 +4,7 @@ add_library(videovulkan
   Constants.h
   ObjectCache.cpp
   ObjectCache.h
+  SamplerDescriptorSetCache.h
   ShaderCompiler.cpp
   ShaderCompiler.h
   StagingBuffer.cpp
@@ -17,8 +18,13 @@ add_library(videovulkan
   VKPerfQuery.h
   VKPipeline.cpp
   VKPipeline.h
+  VKEFBFoveation.cpp
+  VKEFBFoveation.h
   VKGfx.cpp
   VKGfx.h
+  VKRecordingQueue.h
+  VKRecordingWorker.cpp
+  VKRecordingWorker.h
   VKShader.cpp
   VKShader.h
   VKStreamBuffer.cpp

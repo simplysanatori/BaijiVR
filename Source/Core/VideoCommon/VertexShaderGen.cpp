@@ -14,7 +14,7 @@
 #include "VideoCommon/VideoConfig.h"
 #include "VideoCommon/XFMemory.h"
 
-static constexpr u32 VERTEX_SHADER_CODE_VERSION = 21;
+static constexpr u32 VERTEX_SHADER_CODE_VERSION = 24;
 
 VertexShaderUid GetVertexShaderUid()
 {
@@ -421,7 +421,8 @@ void GenerateVRMultiviewVSProjection(ShaderCode& out, APIType api_type,
   out.Write("\t\tfloat4 row1 = right_eye ? " I_EYE_PROJ "[3] : " I_EYE_PROJ "[1];\n");
   out.Write("\t\tfloat4 zrow = right_eye ? " I_VR_EYE_Z "[1] : " I_VR_EYE_Z "[0];\n");
   out.Write("\t\tfloat4 vp = {};\n", view_space_pos);
-  out.Write("\t\tvp.x *= " I_STEREOPARAMS ".x;\n");
+  // The game projection's X and Y signs (mirror mode, a Y-down view space). See the GS path.
+  out.Write("\t\tvp.xy *= " I_STEREOPARAMS ".xy;\n");
   // Skybox (Detect Skybox): cstereo.z is the world-position weight (1 = normal, 0 = skybox).
   // The per-eye position offset (IPD + head translation) is baked into the projection rows'
   // .w component and applies only because vp.w == 1; zeroing it renders rotation-only so the
@@ -579,6 +580,13 @@ void GenerateVRMultiviewVSProjection(ShaderCode& out, APIType api_type,
   out.Write("\t\to.pos.xy *= sign(" I_VR_PIXELCENTER ".xy * float2(1.0, -1.0));\n");
   out.Write("\t\to.pos.xy = o.pos.xy - o.pos.w * " I_VR_PIXELCENTER ".xy;\n");
   out.Write("\t\tvr_pos_replaced = true;\n");
+  out.Write("\t}}\n");
+  // Fullscreen, moved in each eye (cstereo.w == 0.25, PerEyeScreenCopies): the eye's NDC offset
+  // is in its first projection row. The position keeps the console's convention: the trailing
+  // fixups still apply.
+  out.Write("\telse if (" I_STEREOPARAMS ".w > 0.125f)\n\t{{\n");
+  out.Write("\t\to.pos.xy += (right_eye ? " I_EYE_PROJ "[2].xy : " I_EYE_PROJ
+            "[0].xy) * o.pos.w;\n");
   out.Write("\t}}\n");
   out.Write("\t}}\n");
 }
@@ -1025,7 +1033,14 @@ ShaderCode GenerateVertexShaderCode(APIType api_type, const ShaderHostConfig& ho
   // flag suppresses the trailing depth-range/pixel-center fixups below to avoid
   // double-remapping.
   if (UseVRMultiviewVSProjection(api_type, host_config))
+  {
     GenerateVRMultiviewVSProjection(out, api_type, host_config, "vertex_output.position");
+    // The line/point expansion above offset the game's clip position, which the VR block
+    // replaced: offset the per-eye position by the same NDC amount, or the expanded quad folds
+    // back onto its line (Metroid Prime's map outlines and electric effects vanished).
+    if (uid_data->vs_expand != VSExpand::None)
+      out.Write("\tif (vr_pos_replaced)\n\t\to.pos.xy += offset * o.pos.w;\n");
+  }
 
   // clipPos/w needs to be done in pixel shader, not here
   if (!host_config.fast_depth_calc)

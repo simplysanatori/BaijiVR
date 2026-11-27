@@ -95,6 +95,13 @@ const Info<bool> GFX_BORDERLESS_FULLSCREEN{{System::GFX, "Settings", "Borderless
 const Info<bool> GFX_ENABLE_VALIDATION_LAYER{{System::GFX, "Settings", "EnableValidationLayer"},
                                              false};
 
+#if defined(__ANDROID__)
+constexpr bool DEFAULT_VULKAN_RECORDING_WORKER = true;
+#else
+constexpr bool DEFAULT_VULKAN_RECORDING_WORKER = false;
+#endif
+const Info<bool> GFX_VULKAN_RECORDING_WORKER{{System::GFX, "Settings", "VulkanRecordingWorker"},
+                                             DEFAULT_VULKAN_RECORDING_WORKER};
 const Info<bool> GFX_BACKEND_MULTITHREADING{{System::GFX, "Settings", "BackendMultithreading"},
                                             true};
 const Info<int> GFX_COMMAND_BUFFER_EXECUTE_INTERVAL{
@@ -224,7 +231,11 @@ const Info<int> GFX_VR_STATS_POSITION{{System::GFX, "VR", "StatsPosition"}, 0};
 const Info<float> GFX_VR_HEAD_LOCKED_CURVATURE{{System::GFX, "VR", "HeadLockedCurvature"}, 0.0f};
 const Info<bool> GFX_VR_DONT_CLEAR_SCREEN{{System::GFX, "VR", "DontClearScreen"}, false};
 const Info<bool> GFX_VR_LOAD_CUSTOM_SHADERS{{System::GFX, "VR", "LoadCustomShaders"}, false};
-const Info<bool> GFX_VR_DISABLE_CPU_CULL{{System::GFX, "VR", "DisableCPUCull"}, false};
+const Info<bool> GFX_VR_HEAD_CPU_CULL{{System::GFX, "VR", "HeadCPUCull"}, true};
+const Info<float> GFX_VR_WIIMOTE_MOTION_PITCH{{System::GFX, "VR", "WiimoteMotionPitch"}, 20.0f};
+const Info<int> GFX_VR_GAZE_RAM_COPIES{{System::GFX, "VR", "GazeRamCopies"},
+                                       GFX_VR_GAZE_RAM_COPIES_OFF};
+const Info<bool> GFX_VR_PER_EYE_SCREEN_COPIES{{System::GFX, "VR", "PerEyeScreenCopies"}, false};
 const Info<OpenXRMirrorView> GFX_VR_MIRROR_VIEW{{System::GFX, "VR", "MirrorView"},
 #ifdef BAIJI_STEAMVR
                                                 OpenXRMirrorView::None};
@@ -276,6 +287,7 @@ const Info<bool> GFX_VR_PANES_ON_SCREEN{{System::GFX, "VR", "SmallViewportsOnScr
 const Info<bool> GFX_VR_DETECT_RENDER_TARGETS{{System::GFX, "VR", "DetectRenderTargets"}, false};
 const Info<bool> GFX_VR_ORTHO_SCISSOR_FIX{{System::GFX, "VR", "OrthoScissorFix"}, true};
 const Info<bool> GFX_VR_DETECT_SKYBOX{{System::GFX, "VR", "DetectSkybox"}, false};
+const Info<bool> GFX_VR_SKIP_BACKGROUND_FILL{{System::GFX, "VR", "SkipBackgroundFill"}, false};
 const Info<bool> GFX_VR_METROID_THERMAL_VISOR_FIX{
     {System::GFX, "VR", "MetroidThermalVisorFix"}, true};
 const Info<bool> GFX_VR_METROID_D3D_THERMAL_PALETTE_FIX{

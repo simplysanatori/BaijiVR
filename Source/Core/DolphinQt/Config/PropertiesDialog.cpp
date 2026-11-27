@@ -21,6 +21,9 @@
 #include "DolphinQt/Config/GeckoCodeWidget.h"
 #include "DolphinQt/Config/GraphicsModListWidget.h"
 #include "DolphinQt/Config/VRConfigWidget.h"
+#ifdef ENABLE_VR
+#include "DolphinQt/Config/VRPatchesWidget.h"
+#endif
 #include "DolphinQt/Config/InfoWidget.h"
 #include "DolphinQt/Config/PatchesWidget.h"
 #include "DolphinQt/Config/HideObjectWidget.h"
@@ -73,6 +76,10 @@ PropertiesDialog::PropertiesDialog(QWidget* parent, const UICommon::GameFile& ga
   AddPane(game_config, tr("Game Config"));
   AddPane(vr_config, tr("VR Config"));
   AddPane(patches, tr("Patches"));
+#ifdef ENABLE_VR
+  auto* const vr_patches = new VRPatchesWidget(game.GetGameID(), game.GetRevision());
+  AddPane(vr_patches, tr("VR Patches"));
+#endif
   AddPane(ar, tr("AR Codes"));
   AddPane(gecko, tr("Gecko Codes"));
   AddWrappedPane(graphics_mod_list, tr("Graphics Mods"));

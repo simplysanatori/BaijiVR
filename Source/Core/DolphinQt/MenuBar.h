@@ -103,6 +103,7 @@ signals:
   void ShowWiiSpeakWindow();
   void ShowLogitechMicWindow();
   void ConnectWiiRemote(int id);
+  void ShowWiimoteMotionTester();
 
 #ifdef USE_RETRO_ACHIEVEMENTS
   void ShowAchievementsWindow();

@@ -7,12 +7,14 @@
 
 #include "VideoBackends/Vulkan/CommandBufferManager.h"
 #include "VideoBackends/Vulkan/ObjectCache.h"
+#include "VideoBackends/Vulkan/VKEFBFoveation.h"
 #include "VideoBackends/Vulkan/VKGfx.h"
 #include "VideoBackends/Vulkan/VKPipeline.h"
 #include "VideoBackends/Vulkan/VKShader.h"
 #include "VideoBackends/Vulkan/VKTexture.h"
 #include "VideoBackends/Vulkan/VulkanContext.h"
 #include "VideoCommon/Constants.h"
+#include "VideoCommon/FramebufferManager.h"
 
 namespace Vulkan
 {
@@ -53,6 +55,13 @@ void StateTracker::DestroyInstance()
   s_state_tracker->m_dummy_texture.reset();
   s_state_tracker->m_dummy_compute_texture.reset();
 
+  // The device is idle at shutdown, so the cached sampler sets' pool can go right away.
+  if (s_state_tracker->m_sampler_set_pool != VK_NULL_HANDLE)
+  {
+    vkDestroyDescriptorPool(g_vulkan_context->GetDevice(), s_state_tracker->m_sampler_set_pool,
+                            nullptr);
+  }
+
   s_state_tracker.reset();
 }
 
@@ -83,6 +92,7 @@ bool StateTracker::Initialize()
     m_bindings.samplers[i].imageView = m_dummy_texture->GetView();
     m_bindings.samplers[i].sampler = g_object_cache->GetPointSampler();
   }
+  RebuildSamplerBindingHash();
 
   for (size_t i = 0; i < VideoCommon::MAX_COMPUTE_SHADER_SAMPLERS; i++)
   {
@@ -198,6 +208,7 @@ void StateTracker::SetTexture(u32 index, VkImageView view)
 
   m_bindings.samplers[index].imageView = view;
   m_bindings.samplers[index].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  UpdateSamplerBindingHash(index);
   m_dirty_flags |=
       DIRTY_FLAG_GX_SAMPLERS | DIRTY_FLAG_UTILITY_BINDINGS | DIRTY_FLAG_COMPUTE_BINDINGS;
 }
@@ -208,8 +219,28 @@ void StateTracker::SetSampler(u32 index, VkSampler sampler)
     return;
 
   m_bindings.samplers[index].sampler = sampler;
+  UpdateSamplerBindingHash(index);
   m_dirty_flags |=
       DIRTY_FLAG_GX_SAMPLERS | DIRTY_FLAG_UTILITY_BINDINGS | DIRTY_FLAG_COMPUTE_BINDINGS;
+}
+
+void StateTracker::UpdateSamplerBindingHash(u32 index)
+{
+  m_sampler_bindings_hash ^= m_sampler_slot_hashes[index];
+  m_sampler_slot_hashes[index] =
+      decltype(m_sampler_descriptor_cache)::HashSlot(index, m_bindings.samplers[index]);
+  m_sampler_bindings_hash ^= m_sampler_slot_hashes[index];
+}
+
+void StateTracker::RebuildSamplerBindingHash()
+{
+  m_sampler_bindings_hash = 0;
+  for (u32 i = 0; i < static_cast<u32>(m_bindings.samplers.size()); ++i)
+  {
+    m_sampler_slot_hashes[i] =
+        decltype(m_sampler_descriptor_cache)::HashSlot(i, m_bindings.samplers[i]);
+    m_sampler_bindings_hash ^= m_sampler_slot_hashes[i];
+  }
 }
 
 void StateTracker::SetSSBO(VkBuffer buffer, VkDeviceSize offset, VkDeviceSize range)
@@ -245,29 +276,107 @@ void StateTracker::SetImageTexture(u32 index, VkImageView view)
   m_dirty_flags |= DIRTY_FLAG_COMPUTE_BINDINGS;
 }
 
+void StateTracker::OnImageViewDestroyed(VkImageView view)
+{
+  // Cached immutable sets may refer to this view even when it is not currently bound.
+  m_sampler_descriptor_cache.RemoveView(view);
+  UnbindTexture(view);
+}
+
 void StateTracker::UnbindTexture(VkImageView view)
 {
+  // Cached sampler sets that use the view stay valid while the view lives (only the current
+  // bindings must stop sampling it), so they are kept; see OnImageViewDestroyed.
   for (VkDescriptorImageInfo& it : m_bindings.samplers)
   {
     if (it.imageView == view)
     {
       it.imageView = m_dummy_texture->GetView();
       it.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      m_dirty_flags |=
+          DIRTY_FLAG_GX_SAMPLERS | DIRTY_FLAG_UTILITY_BINDINGS | DIRTY_FLAG_COMPUTE_BINDINGS;
     }
   }
+  RebuildSamplerBindingHash();
 
   for (VkDescriptorImageInfo& it : m_bindings.image_textures)
   {
     if (it.imageView == view)
     {
       it.imageView = m_dummy_compute_texture->GetView();
-      it.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      it.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+      m_dirty_flags |= DIRTY_FLAG_COMPUTE_BINDINGS;
     }
   }
 }
 
+VkDescriptorSet StateTracker::AllocateCachedSamplerSet()
+{
+  if (m_sampler_set_pool_exhausted)
+    return VK_NULL_HANDLE;
+
+  const VkDevice device = g_vulkan_context->GetDevice();
+  if (m_sampler_set_pool == VK_NULL_HANDLE)
+  {
+    const VkDescriptorPoolSize pool_size = {
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        SAMPLER_SET_POOL_SIZE * static_cast<u32>(VideoCommon::MAX_PIXEL_SHADER_SAMPLERS)};
+    const VkDescriptorPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                                                  nullptr,
+                                                  0,
+                                                  SAMPLER_SET_POOL_SIZE,
+                                                  1,
+                                                  &pool_size};
+    const VkResult res = vkCreateDescriptorPool(device, &pool_info, nullptr, &m_sampler_set_pool);
+    if (res != VK_SUCCESS)
+    {
+      LOG_VULKAN_ERROR(res, "vkCreateDescriptorPool for cached sampler sets failed: ");
+      m_sampler_set_pool = VK_NULL_HANDLE;
+      m_sampler_set_pool_exhausted = true;
+      return VK_NULL_HANDLE;
+    }
+  }
+
+  if (m_sampler_set_pool_used >= SAMPLER_SET_POOL_SIZE)
+  {
+    m_sampler_set_pool_exhausted = true;
+    return VK_NULL_HANDLE;
+  }
+
+  const VkDescriptorSetLayout layout =
+      g_object_cache->GetDescriptorSetLayout(DESCRIPTOR_SET_LAYOUT_STANDARD_SAMPLERS);
+  const VkDescriptorSetAllocateInfo allocate_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                                                     nullptr, m_sampler_set_pool, 1, &layout};
+  VkDescriptorSet set = VK_NULL_HANDLE;
+  if (vkAllocateDescriptorSets(device, &allocate_info, &set) != VK_SUCCESS)
+  {
+    m_sampler_set_pool_exhausted = true;
+    return VK_NULL_HANDLE;
+  }
+  ++m_sampler_set_pool_used;
+  return set;
+}
+
+void StateTracker::RetireSamplerSetPool()
+{
+  m_sampler_descriptor_cache.Clear();
+  if (m_sampler_set_pool != VK_NULL_HANDLE)
+  {
+    // Command buffers already recorded may still bind sets from it.
+    g_command_buffer_mgr->DeferDescriptorPoolDestruction(m_sampler_set_pool);
+    m_sampler_set_pool = VK_NULL_HANDLE;
+  }
+  m_sampler_set_pool_used = 0;
+  m_sampler_set_pool_exhausted = false;
+}
+
 void StateTracker::InvalidateCachedState()
 {
+  // Cached sampler sets survive submits and frames; replace their pool once it has filled up.
+  // This runs where the video thread owns recording (after a submit), never on the recording
+  // worker, so the pool is only handed to deferred destruction from one thread.
+  if (m_sampler_set_pool_exhausted)
+    RetireSamplerSetPool();
   m_gx_descriptor_sets.fill(VK_NULL_HANDLE);
   m_utility_descriptor_sets.fill(VK_NULL_HANDLE);
   m_compute_descriptor_set = VK_NULL_HANDLE;
@@ -278,6 +387,36 @@ void StateTracker::InvalidateCachedState()
     m_dirty_flags |= DIRTY_FLAG_VERTEX_BUFFER;
   if (m_index_buffer != VK_NULL_HANDLE)
     m_dirty_flags |= DIRTY_FLAG_INDEX_BUFFER;
+}
+
+// VKPERF: EFB render passes are the ones sharing the EFB depth texture (main, convert,
+// with-coverage and coverage framebuffers).
+static void CountRenderPass(const VKFramebuffer* framebuffer, std::atomic<u32>& efb_counter)
+{
+  auto& perf = g_vulkan_context->GetPerfCounters();
+  const bool efb = g_framebuffer_manager &&
+                   framebuffer->GetDepthAttachment() == g_framebuffer_manager->GetEFBDepthTexture();
+  (efb ? efb_counter : perf.other_passes).fetch_add(1, std::memory_order_relaxed);
+}
+
+bool StateTracker::BeginPassDensityMap(VkCommandBuffer command_buffer)
+{
+  bool density_map = m_framebuffer->HasFragmentDensityMap();
+  m_pass_timed = false;
+  if (!m_framebuffer->HasPlainVariant() && m_efb_foveation)
+    m_efb_foveation->BreakContinuation();
+  if (m_framebuffer->HasPlainVariant())
+  {
+    if (!m_efb_foveation)
+      m_efb_foveation = std::make_unique<EFBFoveationScheduler>();
+    density_map = m_efb_foveation->BeginPass(command_buffer);
+    m_pass_timed = true;
+  }
+  m_pass_density_map = density_map;
+  // The bound pipeline must be the twin built for this kind of render pass.
+  if (m_pipeline_density_map != density_map)
+    m_dirty_flags |= DIRTY_FLAG_PIPELINE;
+  return density_map;
 }
 
 void StateTracker::InvalidateMultiviewState()
@@ -300,20 +439,23 @@ void StateTracker::BeginRenderPass()
   if (InRenderPass())
     return;
 
-  m_current_render_pass = m_framebuffer->GetLoadRenderPass();
-  m_framebuffer_render_area = m_framebuffer->GetRect();
+  const VkCommandBuffer command_buffer = g_command_buffer_mgr->GetCurrentCommandBuffer();
+  CountRenderPass(m_framebuffer, g_vulkan_context->GetPerfCounters().efb_load_passes);
   m_framebuffer->PrepareForRenderPass();
+  const bool density_map = BeginPassDensityMap(command_buffer);
+  m_current_render_pass = m_framebuffer->GetLoadRenderPass(density_map);
+  m_framebuffer_render_area = m_framebuffer->GetRect();
+  m_in_clear_pass = false;
 
   VkRenderPassBeginInfo begin_info = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
                                       nullptr,
                                       m_current_render_pass,
-                                      m_framebuffer->GetFB(),
+                                      m_framebuffer->GetFB(density_map),
                                       m_framebuffer_render_area,
                                       0,
                                       nullptr};
 
-  vkCmdBeginRenderPass(g_command_buffer_mgr->GetCurrentCommandBuffer(), &begin_info,
-                       VK_SUBPASS_CONTENTS_INLINE);
+  vkCmdBeginRenderPass(command_buffer, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
   InvalidateMultiviewState();
 }
 
@@ -322,19 +464,22 @@ void StateTracker::BeginDiscardRenderPass()
   if (InRenderPass())
     return;
 
-  m_current_render_pass = m_framebuffer->GetDiscardRenderPass();
+  const VkCommandBuffer command_buffer = g_command_buffer_mgr->GetCurrentCommandBuffer();
+  CountRenderPass(m_framebuffer, g_vulkan_context->GetPerfCounters().efb_discard_passes);
+  const bool density_map = BeginPassDensityMap(command_buffer);
+  m_current_render_pass = m_framebuffer->GetDiscardRenderPass(density_map);
   m_framebuffer_render_area = m_framebuffer->GetRect();
+  m_in_clear_pass = false;
 
   VkRenderPassBeginInfo begin_info = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
                                       nullptr,
                                       m_current_render_pass,
-                                      m_framebuffer->GetFB(),
+                                      m_framebuffer->GetFB(density_map),
                                       m_framebuffer_render_area,
                                       0,
                                       nullptr};
 
-  vkCmdBeginRenderPass(g_command_buffer_mgr->GetCurrentCommandBuffer(), &begin_info,
-                       VK_SUBPASS_CONTENTS_INLINE);
+  vkCmdBeginRenderPass(command_buffer, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
   InvalidateMultiviewState();
 }
 
@@ -343,7 +488,12 @@ void StateTracker::EndRenderPass()
   if (!InRenderPass())
     return;
 
-  vkCmdEndRenderPass(g_command_buffer_mgr->GetCurrentCommandBuffer());
+  const VkCommandBuffer command_buffer = g_command_buffer_mgr->GetCurrentCommandBuffer();
+  vkCmdEndRenderPass(command_buffer);
+  if (m_pass_timed)
+    m_efb_foveation->EndPass(command_buffer);
+  m_pass_timed = false;
+  m_in_clear_pass = false;
   m_current_render_pass = VK_NULL_HANDLE;
 }
 
@@ -352,21 +502,48 @@ void StateTracker::BeginClearRenderPass(const VkRect2D& area, const VkClearValue
 {
   ASSERT(!InRenderPass());
 
-  m_current_render_pass = m_framebuffer->GetClearRenderPass();
-  m_framebuffer_render_area = area;
+  const VkCommandBuffer command_buffer = g_command_buffer_mgr->GetCurrentCommandBuffer();
+  CountRenderPass(m_framebuffer, g_vulkan_context->GetPerfCounters().efb_clear_passes);
   m_framebuffer->PrepareForRenderPass();
+  const bool density_map = BeginPassDensityMap(command_buffer);
+  m_current_render_pass = m_framebuffer->GetClearRenderPass(density_map);
+  m_framebuffer_render_area = area;
+  m_in_clear_pass = true;
 
   VkRenderPassBeginInfo begin_info = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
                                       nullptr,
                                       m_current_render_pass,
-                                      m_framebuffer->GetFB(),
+                                      m_framebuffer->GetFB(density_map),
                                       m_framebuffer_render_area,
                                       num_clear_values,
                                       clear_values};
 
-  vkCmdBeginRenderPass(g_command_buffer_mgr->GetCurrentCommandBuffer(), &begin_info,
-                       VK_SUBPASS_CONTENTS_INLINE);
+  vkCmdBeginRenderPass(command_buffer, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
   InvalidateMultiviewState();
+}
+
+void StateTracker::OnEFBFrameEnd(u32 efb_scale, s32 foveation_level)
+{
+  if (m_efb_foveation)
+    m_efb_foveation->OnFrameEnd(efb_scale, foveation_level);
+}
+
+void StateTracker::OnEFBFoveationSkipFrame()
+{
+  if (m_efb_foveation)
+    m_efb_foveation->SkipNextFrame();
+}
+
+void StateTracker::NoteSkippedKick()
+{
+  if (m_efb_foveation)
+    m_efb_foveation->NoteSkippedKick();
+}
+
+void StateTracker::NoteSubmitSplit()
+{
+  if (InRenderPass() && m_pass_timed)
+    m_efb_foveation->ContinueAfterSubmit();
 }
 
 void StateTracker::SetViewport(const VkViewport& viewport)
@@ -394,10 +571,10 @@ bool StateTracker::Bind()
     return false;
 
   // Check the render area if we were in a clear pass.
-  if (m_current_render_pass == m_framebuffer->GetClearRenderPass() && !IsViewportWithinRenderArea())
+  if (m_in_clear_pass && !IsViewportWithinRenderArea())
     EndRenderPass();
 
-  // With multiview the sets have to be bound in the render pass
+  // With multiview the sets have to be bound in the render pass.
   if (m_framebuffer->IsMultiview() && !InRenderPass())
     BeginRenderPass();
 
@@ -422,7 +599,11 @@ bool StateTracker::Bind()
     vkCmdBindIndexBuffer(command_buffer, m_index_buffer, m_index_buffer_offset, m_index_type);
 
   if (m_dirty_flags & DIRTY_FLAG_PIPELINE)
-    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline->GetVkPipeline());
+  {
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      m_pipeline->GetVkPipeline(m_pass_density_map));
+    m_pipeline_density_map = m_pass_density_map;
+  }
 
   if (m_dirty_flags & DIRTY_FLAG_VIEWPORT)
     vkCmdSetViewport(command_buffer, 0, 1, &m_viewport);
@@ -480,7 +661,7 @@ bool StateTracker::IsViewportWithinRenderArea() const
 
 void StateTracker::EndClearRenderPass()
 {
-  if (m_current_render_pass != m_framebuffer->GetClearRenderPass())
+  if (!m_in_clear_pass)
     return;
 
   // End clear render pass. Bind() will call BeginRenderPass() which
@@ -542,19 +723,40 @@ void StateTracker::UpdateGXDescriptorSet()
 
   if (m_dirty_flags & DIRTY_FLAG_GX_SAMPLERS || m_gx_descriptor_sets[1] == VK_NULL_HANDLE)
   {
-    m_gx_descriptor_sets[1] = g_command_buffer_mgr->AllocateDescriptorSet(
-        g_object_cache->GetDescriptorSetLayout(DESCRIPTOR_SET_LAYOUT_STANDARD_SAMPLERS));
-
-    writes[num_writes++] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                            nullptr,
-                            m_gx_descriptor_sets[1],
-                            0,
-                            0,
-                            static_cast<u32>(VideoCommon::MAX_PIXEL_SHADER_SAMPLERS),
-                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                            m_bindings.samplers.data(),
-                            nullptr,
-                            nullptr};
+    auto& perf = g_vulkan_context->GetPerfCounters();
+    m_gx_descriptor_sets[1] =
+        m_sampler_descriptor_cache.Find(m_bindings.samplers, m_sampler_bindings_hash);
+    if (m_gx_descriptor_sets[1] != VK_NULL_HANDLE)
+    {
+      perf.sampler_cache_hits.fetch_add(1, std::memory_order_relaxed);
+    }
+    else
+    {
+      perf.sampler_cache_misses.fetch_add(1, std::memory_order_relaxed);
+      // Once the cached sets' pool is full, write this one into the frame's pool, uncached,
+      // until the next submit replaces that pool.
+      m_gx_descriptor_sets[1] = AllocateCachedSamplerSet();
+      if (m_gx_descriptor_sets[1] != VK_NULL_HANDLE)
+      {
+        m_sampler_descriptor_cache.Insert(m_bindings.samplers, m_sampler_bindings_hash,
+                                          m_gx_descriptor_sets[1]);
+      }
+      else
+      {
+        m_gx_descriptor_sets[1] = g_command_buffer_mgr->AllocateDescriptorSet(
+            g_object_cache->GetDescriptorSetLayout(DESCRIPTOR_SET_LAYOUT_STANDARD_SAMPLERS));
+      }
+      writes[num_writes++] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                              nullptr,
+                              m_gx_descriptor_sets[1],
+                              0,
+                              0,
+                              static_cast<u32>(VideoCommon::MAX_PIXEL_SHADER_SAMPLERS),
+                              VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                              m_bindings.samplers.data(),
+                              nullptr,
+                              nullptr};
+    }
     m_dirty_flags = (m_dirty_flags & ~DIRTY_FLAG_GX_SAMPLERS) | DIRTY_FLAG_DESCRIPTOR_SETS;
   }
 
@@ -694,57 +896,54 @@ void StateTracker::UpdateUtilityDescriptorSet()
 
 void StateTracker::UpdateComputeDescriptorSet()
 {
-  // Max number of updates - UBO, Samplers, TexelBuffer, Image
-  std::array<VkWriteDescriptorSet, 4> dswrites;
+  // One write per binding: UBO, samplers, texel buffers, images. Every sampler, texel buffer and
+  // image has its own binding in the compute layout, and the Quest 3's Adreno driver dereferences
+  // null in vkUpdateDescriptorSets when one write rolls over from such a binding into the next.
+  constexpr u32 MAX_WRITES = 1 + VideoCommon::MAX_COMPUTE_SHADER_SAMPLERS +
+                             NUM_COMPUTE_TEXEL_BUFFERS + VideoCommon::MAX_COMPUTE_SHADER_SAMPLERS;
+  std::array<VkWriteDescriptorSet, MAX_WRITES> dswrites;
 
   // Allocate descriptor sets.
   if (m_dirty_flags & DIRTY_FLAG_COMPUTE_BINDINGS)
   {
     m_compute_descriptor_set = g_command_buffer_mgr->AllocateDescriptorSet(
         g_object_cache->GetDescriptorSetLayout(DESCRIPTOR_SET_LAYOUT_COMPUTE));
-    dswrites[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                   nullptr,
-                   m_compute_descriptor_set,
-                   0,
-                   0,
-                   1,
-                   VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-                   nullptr,
-                   &m_bindings.utility_ubo_binding,
-                   nullptr};
-    dswrites[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                   nullptr,
-                   m_compute_descriptor_set,
-                   1,
-                   0,
-                   VideoCommon::MAX_COMPUTE_SHADER_SAMPLERS,
-                   VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                   m_bindings.samplers.data(),
-                   nullptr,
-                   nullptr};
-    dswrites[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                   nullptr,
-                   m_compute_descriptor_set,
-                   1 + VideoCommon::MAX_COMPUTE_SHADER_SAMPLERS,
-                   0,
-                   NUM_COMPUTE_TEXEL_BUFFERS,
-                   VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
-                   nullptr,
-                   nullptr,
-                   m_bindings.texel_buffers.data()};
-    dswrites[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                   nullptr,
-                   m_compute_descriptor_set,
-                   1 + VideoCommon::MAX_COMPUTE_SHADER_SAMPLERS + NUM_COMPUTE_TEXEL_BUFFERS,
-                   0,
-                   VideoCommon::MAX_COMPUTE_SHADER_SAMPLERS,
-                   VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                   m_bindings.image_textures.data(),
-                   nullptr,
-                   nullptr};
 
-    vkUpdateDescriptorSets(g_vulkan_context->GetDevice(), static_cast<uint32_t>(dswrites.size()),
-                           dswrites.data(), 0, nullptr);
+    u32 writes = 0;
+    const auto add_write = [&](VkDescriptorType type, const VkDescriptorImageInfo* image_info,
+                               const VkDescriptorBufferInfo* buffer_info,
+                               const VkBufferView* texel_buffer_view) {
+      dswrites[writes] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                          nullptr,
+                          m_compute_descriptor_set,
+                          writes,
+                          0,
+                          1,
+                          type,
+                          image_info,
+                          buffer_info,
+                          texel_buffer_view};
+      writes++;
+    };
+    add_write(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, nullptr, &m_bindings.utility_ubo_binding,
+              nullptr);
+    for (u32 i = 0; i < VideoCommon::MAX_COMPUTE_SHADER_SAMPLERS; i++)
+    {
+      add_write(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &m_bindings.samplers[i], nullptr,
+                nullptr);
+    }
+    for (u32 i = 0; i < NUM_COMPUTE_TEXEL_BUFFERS; i++)
+    {
+      add_write(VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, nullptr, nullptr,
+                &m_bindings.texel_buffers[i]);
+    }
+    for (u32 i = 0; i < VideoCommon::MAX_COMPUTE_SHADER_SAMPLERS; i++)
+    {
+      add_write(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &m_bindings.image_textures[i], nullptr,
+                nullptr);
+    }
+
+    vkUpdateDescriptorSets(g_vulkan_context->GetDevice(), writes, dswrites.data(), 0, nullptr);
     m_dirty_flags =
         (m_dirty_flags & ~DIRTY_FLAG_COMPUTE_BINDINGS) | DIRTY_FLAG_COMPUTE_DESCRIPTOR_SET;
   }

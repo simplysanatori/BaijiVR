@@ -30,6 +30,7 @@
 #endif
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -47,18 +48,23 @@
 #include "Common/Config/Config.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
+#include "Common/Swap.h"
 #include "Common/Thread.h"
 #include "Common/Timer.h"
 #include "Common/VR/OpenXRInputState.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
+#include "Core/HW/Memmap.h"
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/Host.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
 #include "VideoCommon/CommandProcessor.h"
+#include "VideoCommon/Fifo.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/VR/CameraAnchorSource.h"
+#include "VideoCommon/VR/CameraPitch.h"
 #include "VideoCommon/VR/FrameUI/Overlay.h"
 #include "VideoCommon/VR/FrameUI/VrUi.h"
 #include "VideoCommon/VR/FrameUI/cylinder_layer.h"
@@ -1318,6 +1324,21 @@ void OpenXRManager::DestroySession()
   m_ipd = {};
   m_ipd.SetFallback(m_eye_distance.load(std::memory_order_relaxed));
   m_controller_anchor_cache_valid = {false, false};
+  m_camera_anchor_pending_valid = false;
+  m_camera_anchor_has_target = false;
+  m_camera_anchor_missing_frames = 0;
+  m_camera_anchor_position = {};
+  m_camera_anchor_target = {};
+  m_camera_anchor_rotation = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+  m_camera_anchor_target_rotation = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+  m_camera_anchor_rotation_active = false;
+  m_camera_anchor_upm = 0.0f;
+  m_camera_anchor_target_upm = 0.0f;
+  m_camera_anchor_from_source = false;
+  m_camera_anchor_hide = {};
+  m_game_camera_pitch.store(0.0f, std::memory_order_relaxed);
+  m_haptic_pulse_until_us = {0, 0};
+  ++m_pose_generation;
 }
 
 void OpenXRManager::PublishFrame(const std::array<XrCompositionLayerProjectionView, 2>& views,
@@ -2422,7 +2443,8 @@ void OpenXRManager::UpdateHaptics()
   if (!m_session_running || m_session == XR_NULL_HANDLE || m_action_haptic == XR_NULL_HANDLE)
     return;
 
-  const auto haptics = Common::VR::OpenXRInputState::GetHaptics();
+  const u64 now_us = Common::Timer::NowUs();
+  const auto haptics = Common::VR::OpenXRInputState::TakeHaptics();
 
   // Re-send short pulses while active to approximate continuous rumble.
   constexpr XrDuration vibration_duration_ns = 50'000'000;
@@ -2438,6 +2460,23 @@ void OpenXRManager::UpdateHaptics()
     XrHapticActionInfo action_info{XR_TYPE_HAPTIC_ACTION_INFO};
     action_info.action = m_action_haptic;
     action_info.subactionPath = hand_path;
+
+    // One-shot pulse (e.g. VR patches).
+    if (haptics.pulse_amplitude[hand] > 0.001f && haptics.pulse_duration_ns[hand] > 0)
+    {
+      XrHapticVibration vibration{XR_TYPE_HAPTIC_VIBRATION};
+      vibration.amplitude = haptics.pulse_amplitude[hand];
+      vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
+      vibration.duration = haptics.pulse_duration_ns[hand];
+      xrApplyHapticFeedback(
+          m_session, &action_info, reinterpret_cast<const XrHapticBaseHeader*>(&vibration));
+      m_haptics_active[hand] = true;
+      m_haptic_pulse_until_us[hand] =
+          now_us + static_cast<u64>(haptics.pulse_duration_ns[hand] / 1000);
+      continue;
+    }
+    if (amplitude <= 0.001f && now_us < m_haptic_pulse_until_us[hand])
+      continue;
 
     if (amplitude > 0.001f)
     {
@@ -2660,12 +2699,23 @@ void OpenXRManager::UpdateInputActions()
     locate_space_state(m_grip_spaces[hand], input_time, &controller.grip_pose,
                        &controller.grip_velocity);
 
+    // For VR game patches: the display-time aim seen from the game camera, like the Controller
+    // Anchor (a patch writes game memory that is rendered at about that time).
+    ComputeViewPose(controller.aim_pose, &controller.view_pose);
+    ComputeRigPose(controller.aim_pose, &controller.rig_pose);
+    controller.screen_pitch = m_game_camera_pitch.load(std::memory_order_relaxed);
+    if (controller.screen_pitch != 0.0f)
+      ComputeViewPose(controller.aim_pose, &controller.level_view_pose, false);
+    else
+      controller.level_view_pose = controller.view_pose;
+
     // Absolute pointing target for the emulated Wii Remote IR: where the aim ray meets
     // the virtual screen the renderer is actually displaying. Uses a dedicated measured
     // "now" locate of the aim pose — the display-time aim above stays reserved for the
     // Controller Anchor, which must match the rendered frame.
     Common::VR::OpenXRPoseState input_aim;
     locate_space_state(m_aim_spaces[hand], input_time, &input_aim, nullptr);
+    controller.pointer_pose = input_aim;
     ComputeVirtualScreenHit(input_aim.valid ? input_aim : controller.aim_pose,
                             &controller.screen_hit);
 
@@ -2705,6 +2755,8 @@ void OpenXRManager::UpdateInputActions()
   // Provide the HMD center pose for IR pointing and world-locked UI placement. Eye orientations
   // are effectively identical; average the positions to remove the left-eye IPD offset.
   Common::VR::OpenXRPoseState head_pose;
+  Common::VR::OpenXRPoseState head_view_pose;
+  Common::VR::OpenXRPoseState head_rig_pose;
   if (m_eye_views[0].pose.orientation.w != 0.0f || m_eye_views[0].pose.orientation.x != 0.0f ||
       m_eye_views[0].pose.orientation.y != 0.0f || m_eye_views[0].pose.orientation.z != 0.0f)
   {
@@ -2716,6 +2768,14 @@ void OpenXRManager::UpdateInputActions()
     head_pose.position = {(m_eye_views[0].pose.position.x + m_eye_views[1].pose.position.x) * 0.5f,
                           (m_eye_views[0].pose.position.y + m_eye_views[1].pose.position.y) * 0.5f,
                           (m_eye_views[0].pose.position.z + m_eye_views[1].pose.position.z) * 0.5f};
+    // For VR game patches: the eyes' center seen from the game camera, e.g. to cast a ray from
+    // the eyes through a point of the virtual screen. Without tracking the eyes are rendered at
+    // the home orientation (GetTrackingAdjustedEyeViews), whatever the head does.
+    Common::VR::OpenXRPoseState center = head_pose;
+    if (g_ActiveConfig.vr_tracking_mode == OpenXRTrackingMode::None)
+      center.orientation = {0.0f, 0.0f, 0.0f, 1.0f};
+    ComputeViewPose(center, &head_view_pose);
+    ComputeRigPose(center, &head_rig_pose);
   }
 
   std::array<std::string, 2> profile_strings;
@@ -2728,9 +2788,9 @@ void OpenXRManager::UpdateInputActions()
   // session has no swapchain and no UI, so every button can be bound.
   UpdateUI(&controllers);
 
-  Common::VR::OpenXRInputState::SetControllers(controllers, true, head_pose,
-                                               profile_strings, m_session_focused,
-                                               input_time);
+  Common::VR::OpenXRInputState::SetControllers(
+      controllers, true, head_pose, profile_strings, m_session_focused, input_time,
+      head_view_pose, GetEffectiveUnitsPerMeter(), head_rig_pose);
 
   UpdateHaptics();
 }
@@ -3539,6 +3599,7 @@ bool OpenXRManager::LocateViews()
   // change events are polled on the XR pacing thread, so consume their re-anchor request
   // here rather than racing the screen-pose cache from that thread.
   RefreshFlatScreenPose();
+  ++m_pose_generation;
 
   return true;
 }
@@ -4018,6 +4079,26 @@ void OpenXRManager::CommitCameraAnchorFrame()
   // glides back to the default position (rides out transient culling).
   constexpr int HOLD_FRAMES = 15;
 
+  // The bone hide lasts the frame it was latched for.
+  m_camera_anchor_hide.hide_radius = 0.0f;
+  // The frame was drawn from a VR patch's anchor, already latched as the current one: it wins
+  // over an anchor draw of the same frame, and there is nothing to blend.
+  if (m_camera_anchor_from_source)
+  {
+    m_camera_anchor_from_source = false;
+    m_camera_anchor_pending_valid = false;
+    return;
+  }
+
+  // No anchor draw this frame and the camera back at rest (the end state of a return glide):
+  // nothing to blend.
+  if (!m_camera_anchor_pending_valid && !m_camera_anchor_has_target &&
+      !m_camera_anchor_rotation_active && m_camera_anchor_upm <= 0.0f &&
+      m_camera_anchor_position == std::array<float, 3>{})
+  {
+    return;
+  }
+
   if (m_camera_anchor_pending_valid)
   {
     m_camera_anchor_target = m_camera_anchor_pending;
@@ -4096,6 +4177,126 @@ void OpenXRManager::CommitCameraAnchorFrame()
     if (!rotation_active)
       m_camera_anchor_rotation = CAMERA_ANCHOR_IDENTITY;
   }
+
+  // An engaged or gliding anchor moves the game-camera rig every frame.
+  if (IsCameraAnchorEngaged())
+    ++m_pose_generation;
+}
+
+// The frame pair recorded before the command being decoded (CameraAnchorMath::FramePairs), read
+// from the ring in the game's memory. Video thread.
+static std::optional<CameraAnchorMath::FramePair>
+FramePairOfThisFrame(const CameraAnchorMath::FramePairs& pairs)
+{
+  auto& system = Core::System::GetInstance();
+  const u32 entries = std::min(pairs.entries, CameraAnchorMath::MAX_FRAME_PAIRS);
+  const u8* ring = system.GetMemory().GetPointerForRange(
+      pairs.ring_address, entries * CameraAnchorMath::FRAME_PAIR_SIZE);
+  if (!ring || entries == 0)
+    return std::nullopt;
+  std::array<CameraAnchorMath::FramePair, CameraAnchorMath::MAX_FRAME_PAIRS> decoded;
+  size_t count = 0;
+  for (u32 e = 0; e < entries; ++e)
+  {
+    std::array<u32, CameraAnchorMath::FRAME_PAIR_WORDS> words;
+    for (u32 w = 0; w < words.size(); ++w)
+      words[w] = Common::swap32(ring + e * CameraAnchorMath::FRAME_PAIR_SIZE + w * 4);
+    if (const auto pair = CameraAnchorMath::DecodeFramePair(words))
+      decoded[count++] = *pair;
+  }
+  const auto& fifo = system.GetCommandProcessor().GetFifo();
+  const u32 base = fifo.CPBase.load(std::memory_order_acquire);
+  const u32 end = fifo.CPEnd.load(std::memory_order_acquire);
+  if (end <= base)
+    return std::nullopt;
+  const u32 size = end - base + 32;
+  // The GPU thread copies the FIFO ahead of decoding it.
+  const u32 pending =
+      static_cast<u32>(std::min<size_t>(system.GetFifo().GetVideoBufferPendingBytes(), size));
+  const u32 copied = (fifo.CPReadPointer.load(std::memory_order_acquire) - base) % size;
+  const u32 decode = (copied + size - pending) % size;
+  const u32 unread =
+      std::min(fifo.CPReadWriteDistance.load(std::memory_order_acquire), size - pending) + pending;
+  const std::optional<size_t> pick =
+      CameraAnchorMath::PickFramePair(std::span(decoded.data(), count), base, size, decode, unread);
+  if (!pick)
+    return std::nullopt;
+  return decoded[*pick];
+}
+
+void OpenXRManager::LatchCameraAnchorSource()
+{
+  // The anchor published before this frame's commands, not the newest: with dual core the CPU
+  // thread may already have published the next field's.
+  int newer = 0;
+  std::optional<CameraAnchorMath::FramePairs> pairs;
+  std::optional<CameraAnchorMath::Anchor> anchor = CameraAnchorSource::GetAt(
+      Core::System::GetInstance().GetCommandProcessor().GetFifoBytesRead(), &newer, &pairs);
+  // Then onto the camera this frame is drawn with, when the patch records the frames' pairs.
+  if (anchor && pairs)
+  {
+    const std::optional<CameraAnchorMath::FramePair> pair = FramePairOfThisFrame(*pairs);
+    if (pair && (pair->view != pairs->view || pair->root != pairs->root))
+    {
+      if (const auto rebased = CameraAnchorMath::RebaseAnchor(*anchor, pairs->view, pairs->root,
+                                                              pair->view, pair->root))
+      {
+        anchor = rebased;
+        ++m_camera_anchor_latches_rebased;
+      }
+    }
+  }
+  ++m_camera_anchor_latches;
+  if (newer > 0)
+    ++m_camera_anchor_latches_behind;
+  if (m_camera_anchor_latches >= 600)
+  {
+    DEBUG_LOG_FMT(OPENXR,
+                  "CameraAnchor: {} of {} frames drawn after the next field's anchor, {} moved "
+                  "onto their own frame's camera",
+                  m_camera_anchor_latches_behind, m_camera_anchor_latches,
+                  m_camera_anchor_latches_rebased);
+    m_camera_anchor_latches = 0;
+    m_camera_anchor_latches_behind = 0;
+    m_camera_anchor_latches_rebased = 0;
+  }
+  // The same gate as an anchor draw's capture: without it the camera glides home.
+  if (!anchor || !g_ActiveConfig.vr_enable_camera_anchor || g_ActiveConfig.vr_flat_screen ||
+      g_ActiveConfig.vr_stereo_screen)
+  {
+    return;
+  }
+
+  m_camera_anchor_target = anchor->position;
+  m_camera_anchor_target_rotation = anchor->rotation;
+  if (!OrthonormalizeAnchorRotation(m_camera_anchor_target_rotation))
+    m_camera_anchor_target_rotation = CAMERA_ANCHOR_IDENTITY;
+  m_camera_anchor_target_upm = anchor->units_per_meter > 0.0f ? anchor->units_per_meter : 0.0f;
+  m_camera_anchor_has_target = true;
+  m_camera_anchor_missing_frames = 0;
+  // Applied as is: the patch smoothed it in world space, and a blend here, in the game camera's
+  // view space, would lag behind the game camera's turns (the world would sway with them).
+  m_camera_anchor_position = m_camera_anchor_target;
+  m_camera_anchor_rotation = m_camera_anchor_target_rotation;
+  m_camera_anchor_upm = m_camera_anchor_target_upm;
+  m_camera_anchor_rotation_active = false;
+  for (size_t i = 0; i < 9; ++i)
+  {
+    if (std::abs(m_camera_anchor_rotation[i] - CAMERA_ANCHOR_IDENTITY[i]) > 1e-4f)
+    {
+      m_camera_anchor_rotation_active = true;
+      break;
+    }
+  }
+  m_camera_anchor_from_source = true;
+  m_camera_anchor_hide = *anchor;
+  ++m_pose_generation;
+}
+
+bool OpenXRManager::IsCameraAnchorEngaged() const
+{
+  return m_camera_anchor_has_target || m_camera_anchor_rotation_active ||
+         m_camera_anchor_upm > 0.0f || m_camera_anchor_position != std::array<float, 3>{};
 }
 
 bool OpenXRManager::GetControllerAnchorViewPose(int hand, float units_per_meter,
@@ -4136,14 +4337,9 @@ bool OpenXRManager::GetControllerAnchorViewPose(int hand, float units_per_meter,
   return true;
 }
 
-bool OpenXRManager::MapAimPoseToGameView(const Common::VR::OpenXRPoseState& aim,
-                                         float units_per_meter,
-                                         std::array<float, 3>* out_position,
-                                         std::array<float, 9>* out_rotation) const
+std::array<float, 3>
+OpenXRManager::RigAimPosition(const Common::VR::OpenXRPoseState& aim) const
 {
-  if (!aim.valid || !out_position)
-    return false;
-
   // Tracking-mode adjustment via the eye-center delta: adjusted_center + (raw − raw_center)
   // reproduces GetTrackingAdjustedEyeViews() for every tracking mode without duplicating
   // its switch (exact identity in Full6DoF) and keeps the hand attached to a pinned head
@@ -4155,23 +4351,47 @@ bool OpenXRManager::MapAimPoseToGameView(const Common::VR::OpenXRPoseState& aim,
   const float adj_cx = 0.5f * (adjusted[0].pose.position.x + adjusted[1].pose.position.x);
   const float adj_cy = 0.5f * (adjusted[0].pose.position.y + adjusted[1].pose.position.y);
   const float adj_cz = 0.5f * (adjusted[0].pose.position.z + adjusted[1].pose.position.z);
-  const float cx = adj_cx + (aim.position[0] - raw_cx);
-  const float cy = adj_cy + (aim.position[1] - raw_cy);
-  const float cz = adj_cz + (aim.position[2] - raw_cz);
+  std::array<float, 3> rig = {adj_cx + (aim.position[0] - raw_cx) - m_home_position.x,
+                              adj_cy + (aim.position[1] - raw_cy) - m_home_position.y,
+                              adj_cz + (aim.position[2] - raw_cz) - m_home_position.z};
+  if (g_ActiveConfig.vr_enable_camera_height)
+    rig[1] += g_ActiveConfig.vr_camera_height;
+  if (g_ActiveConfig.vr_enable_camera_forward)
+    rig[2] -= g_ActiveConfig.vr_camera_forward;
+  return rig;
+}
+
+void OpenXRManager::ComputeRigPose(const Common::VR::OpenXRPoseState& aim,
+                                   Common::VR::OpenXRPoseState* out_pose) const
+{
+  *out_pose = {};
+  if (!aim.valid || g_ActiveConfig.vr_flat_screen || g_ActiveConfig.vr_stereo_screen)
+    return;
+  out_pose->valid = true;
+  out_pose->position = RigAimPosition(aim);
+  out_pose->orientation = aim.orientation;
+}
+
+bool OpenXRManager::MapAimPoseToGameView(const Common::VR::OpenXRPoseState& aim,
+                                         float units_per_meter,
+                                         std::array<float, 3>* out_position,
+                                         std::array<float, 9>* out_rotation,
+                                         bool remove_camera_pitch, bool apply_camera_anchor) const
+{
+  if (!aim.valid || !out_position)
+    return false;
+  const bool anchor_rotation = apply_camera_anchor && m_camera_anchor_rotation_active;
 
   // Replay of the GetEyeProjectionRows eye-position chain (home offset, camera
   // height/forward, anchor rotation, anchor position) with the controller substituted
   // for the eye. Any divergence between the two shows up as the element swimming
   // against the hand under head motion — keep them in lockstep.
   const float s = std::max(units_per_meter, 0.0001f);
-  float px = (cx - m_home_position.x) * s;
-  float py = (cy - m_home_position.y) * s;
-  float pz = (cz - m_home_position.z) * s;
-  if (g_ActiveConfig.vr_enable_camera_height)
-    py += g_ActiveConfig.vr_camera_height * s;
-  if (g_ActiveConfig.vr_enable_camera_forward)
-    pz += -g_ActiveConfig.vr_camera_forward * s;
-  if (m_camera_anchor_rotation_active)
+  const std::array<float, 3> rig = RigAimPosition(aim);
+  float px = rig[0] * s;
+  float py = rig[1] * s;
+  float pz = rig[2] * s;
+  if (anchor_rotation)
   {
     const std::array<float, 9>& A = m_camera_anchor_rotation;
     const float rx = px, ry = py, rz = pz;
@@ -4179,9 +4399,22 @@ bool OpenXRManager::MapAimPoseToGameView(const Common::VR::OpenXRPoseState& aim,
     py = A[3] * rx + A[4] * ry + A[5] * rz;
     pz = A[6] * rx + A[7] * ry + A[8] * rz;
   }
-  px += m_camera_anchor_position[0];
-  py += m_camera_anchor_position[1];
-  pz += m_camera_anchor_position[2];
+  // The game camera's pitch, as in ComputeEyeRigs.
+  const float camera_pitch =
+      remove_camera_pitch ? m_game_camera_pitch.load(std::memory_order_relaxed) : 0.0f;
+  const float pitch_cos = std::cos(camera_pitch), pitch_sin = std::sin(camera_pitch);
+  if (camera_pitch != 0.0f)
+  {
+    const float ry = py, rz = pz;
+    py = pitch_cos * ry + pitch_sin * rz;
+    pz = -pitch_sin * ry + pitch_cos * rz;
+  }
+  if (apply_camera_anchor)
+  {
+    px += m_camera_anchor_position[0];
+    py += m_camera_anchor_position[1];
+    pz += m_camera_anchor_position[2];
+  }
 
   // Controller orientation in view space. Standard quaternion-to-matrix, columns =
   // controller-local axes in reference space (X right, Y up, -Z the aim direction);
@@ -4195,7 +4428,7 @@ bool OpenXRManager::MapAimPoseToGameView(const Common::VR::OpenXRPoseState& aim,
   std::array<float, 9> rot = {1.0f - y2 - z2, xy - wz,        xz + wy,
                               xy + wz,        1.0f - x2 - z2, yz - wx,
                               xz - wy,        yz + wx,        1.0f - x2 - y2};
-  if (m_camera_anchor_rotation_active)
+  if (anchor_rotation)
   {
     const std::array<float, 9>& A = m_camera_anchor_rotation;
     const std::array<float, 9> c = rot;
@@ -4208,11 +4441,109 @@ bool OpenXRManager::MapAimPoseToGameView(const Common::VR::OpenXRPoseState& aim,
       }
     }
   }
+  if (camera_pitch != 0.0f)
+  {
+    for (int col = 0; col < 3; ++col)
+    {
+      const float r1 = rot[3 + col], r2 = rot[6 + col];
+      rot[3 + col] = pitch_cos * r1 + pitch_sin * r2;
+      rot[6 + col] = -pitch_sin * r1 + pitch_cos * r2;
+    }
+  }
 
   *out_position = {px, py, pz};
   if (out_rotation)
     *out_rotation = rot;
   return true;
+}
+
+void OpenXRManager::ComputeViewPose(const Common::VR::OpenXRPoseState& aim,
+                                    Common::VR::OpenXRPoseState* out_pose,
+                                    bool remove_camera_pitch) const
+{
+  *out_pose = {};
+  if (!aim.valid || g_ActiveConfig.vr_flat_screen || g_ActiveConfig.vr_stereo_screen)
+    return;
+  const float upm = std::max(GetEffectiveUnitsPerMeter(), 0.0001f);
+  std::array<float, 3> position{};
+  std::array<float, 9> m{};
+  if (!MapAimPoseToGameView(aim, upm, &position, &m, remove_camera_pitch))
+    return;
+
+  // Rotation matrix (columns = controller axes in view space) to a quaternion.
+  float x, y, z, w;
+  const float trace = m[0] + m[4] + m[8];
+  if (trace > 0.0f)
+  {
+    const float s = 0.5f / std::sqrt(trace + 1.0f);
+    w = 0.25f / s;
+    x = (m[7] - m[5]) * s;
+    y = (m[2] - m[6]) * s;
+    z = (m[3] - m[1]) * s;
+  }
+  else if (m[0] > m[4] && m[0] > m[8])
+  {
+    const float s = 2.0f * std::sqrt(1.0f + m[0] - m[4] - m[8]);
+    w = (m[7] - m[5]) / s;
+    x = 0.25f * s;
+    y = (m[1] + m[3]) / s;
+    z = (m[2] + m[6]) / s;
+  }
+  else if (m[4] > m[8])
+  {
+    const float s = 2.0f * std::sqrt(1.0f + m[4] - m[0] - m[8]);
+    w = (m[2] - m[6]) / s;
+    x = (m[1] + m[3]) / s;
+    y = 0.25f * s;
+    z = (m[5] + m[7]) / s;
+  }
+  else
+  {
+    const float s = 2.0f * std::sqrt(1.0f + m[8] - m[0] - m[4]);
+    w = (m[3] - m[1]) / s;
+    x = (m[2] + m[6]) / s;
+    y = (m[5] + m[7]) / s;
+    z = 0.25f * s;
+  }
+  const float length = std::sqrt(x * x + y * y + z * z + w * w);
+  if (!std::isfinite(length) || length < 1e-6f)
+    return;
+  out_pose->valid = true;
+  out_pose->position = {position[0] / upm, position[1] / upm, position[2] / upm};
+  out_pose->orientation = {x / length, y / length, z / length, w / length};
+}
+
+void OpenXRManager::LatchGameCameraPitch()
+{
+  float pitch = 0.0f;
+  const std::optional<u32> address = CameraPitch::GetSource();
+  if (address && !g_ActiveConfig.vr_flat_screen && !g_ActiveConfig.vr_stereo_screen &&
+      (*address & 3) == 0)
+  {
+    // Checked first: the memory manager raises an alert for an address outside the RAM.
+    const Memory::MemoryManager& memory = Core::System::GetInstance().GetMemory();
+    const u32 physical = *address & 0x3FFFFFFF;
+    const bool in_mem1 = physical + 4 <= memory.GetRamSizeReal();
+    const bool in_mem2 = memory.GetExRamSizeReal() != 0 && (physical >> 28) == 1 &&
+                         (physical & 0x0FFFFFFF) + 4 <= memory.GetExRamSizeReal();
+    if (in_mem1 || in_mem2)
+    {
+      if (const u8* bytes = memory.GetPointerForRange(*address, 4))
+      {
+        u32 word;
+        std::memcpy(&word, bytes, sizeof(word));
+        const float sine = std::bit_cast<float>(Common::swap32(word));
+        if (std::isfinite(sine) && std::abs(sine) <= 1.0f)
+          pitch = std::asin(sine);
+      }
+    }
+  }
+  m_game_camera_pitch.store(pitch, std::memory_order_relaxed);
+}
+
+float OpenXRManager::GetGameCameraPitch() const
+{
+  return m_game_camera_pitch.load(std::memory_order_relaxed);
 }
 
 void OpenXRManager::ComputeVirtualScreenHit(const Common::VR::OpenXRPoseState& aim,
@@ -4250,7 +4581,7 @@ void OpenXRManager::ComputeVirtualScreenHit(const Common::VR::OpenXRPoseState& a
   const float upm = std::max(GetEffectiveUnitsPerMeter(), 0.0001f);
   std::array<float, 3> pos{};
   std::array<float, 9> rot{};
-  if (!MapAimPoseToGameView(aim, upm, &pos, &rot))
+  if (!MapAimPoseToGameView(aim, upm, &pos, &rot, true, false))
     return;
 
   // Aim forward in view space = -third column of the rotation.
@@ -4294,10 +4625,8 @@ void OpenXRManager::GetTrackedEyeProjectionRows(
   GetEyeProjectionRowsImpl(units_per_meter, false, out_proj_rows, out_z_rows);
 }
 
-void OpenXRManager::GetEyeProjectionRowsImpl(
-    float units_per_meter, bool apply_game_camera,
-    std::array<std::array<float, 4>, 4>& out_proj_rows,
-    std::array<std::array<float, 4>, 2>& out_z_rows) const
+std::array<OpenXRManager::EyeRig, 2>
+OpenXRManager::ComputeEyeRigs(float units_per_meter, bool apply_game_camera) const
 {
   const float s = std::max(units_per_meter, 0.0001f);
   constexpr float DEG_TO_RAD = 0.01745329252f;
@@ -4316,6 +4645,10 @@ void OpenXRManager::GetEyeProjectionRowsImpl(
       apply_game_camera && g_ActiveConfig.vr_enable_camera_height ?
           g_ActiveConfig.vr_camera_height * s :
           0.0f;
+  // The game camera's pitch removed from the VR view (LatchGameCameraPitch).
+  const float camera_pitch = m_game_camera_pitch.load(std::memory_order_relaxed);
+  const float pitch_cos = std::cos(camera_pitch);
+  const float pitch_sin = std::sin(camera_pitch);
 
   const std::array<XREyeView, 2> eye_views = GetTrackingAdjustedEyeViews();
   const float eye_center_x =
@@ -4326,9 +4659,9 @@ void OpenXRManager::GetEyeProjectionRowsImpl(
       0.5f * (eye_views[0].pose.position.z + eye_views[1].pose.position.z);
   const float eye_offset_scale = s * g_ActiveConfig.vr_stereo_separation;
 
+  std::array<EyeRig, 2> rigs{};
   for (uint32_t eye = 0; eye < 2; ++eye)
   {
-    const XrFovf& fov = eye_views[eye].fov;
     const XrQuaternionf& q_xr = eye_views[eye].pose.orientation;
     const XrVector3f& eye_pos_xr = eye_views[eye].pose.position;
     XrQuaternionf q = {-q_xr.x, -q_xr.y, -q_xr.z, q_xr.w};
@@ -4340,37 +4673,14 @@ void OpenXRManager::GetEyeProjectionRowsImpl(
       q = MultiplyQuaternions(q, lean_back_quat);
     }
 
-    // --- Quaternion to 3x3 rotation matrix R ---
-    // R transforms from eye-local frame to reference space (standard quaternion convention).
-    // Columns of R are the eye's local axes expressed in reference-space coordinates.
-    // To go reference→local we use R^T, but it's never needed explicitly: see below.
     const float x2 = 2.0f * q.x * q.x, y2 = 2.0f * q.y * q.y, z2 = 2.0f * q.z * q.z;
     const float xy = 2.0f * q.x * q.y, xz = 2.0f * q.x * q.z, yz = 2.0f * q.y * q.z;
     const float wx = 2.0f * q.w * q.x, wy = 2.0f * q.w * q.y, wz = 2.0f * q.w * q.z;
 
-    // R rows (R[row][col]):
-    // R[0] = { 1-y2-z2,  xy+wz,   xz-wy  }
-    // R[1] = { xy-wz,    1-x2-z2, yz+wx   }
-    // R[2] = { xz+wy,    yz-wx,   1-x2-y2 }
-    //
-    // R^T maps reference-space positions into eye-local coords:
-    //   eye_local = R^T * (viewPos - eye_pos_game)
-    //
-    // clip_x = P_row0 · eye_local = P_row0 · R^T · d
-    //        = Σ_j d_j · (Σ_i P_i · R[j][i])
-    //        = (R * P_col0) · d
-    //
-    // So combined_row = R * proj_col  (NOT R^T * proj_col — that would be wrong).
-
-    // R matrix elements (row, col)
     const float r00 = 1.0f - y2 - z2, r01 = xy + wz, r02 = xz - wy;
     const float r10 = xy - wz, r11 = 1.0f - x2 - z2, r12 = yz + wx;
     const float r20 = xz + wy, r21 = yz - wx, r22 = 1.0f - x2 - y2;
 
-    // Camera anchor rotation: attach the camera rig to the anchor element's frame.
-    // A's columns are the rig axes in view space, so the full eye-local -> view
-    // rotation is A*R (HMD rotation composes inside the rig frame, and the user can
-    // still look around freely from the element-oriented base).
     float m00 = r00, m01 = r01, m02 = r02;
     float m10 = r10, m11 = r11, m12 = r12;
     float m20 = r20, m21 = r21, m22 = r22;
@@ -4388,34 +4698,6 @@ void OpenXRManager::GetEyeProjectionRowsImpl(
       m22 = A[6] * r02 + A[7] * r12 + A[8] * r22;
     }
 
-    // --- Asymmetric projection from FOV tangent angles ---
-    const float tanL = tanf(fov.angleLeft);   // negative
-    const float tanR_val = tanf(fov.angleRight);  // positive
-    const float tanU = tanf(fov.angleUp);     // positive
-    const float tanD = tanf(fov.angleDown);   // negative
-
-    const float inv_w = 1.0f / (tanR_val - tanL);
-    const float inv_h = 1.0f / (tanU - tanD);
-
-    // Raw projection rows (before head rotation):
-    //   proj_row0 = { 2*inv_w,  0,        (tanR+tanL)*inv_w }
-    //   proj_row1 = { 0,        2*inv_h,  (tanU+tanD)*inv_h }
-    const float p0x = 2.0f * inv_w;
-    const float p0z = (tanR_val + tanL) * inv_w;
-    const float p1y = 2.0f * inv_h;
-    const float p1z = (tanU + tanD) * inv_h;
-
-    // --- Bake rotation: combined = (A*R) * proj_row ---
-    // combined_row0 = (A*R) * {p0x, 0, p0z}
-    const float c0x = m00 * p0x + m02 * p0z;
-    const float c0y = m10 * p0x + m12 * p0z;
-    const float c0z = m20 * p0x + m22 * p0z;
-
-    // combined_row1 = (A*R) * {0, p1y, p1z}
-    const float c1x = m01 * p1y + m02 * p1z;
-    const float c1y = m11 * p1y + m12 * p1z;
-    const float c1z = m21 * p1y + m22 * p1z;
-
     // Keep head translation and world scale unchanged while independently scaling only the
     // per-eye offset around the head center.
     float ex = (eye_center_x - m_home_position.x) * s +
@@ -4427,24 +4709,30 @@ void OpenXRManager::GetEyeProjectionRowsImpl(
     if (camera_height_units != 0.0f)
       ey += camera_height_units;
     if (camera_forward_units != 0.0f)
-    {
-      // Apply a fixed camera-space forward offset without coupling it to current
-      // head orientation. This keeps head tracking anchored like freelook offsets.
       ez += camera_forward_units;
-    }
     if (apply_game_camera && m_camera_anchor_rotation_active)
     {
-      // The offsets above are rig-space; rotate them into view space so IPD, room
-      // tracking and the fixed camera offsets stay aligned with the turned rig.
       const std::array<float, 9>& A = m_camera_anchor_rotation;
       const float rx = ex, ry = ey, rz = ez;
       ex = A[0] * rx + A[1] * ry + A[2] * rz;
       ey = A[3] * rx + A[4] * ry + A[5] * rz;
       ez = A[6] * rx + A[7] * ry + A[8] * rz;
     }
-    // Camera anchor: committed element position, already in game units and game view
-    // space (see CommitCameraAnchorFrame). Zero when no anchor override is active;
-    // capture is gated on the enable toggle, so disabling glides the camera home.
+    // Remove the game camera's pitch (Rx(-pitch)) so the world stays where the head looks while
+    // the virtual screen and pointer turn with the game camera.
+    if (camera_pitch != 0.0f)
+    {
+      const float t10 = m10, t11 = m11, t12 = m12;
+      m10 = pitch_cos * t10 + pitch_sin * m20;
+      m11 = pitch_cos * t11 + pitch_sin * m21;
+      m12 = pitch_cos * t12 + pitch_sin * m22;
+      m20 = -pitch_sin * t10 + pitch_cos * m20;
+      m21 = -pitch_sin * t11 + pitch_cos * m21;
+      m22 = -pitch_sin * t12 + pitch_cos * m22;
+      const float ry = ey, rz = ez;
+      ey = pitch_cos * ry + pitch_sin * rz;
+      ez = -pitch_sin * ry + pitch_cos * rz;
+    }
     if (apply_game_camera)
     {
       ex += m_camera_anchor_position[0];
@@ -4452,21 +4740,132 @@ void OpenXRManager::GetEyeProjectionRowsImpl(
       ez += m_camera_anchor_position[2];
     }
 
-    // W component: -dot(combined_xyz, eye_pos) using the ROTATED projection rows.
-    // This gives the correct full view transform: P · R^T · (viewPos - eye_pos).
+    rigs[eye].m = {{{m00, m01, m02}, {m10, m11, m12}, {m20, m21, m22}}};
+    rigs[eye].e = {ex, ey, ez};
+    rigs[eye].fov = eye_views[eye].fov;
+  }
+  return rigs;
+}
+
+void OpenXRManager::GetEyeProjectionRowsImpl(
+    float units_per_meter, bool apply_game_camera,
+    std::array<std::array<float, 4>, 4>& out_proj_rows,
+    std::array<std::array<float, 4>, 2>& out_z_rows) const
+{
+  const std::array<EyeRig, 2> rigs = ComputeEyeRigs(units_per_meter, apply_game_camera);
+
+  for (uint32_t eye = 0; eye < 2; ++eye)
+  {
+    const EyeRig& rig = rigs[eye];
+    const XrFovf& fov = rig.fov;
+    const float m00 = rig.m[0][0], m01 = rig.m[0][1], m02 = rig.m[0][2];
+    const float m10 = rig.m[1][0], m11 = rig.m[1][1], m12 = rig.m[1][2];
+    const float m20 = rig.m[2][0], m21 = rig.m[2][1], m22 = rig.m[2][2];
+    const float ex = rig.e[0], ey = rig.e[1], ez = rig.e[2];
+
+    const float tanL = tanf(fov.angleLeft);
+    const float tanR_val = tanf(fov.angleRight);
+    const float tanU = tanf(fov.angleUp);
+    const float tanD = tanf(fov.angleDown);
+
+    const float inv_w = 1.0f / (tanR_val - tanL);
+    const float inv_h = 1.0f / (tanU - tanD);
+
+    const float p0x = 2.0f * inv_w;
+    const float p0z = (tanR_val + tanL) * inv_w;
+    const float p1y = 2.0f * inv_h;
+    const float p1z = (tanU + tanD) * inv_h;
+
+    const float c0x = m00 * p0x + m02 * p0z;
+    const float c0y = m10 * p0x + m12 * p0z;
+    const float c0z = m20 * p0x + m22 * p0z;
+
+    const float c1x = m01 * p1y + m02 * p1z;
+    const float c1y = m11 * p1y + m12 * p1z;
+    const float c1z = m21 * p1y + m22 * p1z;
+
     const float c0w = -(c0x * ex + c0y * ey + c0z * ez);
     const float c1w = -(c1x * ex + c1y * ey + c1z * ez);
 
     out_proj_rows[eye * 2 + 0] = {c0x, c0y, c0z, c0w};
     out_proj_rows[eye * 2 + 1] = {c1x, c1y, c1z, c1w};
 
-    // --- Z-axis row for depth/w computation ---
-    // z_eye = ((A*R)^T * (viewPos - eye_pos)).z = dot((A*R)_col2, viewPos - eye_pos)
-    // (A*R)_col2 = {m02, m12, m22}
     const float zw = -(m02 * ex + m12 * ey + m22 * ez);
     out_z_rows[eye] = {m02, m12, m22, zw};
-
   }
+}
+
+bool OpenXRManager::GetHeadCullProjection(float units_per_meter,
+                                          std::array<std::array<float, 4>, 4>& out_rows) const
+{
+  const XrQuaternionf& q0 = m_eye_views[0].pose.orientation;
+  if (q0.x == 0.0f && q0.y == 0.0f && q0.z == 0.0f && q0.w == 0.0f)
+    return false;
+
+  const std::array<EyeRig, 2> rigs = ComputeEyeRigs(units_per_meter, true);
+
+  const auto column = [](const EyeRig& rig, int c) {
+    return std::array<float, 3>{rig.m[0][c], rig.m[1][c], rig.m[2][c]};
+  };
+  const auto dot = [](const std::array<float, 3>& a, const std::array<float, 3>& b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  };
+  const std::array<float, 3> right = column(rigs[0], 0);
+  const std::array<float, 3> up = column(rigs[0], 1);
+  const std::array<float, 3> back = column(rigs[0], 2);
+
+  float tan_x = 0.0f;
+  float tan_y = 0.0f;
+  for (const EyeRig& rig : rigs)
+  {
+    const float tan_l = std::tan(rig.fov.angleLeft);
+    const float tan_r = std::tan(rig.fov.angleRight);
+    const float tan_d = std::tan(rig.fov.angleDown);
+    const float tan_u = std::tan(rig.fov.angleUp);
+    for (const float lx : {tan_l, tan_r})
+    {
+      for (const float ly : {tan_d, tan_u})
+      {
+        const std::array<float, 3> dir = {rig.m[0][0] * lx + rig.m[0][1] * ly - rig.m[0][2],
+                                          rig.m[1][0] * lx + rig.m[1][1] * ly - rig.m[1][2],
+                                          rig.m[2][0] * lx + rig.m[2][1] * ly - rig.m[2][2]};
+        const float forward = -dot(back, dir);
+        if (forward < 0.01f)
+          return false;
+        tan_x = std::max(tan_x, std::abs(dot(right, dir)) / forward);
+        tan_y = std::max(tan_y, std::abs(dot(up, dir)) / forward);
+      }
+    }
+  }
+
+  constexpr float MARGIN_RAD = 2.0f * 0.01745329252f;
+  constexpr float MAX_HALF_ANGLE_RAD = 85.0f * 0.01745329252f;
+  const float half_angle_x = std::atan(tan_x) + MARGIN_RAD;
+  const float half_angle_y = std::atan(tan_y) + MARGIN_RAD;
+  if (half_angle_x > MAX_HALF_ANGLE_RAD || half_angle_y > MAX_HALF_ANGLE_RAD)
+    return false;
+  tan_x = std::tan(half_angle_x);
+  tan_y = std::tan(half_angle_y);
+
+  const std::array<float, 3> mid = {0.5f * (rigs[0].e[0] + rigs[1].e[0]),
+                                    0.5f * (rigs[0].e[1] + rigs[1].e[1]),
+                                    0.5f * (rigs[0].e[2] + rigs[1].e[2])};
+  float pull_back = 0.0f;
+  for (const EyeRig& rig : rigs)
+  {
+    const std::array<float, 3> offset = {rig.e[0] - mid[0], rig.e[1] - mid[1], rig.e[2] - mid[2]};
+    const float forward = -dot(back, offset);
+    pull_back = std::max(pull_back, std::abs(dot(right, offset)) / tan_x - forward);
+    pull_back = std::max(pull_back, std::abs(dot(up, offset)) / tan_y - forward);
+  }
+  const std::array<float, 3> apex = {mid[0] + pull_back * back[0], mid[1] + pull_back * back[1],
+                                     mid[2] + pull_back * back[2]};
+
+  out_rows[0] = {right[0] / tan_x, right[1] / tan_x, right[2] / tan_x, -dot(right, apex) / tan_x};
+  out_rows[1] = {up[0] / tan_y, up[1] / tan_y, up[2] / tan_y, -dot(up, apex) / tan_y};
+  out_rows[3] = {-back[0], -back[1], -back[2], dot(back, apex)};
+  out_rows[2] = out_rows[3];
+  return true;
 }
 
 void OpenXRManager::GetRawEyeProjectionRows(

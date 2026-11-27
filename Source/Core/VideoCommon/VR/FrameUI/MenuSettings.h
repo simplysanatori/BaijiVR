@@ -61,10 +61,12 @@ enum class SettingId : int
   EFBCopiesToTexture,
   XFBCopiesToTexture,
   FoveatedRendering,
+  SmartFoveatedEFB,
   Gamma,
   NonBlockingEFBCopies,
   NonBlockingPerfQueries,
   SkipOverwrittenClears,
+  VulkanRecordingWorker,
   PinEmulationThreads,
   PerformanceHint,
   PerformanceLog,
@@ -82,6 +84,10 @@ enum class SettingId : int
   HeadTracking,
   HudDepth,
   RemoveBars,
+  HeadCPUCull,
+  WiimoteMotionPitch,
+  PerEyeScreenCopies,
+  SkipBackgroundFill,
 
   // Stats
   ShowStats,

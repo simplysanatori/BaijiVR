@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
@@ -15,8 +16,10 @@
 #include "Common/EnumMap.h"
 #include "Common/Logging/Log.h"
 #include "Common/MathUtil.h"
+#include "Common/ScopeGuard.h"
 #include "Common/SmallVector.h"
 
+#include "Core/Config/GraphicsSettings.h"
 #include "Core/DolphinAnalytics.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/System.h"
@@ -26,12 +29,14 @@
 #include "VideoCommon/BPMemory.h"
 #include "VideoCommon/BoundingBox.h"
 #include "VideoCommon/DataReader.h"
+#include "VideoCommon/DrawDepth.h"
 #include "VideoCommon/ElementsGroupManager.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/GeometryShaderManager.h"
 #include "VideoCommon/GraphicsModSystem/Runtime/CustomShaderCache.h"
 #include "VideoCommon/GraphicsModSystem/Runtime/GraphicsModActionData.h"
 #include "VideoCommon/GraphicsModSystem/Runtime/GraphicsModManager.h"
+#include "VideoCommon/HideObjectEngine.h"
 #include "VideoCommon/IndexGenerator.h"
 #include "VideoCommon/MetroidElementClassifier.h"
 #include "VideoCommon/NativeVertexFormat.h"
@@ -39,20 +44,19 @@
 #include "VideoCommon/PerfQueryBase.h"
 #include "VideoCommon/PixelShaderGen.h"
 #include "VideoCommon/PixelShaderManager.h"
+#include "VideoCommon/ShaderHunter.h"
 #include "VideoCommon/Statistics.h"
 #include "VideoCommon/TextureCacheBase.h"
+#include "VideoCommon/TextureElementManager.h"
+#include "VideoCommon/VR/CameraAnchorSource.h"
+#include "VideoCommon/VR/OpenXRManager.h"
+#include "VideoCommon/VR/VRFrameRegion.h"
 #include "VideoCommon/VertexLoaderManager.h"
 #include "VideoCommon/VertexShaderManager.h"
 #include "VideoCommon/VideoBackendBase.h"
 #include "VideoCommon/VideoCommon.h"
-#include "VideoCommon/VR/OpenXRManager.h"
 #include "VideoCommon/VideoConfig.h"
-#include "VideoCommon/VR/VRFrameRegion.h"
 #include "VideoCommon/XFMemory.h"
-#include "VideoCommon/CullingCodeFinder.h"
-#include "VideoCommon/HideObjectEngine.h"
-#include "VideoCommon/ShaderHunter.h"
-#include "VideoCommon/TextureElementManager.h"
 #include "VideoCommon/XFStateManager.h"
 
 #include "Common/Hash.h"
@@ -82,11 +86,15 @@ struct MetroidHydraHudSettings
 };
 
 ShaderHunter::RuntimeElementSignature BuildRuntimeElementSignature(const XFMemory& xf_memory,
-                                                                   const BPMemory& bp_memory)
+                                                                   const BPMemory& bp_memory,
+                                                                   u32 projection_load,
+                                                                   int efb_copy)
 {
   ShaderHunter::RuntimeElementSignature signature;
   signature.valid = true;
   signature.perspective = xf_memory.projection.type == ProjectionType::Perspective;
+  signature.projection_load = static_cast<int>(projection_load);
+  signature.efb_copy = efb_copy;
 
   const float* projection = xf_memory.projection.rawProjection.data();
   if (signature.perspective)
@@ -164,18 +172,10 @@ MetroidProjectionMetrics BuildMetroidProjectionMetrics(const XFMemory& xf_memory
 
 MetroidElementProfile GetMetroidProfileForGameID(std::string_view game_id)
 {
-  if (game_id.starts_with("GM8") || game_id.starts_with("D43") || game_id.starts_with("D93"))
-    return MetroidElementProfile::Prime1GC;
-  if (game_id.starts_with("G2M") || game_id.starts_with("P2M"))
-    return MetroidElementProfile::Prime2GC;
   if (game_id.starts_with("R3I"))
     return MetroidElementProfile::Prime1Wii;
   if (game_id.starts_with("R32"))
     return MetroidElementProfile::Prime2Wii;
-  if (game_id.starts_with("RM3"))
-    return MetroidElementProfile::Prime3;
-  if (game_id.starts_with("R3M") || game_id.starts_with("R3O"))
-    return MetroidElementProfile::TrilogyAuto;
 
   return MetroidElementProfile::None;
 }
@@ -200,6 +200,14 @@ bool IsMetroidPrime1Profile(MetroidElementProfile profile)
 {
   return profile == MetroidElementProfile::Prime1GC ||
          profile == MetroidElementProfile::Prime1Wii;
+}
+
+// Hydra's rules number a frame's projection loads, not its draws, and classify each load once.
+// Only Prime 2 GC is classified that way so far: the other profiles were tuned against a
+// classification per draw (the Prime 1 3D HUD and its scanner mask) and need their own tests.
+bool ClassifiesPerProjectionLoad(MetroidElementProfile profile)
+{
+  return profile == MetroidElementProfile::Prime2GC;
 }
 
 MetroidHydraHudSettings GetMetroidHydraHudSettings(MetroidElementProfile profile,
@@ -354,6 +362,39 @@ bool IsMetroidPrime1CombatHudAnchorCandidate(MetroidElementLayer layer, float re
          reference_view_z <= -18.0f;
 }
 
+// Hydra's head-locked HUD values for a draw's Metroid layer, as an entry would give them.
+std::optional<ShaderHunter::HeadLockedParams>
+GetMetroidHudParams(MetroidElementProfile profile, MetroidElementLayer layer,
+                    std::string_view game_id, int hud_context, float reference_view_z)
+{
+  const MetroidHydraHudSettings hydra = GetMetroidHydraHudSettings(profile, layer, game_id);
+  if (!hydra.enabled)
+    return std::nullopt;
+
+  ShaderHunter::HeadLockedParams hud;
+  hud.perspective = hydra.perspective_hud;
+  hud.scale = hydra.scale;
+  hud.width = hydra.width;
+  hud.height = hydra.height;
+  hud.right = hydra.right;
+  hud.up = hydra.up;
+  // Radar/minimap layers self-centre on their own origin depth.
+  hud.self_center = MetroidElementLayerToININame(layer).find("RADAR") != std::string_view::npos;
+  hud.anchor = hydra.perspective_hud &&
+               (IsMetroidPerspectiveHudAnchorLayer(layer) ||
+                IsMetroidPrime1CombatHudAnchorCandidate(layer, reference_view_z, hud_context));
+  hud.context = hud_context;
+  // Prime 1 combat HUD body anchors sit around -20 in normal combat and can move toward -27 for
+  // visor-specific HUD projections. Grappling-hook arm/attachment draws are anchors too, but sit
+  // around -32 and must not replace the shared combat HUD body depth.
+  if (hud_context == METROID_HUD_CONTEXT_COMBAT)
+  {
+    hud.anchor_z_min = -28.5f;
+    hud.anchor_z_max = -18.0f;
+  }
+  return hud;
+}
+
 bool IsMetroidPrime1ScannerPreviewMask(const ShaderHunter::RuntimeElementSignature& signature)
 {
   return signature.valid && !signature.perspective && signature.ortho_left_x100 == -32000 &&
@@ -367,8 +408,25 @@ bool IsMetroidPrime1ScannerPreviewMask(const ShaderHunter::RuntimeElementSignatu
          signature.zfunc == 3 && signature.blend_color_update && signature.blend_alpha_update;
 }
 
-MetroidLayerBehavior GetMetroidLayerBehavior(MetroidElementLayer layer)
+MetroidLayerBehavior GetMetroidLayerBehavior(MetroidElementProfile profile,
+                                             MetroidElementLayer layer)
 {
+  // Hydra's Prime 2 values: the scan visor's highlighter and darkening cover the view and its
+  // reticle stays with the head; only the scan box is hidden.
+  if (ClassifiesPerProjectionLoad(profile))
+  {
+    switch (layer)
+    {
+    case MetroidElementLayer::ScanDarken:
+    case MetroidElementLayer::ScanHighlighter:
+      return {.handling = ShaderHunter::HandlingType::Fullscreen};
+    case MetroidElementLayer::ScanReticle:
+      return {.handling = ShaderHunter::HandlingType::HeadLocked};
+    default:
+      break;
+    }
+  }
+
   switch (layer)
   {
   case MetroidElementLayer::EFBCopy:
@@ -549,11 +607,121 @@ void VertexManagerBase::AddIndices(OpcodeDecoder::Primitive primitive, u32 num_v
   m_index_generator.AddIndices(primitive, num_vertices);
 }
 
+void VertexManagerBase::UpdateVRCullPolicy()
+{
+  auto& hunter = ShaderHunter::GetInstance();
+  auto& elements = ElementsGroupManager::GetInstance();
+  auto& texmgr = TextureElementManager::GetInstance();
+
+  // Hunting lists and previews show draws as the game issues them; ControllerAnchor elements
+  // are drawn at the controller, so neither the cone nor the game's view describes them. With
+  // the Controller Anchor setting off they stay where the game draws them.
+  const bool hunting = hunter.IsEnabled() || elements.IsPopupOpen() || texmgr.IsHunterActive();
+  const bool controller_anchors =
+      g_ActiveConfig.vr_enable_controller_anchor &&
+      (hunter.HasControllerAnchorOverrides() || elements.HasControllerAnchorOverrides() ||
+       texmgr.HasControllerAnchorOverrides());
+  m_vr_cull_allowed = g_ActiveConfig.stereo_mode == StereoMode::OpenXR &&
+                      g_ActiveConfig.vr_head_cpu_cull && !hunting && !controller_anchors;
+  m_vr_cull_cone_only = !hunter.HasOverrides() && !elements.HasOverrides() &&
+                        !texmgr.HasOverrides() &&
+                        GetCachedMetroidProfile() == MetroidElementProfile::None;
+
+  if (!m_vr_cull_allowed)
+  {
+    m_vr_cull_stats = {};
+    return;
+  }
+  if (++m_vr_cull_stats.frames < 60)
+    return;
+
+  const auto& s = m_vr_cull_stats;
+  const double frames = s.frames;
+  INFO_LOG_FMT(VIDEO,
+               "VR CPU cull: removed {:.0f} draw calls per frame (cone only: {:.0f} of {:.0f} "
+               "batches culled, cone and game: {:.0f} of {:.0f}), misrouted cone-only {}",
+               s.culled_draws / frames, s.culled[1] / frames, s.tested[1] / frames,
+               s.culled[0] / frames, s.tested[0] / frames, s.misrouted);
+  m_vr_cull_stats = {};
+}
+
+VertexManagerBase::CpuCullPlan VertexManagerBase::GetCpuCullPlan()
+{
+  if (g_ActiveConfig.stereo_mode != StereoMode::OpenXR)
+    return g_ActiveConfig.bCPUCull ? CpuCullPlan::Stock : CpuCullPlan::None;
+
+  // The stock cull tests the game's projection, which covers far less than the headset shows: it
+  // would cut head-independent holes into the view. VR only tests against the head cone.
+  if (!m_vr_cull_allowed)
+    return CpuCullPlan::None;
+  const auto* const cone =
+      Core::System::GetInstance().GetGeometryShaderManager().GetVRCullProjection();
+  if (!cone)
+    return CpuCullPlan::None;
+  m_vr_cull_projection = *cone;
+  // The VR projection flips the view position's X and Y with the game projection's signs
+  // (GeometryShaderManager: mirror mode, Red Steel 2's Y-down view space): so does the cone.
+  if (xfmem.projection.type == ProjectionType::Perspective)
+  {
+    const float x_sign = xfmem.projection.rawProjection[0] < 0.0f ? -1.0f : 1.0f;
+    const float y_sign = xfmem.projection.rawProjection[2] < 0.0f ? -1.0f : 1.0f;
+    for (auto& row : m_vr_cull_projection)
+    {
+      row[0] *= x_sign;
+      row[1] *= y_sign;
+    }
+  }
+
+  // Without overrides or a game profile, the only routes for a perspective draw of the main view
+  // render it from the head. Anything else may be placed on the virtual screen or head-locked,
+  // where the game's own projection decides what is visible.
+  if (m_vr_cull_cone_only && xfmem.projection.type == ProjectionType::Perspective)
+  {
+    const VR::VRViewportClass viewport_class = VR::ClassifyVRViewport(
+        xfmem.viewport, VR::GetVRScissor(), bpmem.scissorOffset.x << 1, bpmem.scissorOffset.y << 1);
+    if (viewport_class == VR::VRViewportClass::MainScene ||
+        viewport_class == VR::VRViewportClass::Letterboxed)
+    {
+      return CpuCullPlan::ConeOnly;
+    }
+  }
+  return CpuCullPlan::ConeAndGame;
+}
+
 bool VertexManagerBase::AreAllVerticesCulled(VertexLoaderBase* loader,
                                              OpcodeDecoder::Primitive primitive, const u8* src,
-                                             u32 count)
+                                             u32 count, CpuCullPlan plan)
 {
-  return m_cpu_cull.AreAllVerticesCulled(loader, primitive, src, count);
+  switch (plan)
+  {
+  case CpuCullPlan::None:
+    return false;
+  case CpuCullPlan::Stock:
+    return m_cpu_cull.AreAllVerticesCulled(loader, primitive, src, count);
+  case CpuCullPlan::ConeOnly:
+  case CpuCullPlan::ConeAndGame:
+    break;
+  }
+
+  const bool cone_only = plan == CpuCullPlan::ConeOnly;
+  ++m_vr_cull_stats.tested[cone_only];
+  if (cone_only)
+    m_vr_cone_only_pending = true;
+
+  // Outside the head cone. Frustum planes only: the cone's apex is not an eye, so it cannot
+  // decide which faces point away from the viewer.
+  bool culled = m_cpu_cull.AreAllVerticesCulled(loader, primitive, src, count,
+                                                m_vr_cull_projection.data(), true);
+  // ...and, unless the draw is known to be rendered from the head, outside the game's own view.
+  if (culled && !cone_only)
+    culled = m_cpu_cull.AreAllVerticesCulled(loader, primitive, src, count);
+
+  if (culled)
+  {
+    ++m_vr_cull_stats.culled[cone_only];
+    m_vr_culled_pending = true;
+  }
+  return culled;
 }
 
 DataReader VertexManagerBase::PrepareForAdditionalData(OpcodeDecoder::Primitive primitive,
@@ -842,12 +1010,38 @@ BitSet32 VertexManagerBase::UsedTextures() const
   return usedtextures;
 }
 
+#ifdef ENABLE_VR
+// Detect Skybox's verdict for the draw being flushed (IsSkyboxDraw). The vertices are read only
+// for the few draws whose matrix passes IsSkyboxCandidate.
+static bool DetectVRSkybox(const DrawDepthSource& draw_depth, bool after_sky)
+{
+  if (!g_ActiveConfig.vr_detect_skybox || g_ActiveConfig.stereo_mode != StereoMode::OpenXR ||
+      xfmem.projection.type != ProjectionType::Perspective)
+  {
+    return false;
+  }
+  const float* matrix = draw_depth.FirstVertexMatrix();
+  if (matrix == nullptr)
+    return false;
+  // The near plane, as BeginAgentDrawRecord derives it.
+  const float* p = xfmem.projection.rawProjection.data();
+  const float near_z = std::fabs(p[5] / (p[4] - 1.0f));
+  if (!IsSkyboxCandidate(matrix, near_z))
+    return false;
+  const DrawDistanceRange& distance = draw_depth.GetDistance();
+  return distance.valid && IsSkyboxDraw(matrix, distance.min, near_z, after_sky);
+}
+#endif
+
 void VertexManagerBase::Flush()
 {
   if (m_is_flushed)
     return;
 
   m_is_flushed = true;
+  const bool vr_culled = std::exchange(m_vr_culled_pending, false);
+  const bool vr_cone_only = std::exchange(m_vr_cone_only_pending, false);
+  const bool pink_preview_batch = std::exchange(m_pink_preview_batch, false);
 
   if (m_draw_counter == 0)
   {
@@ -999,9 +1193,9 @@ void VertexManagerBase::Flush()
         const auto cache_entry = g_texture_cache->Load(i);
         if (cache_entry)
         {
-          if (!Common::Contains(texture_names, cache_entry->texture_info_name))
+          if (!Common::Contains(texture_names, cache_entry->GetTextureInfoName()))
           {
-            texture_names.push_back(cache_entry->texture_info_name);
+            texture_names.push_back(cache_entry->GetTextureInfoName());
             texture_units.push_back(i);
           }
 
@@ -1011,6 +1205,13 @@ void VertexManagerBase::Flush()
         }
       }
     }
+  }
+  // A projection load is counted by the first draw that uses it, culled or not, where Hydra's
+  // SetConstants counted it. (XFStateManager's flag cannot tell: CPU culling consumes it.)
+  if (std::exchange(m_projection_load_pending, false))
+  {
+    ++m_frame_projection_loads;
+    m_metroid_load_layer.reset();
   }
   vertex_shader_manager.SetConstants(texture_names, xf_state_manager);
   if (!bpmem.genMode.zfreeze)
@@ -1075,8 +1276,8 @@ void VertexManagerBase::Flush()
                                             scissor_height >= viewport_height / 2;
       if (scissor_describes_scene)
       {
-        VR::ObserveVRPerspectiveViewport(xfmem.viewport, bpmem.scissorOffset.x << 1,
-                                         bpmem.scissorOffset.y << 1);
+        VR::ObserveVRPerspectiveViewport(xfmem.viewport, VR::GetVRScissor(),
+                                         bpmem.scissorOffset.x << 1, bpmem.scissorOffset.y << 1);
       }
     }
 
@@ -1091,8 +1292,11 @@ void VertexManagerBase::Flush()
       UpdatePipelineObject();
       bool shader_hunter_force_pink = false;
       bool manual_screen_pane = false;
+      bool full_view_draw = false;
       auto screen_pane_depth = ElementsGroupManager::ScreenPaneDepthMode::Game;
       u64 screen_pane_group = 0;
+      float screen_pane_reference_depth = -1.0f;
+      float screen_pane_depth_strength = 1.0f;
       if (m_current_pipeline_object)
       {
         // Shader Hunter: register shader hashes and check for skip.
@@ -1100,6 +1304,20 @@ void VertexManagerBase::Flush()
         bool hunter_skip = false;
         bool elements_skip = false;
         bool texmgr_skip = false;
+        // The camera depth and distance of this draw's vertices, read only when an override with
+        // min_depth / max_depth or Detect Skybox asks for it. This batch's
+        // vertices are the GetNumVerts() * stride bytes before m_cur_buffer_pointer
+        // (m_base_buffer_pointer is the start of the whole stream buffer on most backends). xfmem
+        // and the matrix index are this batch's: changing them flushes.
+        DrawDepthSource draw_depth;
+        if (const NativeVertexFormat* format = VertexLoaderManager::GetCurrentVertexFormat())
+        {
+          const u32 stride = format->GetVertexStride();
+          const u32 num_vertices = m_index_generator.GetNumVerts();
+          draw_depth = DrawDepthSource(m_cur_buffer_pointer - num_vertices * stride, num_vertices,
+                                       stride, &format->GetVertexDeclaration(), xfmem.posMatrices,
+                                       g_main_cp_state.matrix_index_a.PosNormalMtxIdx);
+        }
         auto& hunter = ShaderHunter::GetInstance();
         auto& elements = ElementsGroupManager::GetInstance();
         auto& texmgr = TextureElementManager::GetInstance();
@@ -1117,28 +1335,42 @@ void VertexManagerBase::Flush()
         const bool texmgr_has_overrides = texmgr.HasOverrides();
         const bool texmgr_hunter_active = texmgr.IsHunterActive();
         const bool texmgr_active = texmgr_has_overrides || texmgr_hunter_active;
-        // In flat 2D "cinema" mode the game renders mono exactly like a normal flat game. The
-        // Shader/Elements/Textures overrides (and the hunter) only skip or reproject draws for
-        // stereo VR, so running them here would corrupt the flat image and waste work — skip the
-        // whole override/hunter pass when the panel path is active.
-        const bool vr_flat_mode = g_ActiveConfig.vr_flat_screen;
+#ifdef ENABLE_VR
+        const bool anchor_bone_hide = g_ActiveConfig.stereo_mode == StereoMode::OpenXR &&
+                                      VR::g_openxr && VR::g_openxr->HasCameraAnchorBoneHide() &&
+                                      xfmem.projection.type == ProjectionType::Perspective;
+#else
+        constexpr bool anchor_bone_hide = false;
+#endif
+        // In flat 2D / stereo screen mode the game renders on the virtual screen rather than
+        // immersive per-eye stereo, so skip the immersive override/hunter pass.
+        const bool vr_flat_mode =
+            g_ActiveConfig.vr_flat_screen || g_ActiveConfig.vr_stereo_screen;
         if (!vr_flat_mode && (hunter_enabled || hunter_has_overrides || hunter_debug_logging ||
-                              elements_runtime_active || texmgr_active))
+                              elements_runtime_active || texmgr_active ||
+                              pink_preview_batch || anchor_bone_hide))
         {
           const auto& vs = m_current_pipeline_config.vs_uid;
           const auto& ps = m_current_pipeline_config.ps_uid;
           const auto& gs = m_current_pipeline_config.gs_uid;
-          const u64 vs_hash =
-              Common::ComputeCRC32(vs.GetUidDataRaw(), static_cast<u32>(vs.GetUidDataSize()));
-          const u64 ps_hash =
-              Common::ComputeCRC32(ps.GetUidDataRaw(), static_cast<u32>(ps.GetUidDataSize()));
-          const u64 gs_hash =
-              Common::ComputeCRC32(gs.GetUidDataRaw(), static_cast<u32>(gs.GetUidDataSize()));
+          // CRC32s (and below, family signatures) of the current UIDs, cached until the UID
+          // changes in UpdatePipelineConfig.
+          const auto uid_crc = [](CachedShaderIds& ids, const u8* data, size_t size) {
+            if (!ids.crc)
+              ids.crc = Common::ComputeCRC32(data, static_cast<u32>(size));
+            return *ids.crc;
+          };
+          const u64 vs_hash = uid_crc(m_vs_override_ids, vs.GetUidDataRaw(), vs.GetUidDataSize());
+          const u64 ps_hash = uid_crc(m_ps_override_ids, ps.GetUidDataRaw(), ps.GetUidDataSize());
+          const u64 gs_hash = uid_crc(m_gs_override_ids, gs.GetUidDataRaw(), gs.GetUidDataSize());
+
+          hunter.SetCurrentDrawDepth(&draw_depth);
+          Common::ScopeGuard clear_hunter_depth([&hunter] { hunter.SetCurrentDrawDepth(nullptr); });
 
           std::array<u64, 8> tex_hashes{};
           std::array<std::string, 8> tex_names{};
-          const bool needs_texture_hashes =
-              hunter_enabled || hunter_needs_textures || elements_runtime_active || texmgr_active;
+          const bool needs_texture_hashes = hunter_enabled || hunter_needs_textures ||
+                                            elements_runtime_active || texmgr_active;
           const bool needs_texture_names =
               hunter_enabled || elements_popup_open || texmgr_hunter_active;
           if (needs_texture_hashes || needs_texture_names)
@@ -1161,21 +1393,56 @@ void VertexManagerBase::Flush()
           u64 vs_family = 0;
           u64 ps_family = 0;
           u64 gs_family = 0;
-          if (hunter_enabled || hunter_needs_families || elements_runtime_active)
+          const bool hunter_or_elements_need_families =
+              hunter_enabled || hunter_needs_families || elements_runtime_active;
+          if (hunter_or_elements_need_families)
           {
-            vs_family = hunter.RegisterShader(ShaderHunter::ShaderType::Vertex, vs_hash,
-                                              vs.GetUidDataRaw(), vs.GetUidDataSize());
-            ps_family = hunter.RegisterShader(ShaderHunter::ShaderType::Pixel, ps_hash,
-                                              ps.GetUidDataRaw(), ps.GetUidDataSize());
-            gs_family = hunter.RegisterShader(ShaderHunter::ShaderType::Geometry, gs_hash,
-                                              gs.GetUidDataRaw(), gs.GetUidDataSize());
-            hunter.SetCurrentDrawShaderFamilies(vs_family, ps_family, gs_family);
+            const auto uid_family = [](CachedShaderIds& ids, ShaderHunter::ShaderType type,
+                                       const u8* data, size_t size) {
+              if (!ids.family)
+                ids.family = ShaderHunter::ComputeFamilySignature(type, data, size);
+              return *ids.family;
+            };
+            vs_family = uid_family(m_vs_override_ids, ShaderHunter::ShaderType::Vertex,
+                                   vs.GetUidDataRaw(), vs.GetUidDataSize());
+            ps_family = uid_family(m_ps_override_ids, ShaderHunter::ShaderType::Pixel,
+                                   ps.GetUidDataRaw(), ps.GetUidDataSize());
+            gs_family = uid_family(m_gs_override_ids, ShaderHunter::ShaderType::Geometry,
+                                   gs.GetUidDataRaw(), gs.GetUidDataSize());
+            if (hunter_or_elements_need_families)
+            {
+              hunter.RegisterDrawShaders(
+                  {vs_hash, vs_family, vs.GetUidDataRaw(), vs.GetUidDataSize()},
+                  {ps_hash, ps_family, ps.GetUidDataRaw(), ps.GetUidDataSize()},
+                  {gs_hash, gs_family, gs.GetUidDataRaw(), gs.GetUidDataSize()});
+              hunter.SetCurrentDrawShaderFamilies(vs_family, ps_family, gs_family);
+            }
           }
 
+          // The projection load this draw uses (counted above, zero-based in the frame).
+          const u32 projection_load =
+              m_frame_projection_loads > 0 ? m_frame_projection_loads - 1 : 0;
           ShaderHunter::RuntimeElementSignature draw_signature{};
           if (hunter_enabled || elements_runtime_active)
           {
-            draw_signature = BuildRuntimeElementSignature(xfmem, bpmem);
+            // Whether a bound texture was copied from the EFB (the textures are bound above): 2
+            // when one is at most half the EFB in each direction (a blur or bloom buffer), else 1.
+            int efb_copy = 0;
+            for (const u32 i : used_textures)
+            {
+              u32 copy_width = 0;
+              u32 copy_height = 0;
+              if (g_texture_cache->IsBoundEfbCopy(i, &copy_width, &copy_height))
+              {
+                efb_copy = 1;
+                if (copy_width <= EFB_WIDTH / 2 && copy_height <= EFB_HEIGHT / 2)
+                {
+                  efb_copy = 2;
+                  break;
+                }
+              }
+            }
+            draw_signature = BuildRuntimeElementSignature(xfmem, bpmem, projection_load, efb_copy);
             if (hunter_enabled)
               hunter.SetCurrentDrawSignature(draw_signature);
           }
@@ -1197,7 +1464,7 @@ void VertexManagerBase::Flush()
           {
             element_draw.emplace(ElementsGroupManager::DrawRecord{
                 .draw_index = -1,
-                .draw_sequence = m_draw_counter + 1,
+                .draw_sequence = m_draw_counter + m_vr_culled_flushes + 1,
                 .vs_hash = vs_hash,
                 .ps_hash = ps_hash,
                 .gs_hash = gs_hash,
@@ -1206,14 +1473,31 @@ void VertexManagerBase::Flush()
                 .gs_family = gs_family,
                 .signature = draw_signature,
                 .textures = tex_hashes,
-                .texture_names = tex_names});
+                .texture_names = tex_names,
+                .depth = &draw_depth});
 
             if (metroid_profile_active)
             {
               metroid_profile = GetCachedMetroidProfile();
-              metroid_metrics = BuildMetroidProjectionMetrics(xfmem, m_draw_counter);
-              metroid_layer =
-                  GetMetroidElementClassifier().Classify(metroid_profile, metroid_metrics);
+              if (ClassifiesPerProjectionLoad(metroid_profile))
+              {
+                // Hydra classified a projection when a draw first used it, with the number of
+                // loads before it in the frame, and kept the layer for the draws that followed.
+                metroid_metrics = BuildMetroidProjectionMetrics(xfmem, projection_load);
+                if (!m_metroid_load_layer)
+                {
+                  m_metroid_load_layer =
+                      GetMetroidElementClassifier().Classify(metroid_profile, metroid_metrics);
+                }
+                metroid_layer = *m_metroid_load_layer;
+              }
+              else
+              {
+                metroid_metrics =
+                    BuildMetroidProjectionMetrics(xfmem, m_draw_counter + m_vr_culled_flushes);
+                metroid_layer =
+                    GetMetroidElementClassifier().Classify(metroid_profile, metroid_metrics);
+              }
               if (IsMetroidPrime1Profile(metroid_profile) &&
                   IsMetroidPrime1ScannerPreviewMask(draw_signature))
               {
@@ -1276,20 +1560,49 @@ void VertexManagerBase::Flush()
           if (elements_runtime_active)
             elements.RegisterFlagsForDraw(*element_draw);
           if (texmgr_has_overrides)
-            texmgr.RegisterFlagsForTextures(tex_hashes);
+            texmgr.RegisterFlagsForTextures(tex_hashes, &draw_depth);
+
+          // All Elements override decisions for this draw, under one lock. Resolved eagerly; each
+          // result below is still only consumed under the conditions it always was.
+          ElementsGroupManager::DrawResolution element_overrides;
+          if (elements_has_overrides)
+            element_overrides = elements.ResolveOverrides(*element_draw);
 
           if (!hunter_skip && !elements_skip && elements_has_overrides)
-            elements_skip = elements.ShouldSkipByOverride(*element_draw);
+            elements_skip = element_overrides.skip;
 
           if (!hunter_skip && !elements_skip && metroid_profile_active)
-            elements_skip = GetMetroidLayerBehavior(metroid_layer).skip;
+            elements_skip = GetMetroidLayerBehavior(metroid_profile, metroid_layer).skip;
 
           if (!hunter_skip && !elements_skip && hunter_has_overrides)
             hunter_skip = hunter.ShouldSkipByOverride(vs_hash, ps_hash, gs_hash);
 
           // Texture Element Override skip: match purely on bound texture hash (fallback).
           if (!hunter_skip && !elements_skip && texmgr_has_overrides)
-            texmgr_skip = texmgr.ShouldSkipByTexture(tex_hashes);
+            texmgr_skip = texmgr.ShouldSkipByTexture(tex_hashes, &draw_depth);
+
+#ifdef ENABLE_VR
+          // A VR patch's Camera Anchor hides the head the view is in: the draws centred in its
+          // region around the head bone (in the game's view; the region also covers the field
+          // the anchor may lag behind). One vertex first, a few more only for draws near it.
+          if (anchor_bone_hide && !hunter_skip && !elements_skip && !texmgr_skip)
+          {
+            const VR::CameraAnchorMath::Anchor& hide = VR::g_openxr->GetCameraAnchorHide();
+            const DrawViewCentre& vertex = draw_depth.GetOneVertex();
+            const float reach = hide.hide_radius * 2.0f;
+            const float dx = vertex.centre[0] - hide.hide_center[0];
+            const float dy = vertex.centre[1] - hide.hide_center[1];
+            const float dz = vertex.centre[2] - hide.hide_center[2];
+            if (vertex.valid && dx * dx + dy * dy + dz * dz <= reach * reach)
+            {
+              const DrawViewCentre& centre = draw_depth.GetFewCentre();
+              if (centre.valid && VR::CameraAnchorMath::IsInHideRegion(hide, centre.centre))
+              {
+                texmgr_skip = true;
+              }
+            }
+          }
+#endif
 
           // Live preview while the Texture Hunter browser is open: skip or pink-highlight draws
           // binding a checked texture (Skip/Pink chosen in the browser's Preview mode toggle).
@@ -1301,55 +1614,69 @@ void VertexManagerBase::Flush()
               texmgr_skip = true;
           }
 
+          // Background fill: an opaque untextured quad drawn last, depth-tested against the scene
+          // without writing depth, so on a flat screen it only colours the empty background (PSO
+          // does this every frame). Reprojected in stereo it lands in front of the scene and
+          // becomes an opaque panel, so drop it; the VR eye buffers are already cleared.
+          if (g_ActiveConfig.vr_skip_background_fill &&
+              g_ActiveConfig.stereo_mode == StereoMode::OpenXR && !vr_flat_mode && !hunter_skip &&
+              !elements_skip && !texmgr_skip && used_textures.Count() == 0 &&
+              !bpmem.blendmode.blend_enable && !bpmem.blendmode.subtract &&
+              bpmem.zmode.test_enable && bpmem.zmode.func != CompareMode::Always &&
+              !bpmem.zmode.update_enable &&
+              (m_current_primitive_type == PrimitiveType::Triangles ||
+               m_current_primitive_type == PrimitiveType::TriangleStrip) &&
+              m_index_generator.GetIndexLen() <= 8 && m_index_generator.GetTriangleCount() == 2)
+          {
+            hunter_skip = true;
+            if (hunter_debug_logging) [[unlikely]]
+              INFO_LOG_FMT(VIDEO, "VR_DRAW #{}: skipped as background fill", m_draw_counter);
+          }
+
           // Check for screen/fullscreen handling overrides (VR stereo mode override)
           if (!hunter_skip && !elements_skip && !texmgr_skip)
           {
             auto handling = ShaderHunter::HandlingType::Skip;
+            // Which system chose the handling (VR::AgentCapture::HandlingSource), for the agent
+            // server's draw capture.
+            [[maybe_unused]] u8 handling_source = 0;
             bool preserve_stereo_efb = false;
+            bool mono_efb_copy = false;
             float element_depth = -1.0f;
             float units_per_meter = -1.0f;
             float passthrough_opacity = 0.0f;
             ElementsGroupManager::CameraAnchorParams anchor_params;
             ElementsGroupManager::ControllerAnchorParams controller_anchor_params;
-            const MetroidHydraHudSettings metroid_hydra_hud =
-                metroid_profile_active ?
-                    GetMetroidHydraHudSettings(metroid_profile, metroid_layer, m_metroid_game_id) :
-                    MetroidHydraHudSettings{};
+            std::optional<ShaderHunter::HeadLockedParams> headlocked_params;
 
             if (elements_has_overrides)
-              handling = elements.GetOverrideHandling(*element_draw, &preserve_stereo_efb);
+            {
+              handling = element_overrides.handling;
+              preserve_stereo_efb = element_overrides.preserve_stereo_efb;
+              mono_efb_copy = element_overrides.mono_efb_copy;
+            }
             if (handling != ShaderHunter::HandlingType::Skip)
             {
+              handling_source = 1;
+              // ResolveOverrides filled the parameter matching this handling.
               if (handling == ShaderHunter::HandlingType::ScreenPane)
               {
-                screen_pane_depth =
-                    elements.GetOverrideScreenPaneDepth(*element_draw, &screen_pane_group);
+                screen_pane_depth = element_overrides.screen_pane_depth;
+                screen_pane_group = element_overrides.screen_pane_group;
+                screen_pane_reference_depth = element_overrides.screen_pane_reference_depth;
+                screen_pane_depth_strength = element_overrides.screen_pane_depth_strength;
               }
-              else if (handling == ShaderHunter::HandlingType::Screen ||
-                  handling == ShaderHunter::HandlingType::HeadLocked)
-              {
-                element_depth = elements.GetOverrideElementDepth(*element_draw);
-              }
-              else if (handling == ShaderHunter::HandlingType::UnitsPerMeter)
-              {
-                units_per_meter = elements.GetOverrideUnitsPerMeter(*element_draw);
-              }
-              else if (handling == ShaderHunter::HandlingType::Passthrough)
-              {
-                passthrough_opacity = elements.GetOverridePassthroughOpacity(*element_draw);
-              }
-              else if (handling == ShaderHunter::HandlingType::CameraAnchor)
-              {
-                elements.GetOverrideCameraAnchor(*element_draw, &anchor_params);
-              }
-              else if (handling == ShaderHunter::HandlingType::ControllerAnchor)
-              {
-                elements.GetOverrideControllerAnchor(*element_draw, &controller_anchor_params);
-              }
+              element_depth = element_overrides.element_depth;
+              units_per_meter = element_overrides.units_per_meter;
+              passthrough_opacity = element_overrides.passthrough_opacity;
+              anchor_params = element_overrides.camera_anchor;
+              controller_anchor_params = element_overrides.controller_anchor;
+              headlocked_params = element_overrides.headlocked;
             }
             else if (hunter_has_overrides)
             {
               handling = hunter.GetOverrideHandling(vs_hash, ps_hash, gs_hash);
+              handling_source = 2;
               if (handling == ShaderHunter::HandlingType::Screen ||
                   handling == ShaderHunter::HandlingType::HeadLocked)
               {
@@ -1378,26 +1705,47 @@ void VertexManagerBase::Flush()
             // only when neither Elements nor Shader overrides produced a handling for this draw.
             if (handling == ShaderHunter::HandlingType::Skip && texmgr_has_overrides)
             {
-              handling = texmgr.GetHandlingForTextures(tex_hashes, &element_depth,
+              handling = texmgr.GetHandlingForTextures(tex_hashes, &draw_depth, &element_depth,
                                                        &units_per_meter, &passthrough_opacity,
                                                        &anchor_params, &controller_anchor_params);
+              handling_source = 3;
             }
             if (handling == ShaderHunter::HandlingType::Skip && metroid_profile_active)
-              handling = GetMetroidLayerBehavior(metroid_layer).handling;
+            {
+              handling = GetMetroidLayerBehavior(metroid_profile, metroid_layer).handling;
+              handling_source = 4;
+            }
             if (handling == ShaderHunter::HandlingType::Skip && uses_mp2_dark_copy)
             {
               handling = ShaderHunter::HandlingType::Fullscreen;
+              handling_source = 4;
             }
             if (handling == ShaderHunter::HandlingType::Skip && uses_mp2_dark_highlight_copy &&
                 !metroid_metrics.perspective)
             {
               handling = ShaderHunter::HandlingType::Fullscreen;
+              handling_source = 4;
+            }
+            // The scene's projection, which TextureCacheBase needs to aim GazeRamCopies and
+            // PerEyeScreenCopies.
+            if (handling == ShaderHunter::HandlingType::Skip &&
+                (g_ActiveConfig.vr_gaze_ram_copies != Config::GFX_VR_GAZE_RAM_COPIES_OFF ||
+                 g_ActiveConfig.vr_per_eye_screen_copies) &&
+                xfmem.projection.type == ProjectionType::Perspective)
+            {
+              m_vr_scene_projection = xfmem.projection.rawProjection;
             }
 
             if (handling == ShaderHunter::HandlingType::Fullscreen && preserve_stereo_efb)
             {
               for (const u32 i : used_textures)
                 g_texture_cache->ApplyVRPreserveStereoEFBFix(i);
+            }
+            // A frozen screen shown as a flat picture (a pause menu's background): one eye's.
+            if (mono_efb_copy)
+            {
+              for (const u32 i : used_textures)
+                g_texture_cache->ApplyVRMonoEFBCopy(i);
             }
 
             if (handling == ShaderHunter::HandlingType::Screen)
@@ -1437,25 +1785,26 @@ void VertexManagerBase::Flush()
                     screen_pane_depth == ElementsGroupManager::ScreenPaneDepthMode::VR ?
                         screen_pane_group :
                         0;
+                geometry_shader_manager.vr_pane_reference_w_override = screen_pane_reference_depth;
+                geometry_shader_manager.vr_pane_depth_strength = screen_pane_depth_strength;
               }
             }
             else if (handling == ShaderHunter::HandlingType::Fullscreen)
             {
               geometry_shader_manager.vr_stereo_override = 0.0f;
+              full_view_draw = true;
             }
             else if (handling == ShaderHunter::HandlingType::FullscreenMono)
             {
               geometry_shader_manager.vr_stereo_override = 0.0f;
+              full_view_draw = true;
             }
             else if (handling == ShaderHunter::HandlingType::HeadLocked)
             {
-              const bool perspective_metroid_hud =
-                  metroid_hydra_hud.perspective_hud && metroid_metrics.perspective;
-              geometry_shader_manager.vr_stereo_override = perspective_metroid_hud ? -3.0f : -2.0f;
-              if (metroid_hydra_hud.enabled)
+              // The entry's head-locked HUD parameters, else Hydra's values for the draw's
+              // Metroid layer (until the Metroid profiles carry them in their entries).
+              if (!headlocked_params && metroid_profile_active)
               {
-                const auto& pnm = vertex_shader_manager.constants.posnormalmatrix;
-                const float metroid_hud_ref_z = pnm[2][3];
                 int metroid_hud_context = METROID_HUD_CONTEXT_DEFAULT;
                 if (IsMetroidPrime1Profile(metroid_profile))
                 {
@@ -1464,35 +1813,33 @@ void VertexManagerBase::Flush()
                   else if (m_metroid_prime1_combat_context_seen)
                     metroid_hud_context = METROID_HUD_CONTEXT_COMBAT;
                 }
-                // Radar/minimap layers self-centre on their own origin depth in the -3 path
-                // (consumed and reset by GeometryShaderManager::SetConstants).
-                const std::string_view layer_name = MetroidElementLayerToININame(metroid_layer);
-                geometry_shader_manager.vr_metroid_hud_self_center =
-                    layer_name.find("RADAR") != std::string_view::npos;
-                geometry_shader_manager.vr_metroid_hud_anchor_candidate =
-                    perspective_metroid_hud &&
-                    (IsMetroidPerspectiveHudAnchorLayer(metroid_layer) ||
-                     IsMetroidPrime1CombatHudAnchorCandidate(metroid_layer, metroid_hud_ref_z,
-                                                             metroid_hud_context));
-                geometry_shader_manager.vr_metroid_hud_reference_context = metroid_hud_context;
+                headlocked_params = GetMetroidHudParams(
+                    metroid_profile, metroid_layer, m_metroid_game_id, metroid_hud_context,
+                    vertex_shader_manager.constants.posnormalmatrix[2][3]);
               }
+              const ShaderHunter::HeadLockedParams hud =
+                  headlocked_params.value_or(ShaderHunter::HeadLockedParams{});
+              geometry_shader_manager.vr_stereo_override =
+                  hud.perspective && xfmem.projection.type == ProjectionType::Perspective ? -3.0f :
+                                                                                            -2.0f;
+              // The 3D HUD's reference depth (consumed and reset by
+              // GeometryShaderManager::SetConstants).
+              geometry_shader_manager.vr_hud_self_center = hud.self_center;
+              geometry_shader_manager.vr_hud_anchor_candidate = hud.anchor;
+              geometry_shader_manager.vr_hud_anchor_z_min = hud.anchor_z_min;
+              geometry_shader_manager.vr_hud_anchor_z_max = hud.anchor_z_max;
+              geometry_shader_manager.vr_hud_reference_context = hud.context;
               if (element_depth >= 0.0f)
                 geometry_shader_manager.vr_element_depth_override = element_depth;
-              if (metroid_hydra_hud.enabled)
+              if (hud.scale > 0.0f)
               {
-                if (metroid_hydra_hud.scale > 0.0f)
-                {
-                  geometry_shader_manager.vr_units_per_meter_override =
-                      g_ActiveConfig.vr_units_per_meter * metroid_hydra_hud.scale;
-                }
-                geometry_shader_manager.vr_headlocked_projection_scale_x =
-                    metroid_hydra_hud.width;
-                geometry_shader_manager.vr_headlocked_projection_scale_y =
-                    metroid_hydra_hud.height;
-                geometry_shader_manager.vr_headlocked_projection_offset_x =
-                    metroid_hydra_hud.right;
-                geometry_shader_manager.vr_headlocked_projection_offset_y = metroid_hydra_hud.up;
+                geometry_shader_manager.vr_units_per_meter_override =
+                    g_ActiveConfig.vr_units_per_meter * hud.scale;
               }
+              geometry_shader_manager.vr_headlocked_projection_scale_x = hud.width;
+              geometry_shader_manager.vr_headlocked_projection_scale_y = hud.height;
+              geometry_shader_manager.vr_headlocked_projection_offset_x = hud.right;
+              geometry_shader_manager.vr_headlocked_projection_offset_y = hud.up;
             }
             else if (handling == ShaderHunter::HandlingType::UnitsPerMeter)
             {
@@ -1676,10 +2023,8 @@ void VertexManagerBase::Flush()
             }
           }
 
-          // ClearEFB is an independent flag, checked regardless of handling type.
-          // This lets an element be e.g. Skip+ClearEFB or Screen+ClearEFB.
-          if (elements_has_overrides)
-            elements.CheckClearEFBForDraw(*element_draw);
+          // ClearEFB is an independent flag, checked regardless of handling type (so an element
+          // can be e.g. Skip+ClearEFB or Screen+ClearEFB); ResolveOverrides armed it above.
 
           // VR Draw Debug Logging: log every draw call's projection, viewport, scissor, and
           // shader hashes so we can identify how specific visual elements (e.g. cinematic bars)
@@ -1764,6 +2109,30 @@ void VertexManagerBase::Flush()
           }
         }
 
+        // Depth resets: an ortho quad that writes only depth, at the far plane and whatever was
+        // there, puts the depth back to far for the 3D drawn next (Red Steel draws its skybox
+        // first with depth writes, then resets the depth so the world draws over it, and again
+        // before the player's arm). Wii Sports' Boxing takes the depth from a Z texture instead,
+        // before the 3D of its "VS" screen. On the virtual screen it would reset only the
+        // screen's rectangle, at the screen's depth, and the sky would hide the world around it:
+        // draw it in both eye layers.
+        if (g_ActiveConfig.stereo_mode == StereoMode::OpenXR && !vr_flat_mode &&
+            g_ActiveConfig.vr_virtual_screen && !hunter_skip && !elements_skip && !texmgr_skip &&
+            std::isnan(geometry_shader_manager.vr_stereo_override) &&
+            xfmem.projection.type != ProjectionType::Perspective && !bpmem.blendmode.color_update &&
+            !bpmem.blendmode.alpha_update && bpmem.zmode.update_enable &&
+            bpmem.zmode.func == CompareMode::Always)
+        {
+          const float* p = xfmem.projection.rawProjection.data();
+          const float zfar = p[4] != 0.0f ? p[5] / p[4] : 0.0f;
+          const DrawDepthRange& depth = draw_depth.GetFew();
+          if (bpmem.ztex2.op == ZTexOp::Replace ||
+              (zfar > 0.0f && depth.valid && depth.min >= zfar * 0.999f))
+          {
+            geometry_shader_manager.vr_stereo_override = 0.0f;
+          }
+        }
+
         // Exact virtual-screen depth: swap in the depth-exporting PS variant for draws that land
         // on the VR virtual screen (Screen/HeadLocked overrides and natural ortho draws). The PS
         // then writes the game's flat-screen depth from the flat-interpolated VS capture,
@@ -1785,9 +2154,8 @@ void VertexManagerBase::Flush()
               std::isnan(stereo_ovr) && g_ActiveConfig.vr_panes_on_screen &&
               g_ActiveConfig.vr_virtual_screen &&
               xfmem.projection.type == ProjectionType::Perspective &&
-              VR::ClassifyVRViewport(xfmem.viewport, bpmem.scissorOffset.x << 1,
-                                     bpmem.scissorOffset.y << 1) ==
-                  VR::VRViewportClass::HudElement;
+              VR::ClassifyVRViewport(xfmem.viewport, VR::GetVRScissor(), bpmem.scissorOffset.x << 1,
+                                     bpmem.scissorOffset.y << 1) == VR::VRViewportClass::HudElement;
           if (forced_screen || natural_ortho || auto_pane)
           {
             auto* const ps_uid_data = m_current_pipeline_config.ps_uid.GetUidData();
@@ -1796,12 +2164,25 @@ void VertexManagerBase::Flush()
             {
               ps_uid_data->vr_screen_exact_depth = 1;
               uber_ps_uid_data->vr_screen_exact_depth = 1;
+              m_ps_override_ids = {};
               m_pipeline_config_changed = true;
               UpdatePipelineObject();
             }
           }
         }
 
+#ifdef ENABLE_VR
+        {
+          const u32 load = m_frame_projection_loads > 0 ? m_frame_projection_loads - 1 : 0;
+          geometry_shader_manager.vr_skybox_draw =
+              DetectVRSkybox(draw_depth, m_vr_sky_projection_load == load);
+          if (geometry_shader_manager.vr_skybox_draw)
+            m_vr_sky_projection_load = load;
+        }
+#endif
+
+        // A picked hide code's preview matched this draw's vertex data.
+        shader_hunter_force_pink = shader_hunter_force_pink || pink_preview_batch;
         if (!hunter_skip && !elements_skip && !texmgr_skip)
         {
           if (shader_hunter_force_pink && !m_pink_pixel_shader)
@@ -1825,29 +2206,93 @@ void VertexManagerBase::Flush()
           }
           m_force_pink_ps = shader_hunter_force_pink;
 
+          const bool pane_raster_overridden =
+              manual_screen_pane &&
+              BPFunctions::SetVRPaneScreenViewport(g_framebuffer_manager.get());
+          // A full-view 2D effect in a letterboxed band whose scene VR shows over the whole frame
+          // (Metroid Prime's morph ball under water): over the whole frame too.
+          const bool band_raster_overridden =
+              !pane_raster_overridden && full_view_draw &&
+              xfmem.projection.type == ProjectionType::Orthographic &&
+              BPFunctions::SetVRFullViewBandViewport(g_framebuffer_manager.get());
+          // An orthographic draw in a pane of the frame that goes to the virtual screen (Wii Sports
+          // Resort's golf course map, 145x250): placed on the screen as if its viewport were the
+          // frame, then squeezed into the pane's rectangle of the eye images by that viewport, it
+          // landed far from its frame. Put the pane in its place on the screen and clip it there.
+          bool ortho_pane_raster_overridden = false;
+#ifdef ENABLE_VR
+          if (!pane_raster_overridden && !band_raster_overridden &&
+              g_ActiveConfig.stereo_mode == StereoMode::OpenXR && !vr_flat_mode &&
+              g_ActiveConfig.vr_virtual_screen &&
+              xfmem.projection.type == ProjectionType::Orthographic &&
+              (std::isnan(geometry_shader_manager.vr_stereo_override) ||
+               geometry_shader_manager.vr_stereo_override == -1.0f))
+          {
+            const int x_off = bpmem.scissorOffset.x << 1;
+            const int y_off = bpmem.scissorOffset.y << 1;
+            const VR::VRFrameRegion frame = VR::GetVRFrameRegion();
+            if (frame.valid && VR::ClassifyVRViewport(xfmem.viewport, VR::GetVRScissor(), x_off,
+                                                      y_off) == VR::VRViewportClass::HudElement)
+            {
+              const auto eye_rect =
+                  geometry_shader_manager.GetVRScreenRectInEyes(VR::CalculateVRPaneRect(
+                      xfmem.viewport, bpmem.scissorTL.x, bpmem.scissorTL.y, bpmem.scissorBR.x,
+                      bpmem.scissorBR.y, x_off, y_off, frame));
+              if (eye_rect &&
+                  BPFunctions::SetVRScreenRectViewport(g_framebuffer_manager.get(), *eye_rect))
+              {
+                geometry_shader_manager.vr_ortho_pane = true;
+                ortho_pane_raster_overridden = true;
+              }
+            }
+          }
+          // A block of the scene the game copied and draws back in place, distorted (indirect
+          // texturing: the warp around Metroid Prime's charged shots): the block taken where each
+          // eye sees it (PerEyeScreenCopies), drawn there in each eye, moved as far as its copy.
+          if (geometry_shader_manager.vr_stereo_override == 0.0f &&
+              g_ActiveConfig.vr_per_eye_screen_copies && bpmem.genMode.numindstages > 0 &&
+              xfmem.viewport.wd != 0.0f && xfmem.viewport.ht != 0.0f)
+          {
+            for (const u32 i : used_textures)
+            {
+              const auto offsets = g_texture_cache->ApplyVRPerEyeCopy(i);
+              if (!offsets)
+                continue;
+              geometry_shader_manager.vr_stereo_override =
+                  GeometryShaderManager::VR_STEREO_FULLSCREEN_PER_EYE;
+              for (size_t eye = 0; eye < 2; ++eye)
+              {
+                geometry_shader_manager.vr_fullscreen_eye_offsets[eye] = {
+                    (*offsets)[eye][0] / xfmem.viewport.wd, (*offsets)[eye][1] / xfmem.viewport.ht};
+              }
+              break;
+            }
+          }
+#endif
           const AbstractPipeline* pipeline_object = m_current_pipeline_object;
           if (!custom_pixel_shader_contents.shaders.empty())
           {
-            const AbstractPipeline* custom_pipeline = nullptr;
-            if (const auto async_pipeline =
+            if (const auto custom_pipeline =
                     GetCustomPipeline(custom_pixel_shader_contents, m_current_pipeline_config,
                                       m_current_uber_pipeline_config, m_current_pipeline_object))
-            {
-              custom_pipeline = async_pipeline;
-            }
-
-            if (custom_pipeline)
             {
               pipeline_object = custom_pipeline;
             }
           }
-          const bool pane_raster_overridden =
-              manual_screen_pane &&
-              BPFunctions::SetVRPaneScreenViewport(g_framebuffer_manager.get());
+          geometry_shader_manager.vr_hud_draw_depth = &draw_depth;
           RenderDrawCall(pixel_shader_manager, geometry_shader_manager,
                          custom_pixel_shader_contents, custom_pixel_shader_uniforms,
                          m_current_primitive_type, pipeline_object);
-          if (pane_raster_overridden)
+          geometry_shader_manager.vr_hud_draw_depth = nullptr;
+          // A cone-only batch must have been rendered from the head (immersive route); anything
+          // else means the cone may have removed visible geometry.
+          if (vr_cone_only)
+          {
+            const float route = geometry_shader_manager.constants.stereoparams[3];
+            if (route < 0.5f || route > 1.5f)
+              ++m_vr_cull_stats.misrouted;
+          }
+          if (pane_raster_overridden || band_raster_overridden || ortho_pane_raster_overridden)
           {
             BPFunctions::SetScissorAndViewport(g_framebuffer_manager.get(), bpmem.scissorTL,
                                                bpmem.scissorBR, bpmem.scissorOffset,
@@ -1870,6 +2315,11 @@ void VertexManagerBase::Flush()
   else
   {
     HideObjectEngine::Engine::GetInstance().DiscardPendingCapturedPrefixes();
+    if (vr_culled)
+    {
+      ++m_vr_culled_flushes;
+      ++m_vr_cull_stats.culled_draws;
+    }
   }
 
   if (xfmem.numTexGen.numTexGens != bpmem.genMode.numtexgens)
@@ -2012,6 +2462,7 @@ void VertexManagerBase::UpdatePipelineConfig()
   if (vs_uid != m_current_pipeline_config.vs_uid)
   {
     m_current_pipeline_config.vs_uid = vs_uid;
+    m_vs_override_ids = {};
     m_current_uber_pipeline_config.vs_uid = UberShader::GetVertexShaderUid();
     m_pipeline_config_changed = true;
   }
@@ -2020,6 +2471,7 @@ void VertexManagerBase::UpdatePipelineConfig()
   if (ps_uid != m_current_pipeline_config.ps_uid)
   {
     m_current_pipeline_config.ps_uid = ps_uid;
+    m_ps_override_ids = {};
     m_current_uber_pipeline_config.ps_uid = UberShader::GetPixelShaderUid();
     m_pipeline_config_changed = true;
   }
@@ -2028,6 +2480,7 @@ void VertexManagerBase::UpdatePipelineConfig()
   if (gs_uid != m_current_pipeline_config.gs_uid)
   {
     m_current_pipeline_config.gs_uid = gs_uid;
+    m_gs_override_ids = {};
     m_current_uber_pipeline_config.gs_uid = gs_uid;
     m_pipeline_config_changed = true;
   }
@@ -2212,17 +2665,23 @@ void VertexManagerBase::OnEndFrame()
     HideObjectEngine::Engine::GetInstance().LoadCodesIfNeeded(game_id);
   }
   hunter.OnFrameEnd();
-  CullingCodeFinder::GetInstance().OnFrameEnd();
   ElementsGroupManager::GetInstance().OnFrameEnd();
   Core::System::GetInstance().GetGeometryShaderManager().OnEndFrame();
   if (VR::g_openxr)
     VR::g_openxr->CommitCameraAnchorFrame();
+  // A VR patch hides the character's head only while an anchor holds the camera.
+  VR::CameraAnchorSource::SetEngaged(VR::g_openxr && VR::g_openxr->IsSessionRunning() &&
+                                     VR::g_openxr->IsCameraAnchorEngaged());
   TextureElementManager::GetInstance().OnFrameEnd();
   HideObjectEngine::Engine::GetInstance().OnFrameEnd();
   GetMetroidElementClassifier().ResetFrame();
   m_metroid_prime1_combat_context_seen = false;
   m_metroid_prime1_menu_context_seen = false;
+  UpdateVRCullPolicy();
   m_draw_counter = 0;
+  m_vr_culled_flushes = 0;
+  m_frame_projection_loads = 0;
+  m_vr_sky_projection_load.reset();
   m_last_efb_copy_draw_counter = 0;
   m_scheduled_command_buffer_kicks.clear();
 
@@ -2311,15 +2770,10 @@ void VertexManagerBase::RenderDrawCall(
     base_vertex <<= 2;
   }
 
-  VRPassthroughCoverageShaderMode coverage_mode =
+  const VRPassthroughCoverageShaderMode coverage_mode =
       m_current_pipeline_is_uber ?
           m_current_uber_pipeline_config.ps_uid.GetUidData()->vr_coverage_mode :
           m_current_pipeline_config.ps_uid.GetUidData()->vr_coverage_mode;
-  if (!custom_pixel_shader_contents.shaders.empty() &&
-      g_framebuffer_manager->HasEFBCoverage())
-  {
-    coverage_mode = VRPassthroughCoverageShaderMode::Prepass;
-  }
 
   if (coverage_mode == VRPassthroughCoverageShaderMode::Prepass)
   {
@@ -2371,24 +2825,6 @@ const AbstractPipeline* VertexManagerBase::GetCustomPipeline(
   {
     if (!custom_pixel_shader_contents.shaders.empty())
     {
-      VideoCommon::GXPipelineUid custom_pipeline_config = current_pipeline_config;
-      VideoCommon::GXUberPipelineUid custom_uber_pipeline_config =
-          current_uber_pipeline_config;
-      AbstractPipelineConfig custom_base_config = current_pipeline->m_config;
-      if (g_framebuffer_manager->HasEFBCoverage())
-      {
-        custom_pipeline_config.ps_uid.GetUidData()->vr_coverage_mode =
-            VRPassthroughCoverageShaderMode::Prepass;
-        custom_uber_pipeline_config.ps_uid.GetUidData()->vr_coverage_mode =
-            VRPassthroughCoverageShaderMode::Prepass;
-        // Match the shared with-coverage render pass (attachment 1 write-masked; the
-        // coverage itself comes from the separate prepass) so custom-shader draws don't
-        // force a render pass restart either.
-        custom_base_config.framebuffer_state = g_framebuffer_manager->GetEFBFramebufferState(true);
-        custom_base_config.additional_blending_state = RenderState::GetNoColorWriteBlendState();
-        custom_base_config.use_independent_blending = true;
-      }
-
       CustomShaderInstance custom_shaders;
       custom_shaders.pixel_contents = custom_pixel_shader_contents;
       switch (g_ActiveConfig.iShaderCompilationMode)
@@ -2397,7 +2833,7 @@ const AbstractPipeline* VertexManagerBase::GetCustomPipeline(
       case ShaderCompilationMode::AsynchronousSkipRendering:
       {
         if (auto pipeline = m_custom_shader_cache->GetPipelineAsync(
-                custom_pipeline_config, custom_shaders, custom_base_config))
+                current_pipeline_config, custom_shaders, current_pipeline->m_config))
         {
           return *pipeline;
         }
@@ -2405,34 +2841,22 @@ const AbstractPipeline* VertexManagerBase::GetCustomPipeline(
       break;
       case ShaderCompilationMode::SynchronousUberShaders:
       {
-        // Custom pixel shader injection is only supported by specialized pixel shader generation.
-        // Avoid custom ubershader fallback in this mode so behavior is consistent across backends.
-        if (!custom_pixel_shader_contents.shaders.empty())
+        // D3D has issues compiling large custom ubershaders
+        // use specialized shaders instead
+        if (g_backend_info.api_type == APIType::D3D)
         {
           if (auto pipeline = m_custom_shader_cache->GetPipelineAsync(
-                  custom_pipeline_config, custom_shaders, custom_base_config))
+                  current_pipeline_config, custom_shaders, current_pipeline->m_config))
           {
             return *pipeline;
           }
         }
         else
         {
-          // D3D has issues compiling large custom ubershaders, use specialized shaders instead.
-          if (g_backend_info.api_type == APIType::D3D)
+          if (auto pipeline = m_custom_shader_cache->GetPipelineAsync(
+                  current_uber_pipeline_config, custom_shaders, current_pipeline->m_config))
           {
-            if (auto pipeline = m_custom_shader_cache->GetPipelineAsync(
-                    custom_pipeline_config, custom_shaders, custom_base_config))
-            {
-              return *pipeline;
-            }
-          }
-          else
-          {
-            if (auto pipeline = m_custom_shader_cache->GetPipelineAsync(
-                    custom_uber_pipeline_config, custom_shaders, custom_base_config))
-            {
-              return *pipeline;
-            }
+            return *pipeline;
           }
         }
       }
@@ -2440,18 +2864,14 @@ const AbstractPipeline* VertexManagerBase::GetCustomPipeline(
       case ShaderCompilationMode::AsynchronousUberShaders:
       {
         if (auto pipeline = m_custom_shader_cache->GetPipelineAsync(
-                custom_pipeline_config, custom_shaders, custom_base_config))
+                current_pipeline_config, custom_shaders, current_pipeline->m_config))
         {
           return *pipeline;
         }
-        // Custom pixel shader injection is only supported by specialized shaders.
-        else if (custom_pixel_shader_contents.shaders.empty())
+        else if (auto uber_pipeline = m_custom_shader_cache->GetPipelineAsync(
+                     current_uber_pipeline_config, custom_shaders, current_pipeline->m_config))
         {
-          if (auto uber_pipeline = m_custom_shader_cache->GetPipelineAsync(
-                  custom_uber_pipeline_config, custom_shaders, custom_base_config))
-          {
-            return *uber_pipeline;
-          }
+          return *uber_pipeline;
         }
       }
       break;

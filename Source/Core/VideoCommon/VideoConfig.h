@@ -412,7 +412,9 @@ struct VideoConfig final
   float vr_head_locked_curvature = 0.0f;
   bool vr_dont_clear_screen = false;
   bool vr_load_custom_shaders = false;
-  bool vr_disable_cpu_cull = false;
+  bool vr_head_cpu_cull = true;
+  int vr_gaze_ram_copies = 0;
+  bool vr_per_eye_screen_copies = false;
   OpenXRMirrorView vr_mirror_view = OpenXRMirrorView::BothEyes;
   OpenXRReferenceSpaceMode vr_reference_space_mode = OpenXRReferenceSpaceMode::Local;
   OpenXRTrackingMode vr_tracking_mode = OpenXRTrackingMode::Full6DoF;
@@ -433,6 +435,7 @@ struct VideoConfig final
   bool vr_detect_render_targets = false;  // Exempt square render-to-texture passes from VR
   bool vr_ortho_scissor_fix = true;  // Expand scissor for orthographic VR draws
   bool vr_detect_skybox = false;     // Treat objects drawn at camera origin (0,0,0) as skyboxes
+  bool vr_skip_background_fill = false;  // Skip opaque untextured depth-tested background fill quads
   bool vr_metroid_thermal_visor_fix = false;  // Preserve thermal EFB copy layers for MP1 Vulkan
   bool vr_metroid_d3d_thermal_palette_fix = false;  // Layered MP1 thermal palette conversion on D3D11
   bool vr_passthrough = false;  // Show the headset camera feed behind unrendered (transparent) areas
@@ -467,6 +470,7 @@ struct VideoConfig final
 
   // Multithreaded submission, currently only supported with Vulkan.
   bool bBackendMultithreading = true;
+  bool bVulkanRecordingWorker = false;
 
   // Early command buffer execution interval in number of draws.
   // Currently only supported with Vulkan.
@@ -508,6 +512,17 @@ struct VideoConfig final
     return bPreferVSForLinePointExpansion;
   }
   bool MultisamplingEnabled() const { return iMultisamples > 1; }
+  // True when the 2-layer OpenXR stereo EFB is rendered through VK_KHR_multiview.
+  // Matches ShaderHostConfig::vk_multiview so pipelines and framebuffers always agree.
+  bool UseStereoMultiview() const
+  {
+#ifdef ENABLE_VR
+    return stereo_mode == StereoMode::OpenXR && vr_use_vulkan_multiview &&
+           g_backend_info.bSupportsMultiview && iMultisamples == 1;
+#else
+    return false;
+#endif
+  }
   // True whenever game content is rendered/presented through OpenXR: immersive stereo, the flat
   // mono panel path, or the classic-SBS stereoscopic virtual-screen path. Flat Vulkan output can
   // separately run OpenXR for controller input without switching its renderer or presentation.

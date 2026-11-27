@@ -203,6 +203,8 @@ add_executable(dolphin-emu
   Config/NewPatchDialog.h
   Config/PatchesWidget.cpp
   Config/PatchesWidget.h
+  Config/VRPatchesWidget.cpp
+  Config/VRPatchesWidget.h
   Config/HideObjectAddEditDialog.cpp
   Config/HideObjectAddEditDialog.h
   Config/HideObjectWidget.cpp
@@ -465,6 +467,12 @@ add_executable(dolphin-emu
   Updater.h
   WiiUpdate.cpp
   WiiUpdate.h
+  WiimoteMotionTester/WiimoteMotionPlot.cpp
+  WiimoteMotionTester/WiimoteMotionPlot.h
+  WiimoteMotionTester/WiimoteMotionTesterWindow.cpp
+  WiimoteMotionTester/WiimoteMotionTesterWindow.h
+  WiimoteMotionTester/WiimoteMotionView.cpp
+  WiimoteMotionTester/WiimoteMotionView.h
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

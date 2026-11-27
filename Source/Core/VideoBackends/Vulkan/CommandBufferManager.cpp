@@ -252,6 +252,7 @@ VkDescriptorPool CommandBufferManager::CreateDescriptorPool(u32 max_descriptor_s
 
 VkDescriptorSet CommandBufferManager::AllocateDescriptorSet(VkDescriptorSetLayout set_layout)
 {
+  AssertRecordingOwner("AllocateDescriptorSet");
   VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
   FrameResources& resources = GetCurrentFrameResources();
 
@@ -894,6 +895,13 @@ void CommandBufferManager::DeferPipelineDestruction(VkPipeline object)
   CmdBufferResources& cmd_buffer_resources = GetCurrentCmdBufferResources();
   cmd_buffer_resources.cleanup_resources.push_back(
       [object] { vkDestroyPipeline(g_vulkan_context->GetDevice(), object, nullptr); });
+}
+
+void CommandBufferManager::DeferDescriptorPoolDestruction(VkDescriptorPool object)
+{
+  CmdBufferResources& cmd_buffer_resources = GetCurrentCmdBufferResources();
+  cmd_buffer_resources.cleanup_resources.push_back(
+      [object] { vkDestroyDescriptorPool(g_vulkan_context->GetDevice(), object, nullptr); });
 }
 
 void CommandBufferManager::DeferImageViewDestruction(VkImageView object)
