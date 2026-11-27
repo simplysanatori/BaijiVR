@@ -188,6 +188,8 @@ private:
   VkDescriptorPool m_sampler_set_pool = VK_NULL_HANDLE;
   u32 m_sampler_set_pool_used = 0;
   bool m_sampler_set_pool_exhausted = false;
+  // Latched at creation: the cache is part of the recording worker's changes.
+  bool m_cache_sampler_sets = false;
   // Hash of m_bindings.samplers, maintained per slot so a draw does not rehash all bindings.
   std::array<size_t, VideoCommon::MAX_PIXEL_SHADER_SAMPLERS> m_sampler_slot_hashes{};
   size_t m_sampler_bindings_hash = 0;

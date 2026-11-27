@@ -67,6 +67,7 @@ void StateTracker::DestroyInstance()
 
 bool StateTracker::Initialize()
 {
+  m_cache_sampler_sets = g_ActiveConfig.bVulkanRecordingWorker;
   // Create a dummy texture which can be used in place of a real binding.
   m_dummy_texture = VKTexture::Create(TextureConfig(1, 1, 1, 1, 1, AbstractTextureFormat::RGBA8, 0,
                                                     AbstractTextureType::Texture_2DArray),
@@ -724,8 +725,12 @@ void StateTracker::UpdateGXDescriptorSet()
   if (m_dirty_flags & DIRTY_FLAG_GX_SAMPLERS || m_gx_descriptor_sets[1] == VK_NULL_HANDLE)
   {
     auto& perf = g_vulkan_context->GetPerfCounters();
+    // Cached sampler sets only with the recording worker; otherwise each change writes a set in
+    // the frame's pool, as before.
     m_gx_descriptor_sets[1] =
-        m_sampler_descriptor_cache.Find(m_bindings.samplers, m_sampler_bindings_hash);
+        m_cache_sampler_sets ?
+            m_sampler_descriptor_cache.Find(m_bindings.samplers, m_sampler_bindings_hash) :
+            VK_NULL_HANDLE;
     if (m_gx_descriptor_sets[1] != VK_NULL_HANDLE)
     {
       perf.sampler_cache_hits.fetch_add(1, std::memory_order_relaxed);
@@ -735,7 +740,7 @@ void StateTracker::UpdateGXDescriptorSet()
       perf.sampler_cache_misses.fetch_add(1, std::memory_order_relaxed);
       // Once the cached sets' pool is full, write this one into the frame's pool, uncached,
       // until the next submit replaces that pool.
-      m_gx_descriptor_sets[1] = AllocateCachedSamplerSet();
+      m_gx_descriptor_sets[1] = m_cache_sampler_sets ? AllocateCachedSamplerSet() : VK_NULL_HANDLE;
       if (m_gx_descriptor_sets[1] != VK_NULL_HANDLE)
       {
         m_sampler_descriptor_cache.Insert(m_bindings.samplers, m_sampler_bindings_hash,
