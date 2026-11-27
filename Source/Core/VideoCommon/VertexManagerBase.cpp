@@ -172,10 +172,18 @@ MetroidProjectionMetrics BuildMetroidProjectionMetrics(const XFMemory& xf_memory
 
 MetroidElementProfile GetMetroidProfileForGameID(std::string_view game_id)
 {
+  if (game_id.starts_with("GM8") || game_id.starts_with("D43") || game_id.starts_with("D93"))
+    return MetroidElementProfile::Prime1GC;
+  if (game_id.starts_with("G2M") || game_id.starts_with("P2M"))
+    return MetroidElementProfile::Prime2GC;
   if (game_id.starts_with("R3I"))
     return MetroidElementProfile::Prime1Wii;
   if (game_id.starts_with("R32"))
     return MetroidElementProfile::Prime2Wii;
+  if (game_id.starts_with("RM3"))
+    return MetroidElementProfile::Prime3;
+  if (game_id.starts_with("R3M") || game_id.starts_with("R3O"))
+    return MetroidElementProfile::TrilogyAuto;
 
   return MetroidElementProfile::None;
 }
@@ -205,9 +213,10 @@ bool IsMetroidPrime1Profile(MetroidElementProfile profile)
 // Hydra's rules number a frame's projection loads, not its draws, and classify each load once.
 // Only Prime 2 GC is classified that way so far: the other profiles were tuned against a
 // classification per draw (the Prime 1 3D HUD and its scanner mask) and need their own tests.
+// Part of the dolphinXR rendering fixes: without them Prime 2 is classified per draw (0.9.1).
 bool ClassifiesPerProjectionLoad(MetroidElementProfile profile)
 {
-  return profile == MetroidElementProfile::Prime2GC;
+  return profile == MetroidElementProfile::Prime2GC && g_ActiveConfig.vr_dolphinxr_render_fixes;
 }
 
 MetroidHydraHudSettings GetMetroidHydraHudSettings(MetroidElementProfile profile,
@@ -1485,6 +1494,8 @@ void VertexManagerBase::Flush()
             if (metroid_profile_active)
             {
               metroid_profile = GetCachedMetroidProfile();
+              GetMetroidElementClassifier().SetPrime2LoadRules(
+                  g_ActiveConfig.vr_dolphinxr_render_fixes);
               if (ClassifiesPerProjectionLoad(metroid_profile))
               {
                 // Hydra classified a projection when a draw first used it, with the number of

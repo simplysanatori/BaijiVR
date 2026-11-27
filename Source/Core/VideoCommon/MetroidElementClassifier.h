@@ -125,6 +125,9 @@ public:
   void ResetFrame();
   MetroidElementLayer Classify(MetroidElementProfile profile,
                                const MetroidProjectionMetrics& metrics);
+  // Prime 2 rules for metrics numbered by projection load (dolphinXR): the scan reticle is the
+  // world load after the scan box. Off: Baiji 0.9.1's rules for metrics numbered by draw.
+  void SetPrime2LoadRules(bool on) { m_prime2_load_rules = on; }
 
 private:
   struct State
@@ -163,6 +166,8 @@ private:
   MetroidElementLayer ClassifyPrime2(State& state, const RoundedMetrics& metrics);
   MetroidElementLayer ClassifyPrime2Perspective(State& state, const RoundedMetrics& metrics);
   MetroidElementLayer ClassifyPrime2Ortho(State& state, const RoundedMetrics& metrics);
+
+  bool m_prime2_load_rules = true;
   MetroidElementLayer ClassifyPrime3(State& state, const RoundedMetrics& metrics);
   MetroidElementLayer ClassifyPrime3Perspective(State& state, const RoundedMetrics& metrics);
   MetroidElementLayer ClassifyPrime3Ortho(State& state, const RoundedMetrics& metrics);
