@@ -2,6 +2,21 @@
 
 Thanks to thejerf for [Baiji](../README.upstream.md) and to iChris4 for dolphinXR, which Baiji VR is built on.
 
+## Baiji VR 0.9.2 (beta)
+
+New from dolphinXR, all off until you turn them on. Each setting has a description in the VR menu and a tooltip in the window.
+
+- **VR Patches** in the Mods tab and in a game's **Properties**: the arm cannon, gun or sword follows a VR controller, or a first-person view, in
+  - Metroid Prime, Metroid Prime 2: Echoes, Metroid Prime 3: Corruption and Metroid Prime Trilogy
+  - Red Steel and Red Steel 2
+  - The Legend of Zelda: Twilight Princess (GameCube), The Wind Waker and Skyward Sword
+  - Wii Sports, Wii Sports Resort and Shadow the Hedgehog
+- **dolphinXR Wii Remote Motion**: MotionPlus and tilt from the VR controllers, with **Wii Remote Pitch**
+- **Wii Remote Motion Tester** in the **Tools** menu
+- Performance options: **Smart Foveated EFB**, **Vulkan Recording Worker**, **Head-Cone CPU Culling** and **Skip Background Fill**
+- Immersive: **dolphinXR Rendering Fixes** and **Screen Copies Follow Each Eye**
+- Red Steel 2 is the right way up in Immersive
+
 ## Baiji VR 0.9.1 (beta)
 
 - **Report a Problem** in the Help menu and in the VR menu's settings. Nothing is sent unless you press **Send Report**

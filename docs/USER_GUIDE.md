@@ -4,7 +4,7 @@ The short version is in the [README](../Readme.md). This guide has the rest: ins
 
 ## Status and known issues
 
-0.9.1 is a beta. The changes are listed in [CHANGELOG.md](CHANGELOG.md).
+0.9.2 is a beta. The changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 Known issues:
 

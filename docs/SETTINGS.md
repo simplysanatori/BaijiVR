@@ -76,6 +76,7 @@ More: [CONTROLS.md](CONTROLS.md#editing-the-controls).
 |---|---|
 | **Mods and Cheats** | Mods, cheats, patches and game settings for the game |
 | **Textures** | Texture packs for the game |
+| **VR Patches** | dolphinXR's scripts for the game: VR controls and first-person views. All off by default |
 
 Changes are for the game's next start.
 
@@ -111,6 +112,7 @@ Changes are for the game's next start.
 | **Store EFB Copies to Texture Only** | Faster. Some effects need it off |
 | **Store XFB Copies to Texture Only** | Faster. Some videos and loading screens need it off |
 | **Foveated Rendering** | Less detail at the edges of the view. Has to be off to change **Display** in the headset |
+| **Smart Foveated EFB** | With **Foveate the Game's Own Picture**: dolphinXR's way of choosing where detail is lowered. Off by default |
 | **Gamma** | Darkens a picture that is too bright |
 
 #### Performance
@@ -125,6 +127,7 @@ All are off by default. In the window they are under **Advanced**.
 | **Non-Blocking EFB Copies** | Does not wait for the GPU when the game copies the picture to memory | both |
 | **Non-Blocking Perf Queries** | Does not wait for the GPU's answers about what was drawn | both |
 | **Skip Overwritten Clears** | Leaves out clears that are drawn over anyway | Immersive |
+| **Vulkan Recording Worker** | Records the GPU's commands on another thread. From the next game start | both |
 | **Performance Log** | Writes a line a second to `perf.csv` in the Logs folder | both |
 
 ### Immersive
@@ -138,6 +141,11 @@ All are off by default. In the window they are under **Advanced**.
 | **Head Tracking** | **Turn and Move** (6DoF), **Turn Only** (3DoF) or **Off** |
 | **HUD Depth** | Spreads the layers of the HUD apart in depth |
 | **Remove Cinematic Bars** | The black bars at the top and bottom |
+| **dolphinXR Rendering Fixes** | For games drawn upside down, with far depth, a moved scene or picture copies. On for Red Steel 2 |
+| **Head-Cone CPU Culling** | Leaves out what is outside your headset's view. Faster; objects at the edges can go missing |
+| **dolphinXR Wii Remote Motion** | MotionPlus, tilt and pointer from the VR controllers, as in dolphinXR. **Wii Remote Pitch** tilts it |
+| **Screen Copies Follow Each Eye** | Effects such as Metroid Prime's charged shots line up in each eye |
+| **Skip Background Fill** | Leaves out flat full-screen fills behind the scene |
 
 ## Only in the window
 

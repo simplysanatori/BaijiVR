@@ -177,7 +177,7 @@ If you want to support this app or my other VR emulator, [Azahar VR](https://git
 ## Credits
 
 - [Baiji](https://github.com/thejerf/baijiSteamVR) by thejerf: the native Steam Frame version this is built on
-- [dolphinXR](https://github.com/iChris4/dolphinXR/) by iChris4: the VR modes, and some performance switches
+- [dolphinXR](https://github.com/iChris4/dolphinXR/) by iChris4: the VR modes, VR Patches, Wii Remote motion and some performance switches
 - [Dolphin](https://dolphin-emu.org/): the emulator
 - [Azahar VR](https://github.com/simplysanatori/AzaharVR), my Azahar fork: the VR menu, Dynamic Resolution, the window in Game Mode and downloads
 - [libretro-thumbnails](https://github.com/libretro-thumbnails): the covers and banners
