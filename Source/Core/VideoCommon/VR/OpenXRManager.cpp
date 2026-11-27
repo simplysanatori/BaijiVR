@@ -1336,6 +1336,7 @@ void OpenXRManager::DestroySession()
   m_camera_anchor_target_upm = 0.0f;
   m_camera_anchor_from_source = false;
   m_camera_anchor_hide = {};
+  PublishCameraAnchorView();
   m_game_camera_pitch.store(0.0f, std::memory_order_relaxed);
   m_haptic_pulse_until_us = {0, 0};
   ++m_pose_generation;
@@ -2790,7 +2791,7 @@ void OpenXRManager::UpdateInputActions()
 
   Common::VR::OpenXRInputState::SetControllers(
       controllers, true, head_pose, profile_strings, m_session_focused, input_time,
-      head_view_pose, GetEffectiveUnitsPerMeter(), head_rig_pose);
+      head_view_pose, GetPublishedUnitsPerMeter(), head_rig_pose);
 
   UpdateHaptics();
 }
@@ -4073,6 +4074,29 @@ float OpenXRManager::GetEffectiveUnitsPerMeter() const
   return m_camera_anchor_upm > 0.0f ? m_camera_anchor_upm : g_ActiveConfig.vr_units_per_meter;
 }
 
+void OpenXRManager::PublishCameraAnchorView()
+{
+  CameraAnchorView view;
+  view.rotation_active = m_camera_anchor_rotation_active;
+  view.rotation = m_camera_anchor_rotation;
+  view.position = m_camera_anchor_position;
+  view.units_per_meter = m_camera_anchor_upm;
+  std::lock_guard lock(m_camera_anchor_view_mutex);
+  m_camera_anchor_view = view;
+}
+
+OpenXRManager::CameraAnchorView OpenXRManager::GetCameraAnchorView() const
+{
+  std::lock_guard lock(m_camera_anchor_view_mutex);
+  return m_camera_anchor_view;
+}
+
+float OpenXRManager::GetPublishedUnitsPerMeter() const
+{
+  const float upm = GetCameraAnchorView().units_per_meter;
+  return upm > 0.0f ? upm : g_ActiveConfig.vr_units_per_meter;
+}
+
 void OpenXRManager::CommitCameraAnchorFrame()
 {
   // Frames the last target survives without a matching draw before the camera
@@ -4177,6 +4201,8 @@ void OpenXRManager::CommitCameraAnchorFrame()
     if (!rotation_active)
       m_camera_anchor_rotation = CAMERA_ANCHOR_IDENTITY;
   }
+
+  PublishCameraAnchorView();
 
   // An engaged or gliding anchor moves the game-camera rig every frame.
   if (IsCameraAnchorEngaged())
@@ -4290,6 +4316,7 @@ void OpenXRManager::LatchCameraAnchorSource()
   }
   m_camera_anchor_from_source = true;
   m_camera_anchor_hide = *anchor;
+  PublishCameraAnchorView();
   ++m_pose_generation;
 }
 
@@ -4378,9 +4405,26 @@ bool OpenXRManager::MapAimPoseToGameView(const Common::VR::OpenXRPoseState& aim,
                                          std::array<float, 9>* out_rotation,
                                          bool remove_camera_pitch, bool apply_camera_anchor) const
 {
+  // Video thread: the anchor as it is now.
+  CameraAnchorView anchor;
+  anchor.rotation_active = m_camera_anchor_rotation_active;
+  anchor.rotation = m_camera_anchor_rotation;
+  anchor.position = m_camera_anchor_position;
+  anchor.units_per_meter = m_camera_anchor_upm;
+  return MapAimPoseToGameView(anchor, aim, units_per_meter, out_position, out_rotation,
+                              remove_camera_pitch, apply_camera_anchor);
+}
+
+bool OpenXRManager::MapAimPoseToGameView(const CameraAnchorView& anchor,
+                                         const Common::VR::OpenXRPoseState& aim,
+                                         float units_per_meter,
+                                         std::array<float, 3>* out_position,
+                                         std::array<float, 9>* out_rotation,
+                                         bool remove_camera_pitch, bool apply_camera_anchor) const
+{
   if (!aim.valid || !out_position)
     return false;
-  const bool anchor_rotation = apply_camera_anchor && m_camera_anchor_rotation_active;
+  const bool anchor_rotation = apply_camera_anchor && anchor.rotation_active;
 
   // Replay of the GetEyeProjectionRows eye-position chain (home offset, camera
   // height/forward, anchor rotation, anchor position) with the controller substituted
@@ -4393,7 +4437,7 @@ bool OpenXRManager::MapAimPoseToGameView(const Common::VR::OpenXRPoseState& aim,
   float pz = rig[2] * s;
   if (anchor_rotation)
   {
-    const std::array<float, 9>& A = m_camera_anchor_rotation;
+    const std::array<float, 9>& A = anchor.rotation;
     const float rx = px, ry = py, rz = pz;
     px = A[0] * rx + A[1] * ry + A[2] * rz;
     py = A[3] * rx + A[4] * ry + A[5] * rz;
@@ -4411,9 +4455,9 @@ bool OpenXRManager::MapAimPoseToGameView(const Common::VR::OpenXRPoseState& aim,
   }
   if (apply_camera_anchor)
   {
-    px += m_camera_anchor_position[0];
-    py += m_camera_anchor_position[1];
-    pz += m_camera_anchor_position[2];
+    px += anchor.position[0];
+    py += anchor.position[1];
+    pz += anchor.position[2];
   }
 
   // Controller orientation in view space. Standard quaternion-to-matrix, columns =
@@ -4430,7 +4474,7 @@ bool OpenXRManager::MapAimPoseToGameView(const Common::VR::OpenXRPoseState& aim,
                               xz - wy,        yz + wx,        1.0f - x2 - y2};
   if (anchor_rotation)
   {
-    const std::array<float, 9>& A = m_camera_anchor_rotation;
+    const std::array<float, 9>& A = anchor.rotation;
     const std::array<float, 9> c = rot;
     for (int r = 0; r < 3; ++r)
     {
@@ -4464,10 +4508,14 @@ void OpenXRManager::ComputeViewPose(const Common::VR::OpenXRPoseState& aim,
   *out_pose = {};
   if (!aim.valid || g_ActiveConfig.vr_flat_screen || g_ActiveConfig.vr_stereo_screen)
     return;
-  const float upm = std::max(GetEffectiveUnitsPerMeter(), 0.0001f);
+  // Pacing thread: one consistent copy of the anchor the video thread committed.
+  const CameraAnchorView anchor = GetCameraAnchorView();
+  const float upm = std::max(
+      anchor.units_per_meter > 0.0f ? anchor.units_per_meter : g_ActiveConfig.vr_units_per_meter,
+      0.0001f);
   std::array<float, 3> position{};
   std::array<float, 9> m{};
-  if (!MapAimPoseToGameView(aim, upm, &position, &m, remove_camera_pitch))
+  if (!MapAimPoseToGameView(anchor, aim, upm, &position, &m, remove_camera_pitch, true))
     return;
 
   // Rotation matrix (columns = controller axes in view space) to a quaternion.
@@ -4578,10 +4626,10 @@ void OpenXRManager::ComputeVirtualScreenHit(const Common::VR::OpenXRPoseState& a
   // Immersive mode: the ortho virtual screen lives in game view space at z = -distance,
   // extents {half_h * 16/9, half_h} (see GeometryShaderManager's cvr_screen constants).
   // Map the aim pose through the same chain the eye takes so the hit matches what is drawn.
-  const float upm = std::max(GetEffectiveUnitsPerMeter(), 0.0001f);
+  const float upm = std::max(GetPublishedUnitsPerMeter(), 0.0001f);
   std::array<float, 3> pos{};
   std::array<float, 9> rot{};
-  if (!MapAimPoseToGameView(aim, upm, &pos, &rot, true, false))
+  if (!MapAimPoseToGameView(CameraAnchorView{}, aim, upm, &pos, &rot, true, false))
     return;
 
   // Aim forward in view space = -third column of the rotation.

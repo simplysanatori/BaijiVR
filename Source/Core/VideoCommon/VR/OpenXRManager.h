@@ -611,6 +611,25 @@ private:
                             std::array<float, 9>* out_rotation,
                             bool remove_camera_pitch = true,
                             bool apply_camera_anchor = true) const;
+  // The camera anchor's smoothed values, as the video thread last committed them. The pacing
+  // thread reads them through GetCameraAnchorView (a copy under m_camera_anchor_view_mutex, a leaf
+  // lock: nothing else is taken while it is held).
+  struct CameraAnchorView
+  {
+    bool rotation_active = false;
+    std::array<float, 9> rotation{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    std::array<float, 3> position{};
+    float units_per_meter = 0.0f;  // 0 = the global setting
+  };
+  bool MapAimPoseToGameView(const CameraAnchorView& anchor, const Common::VR::OpenXRPoseState& aim,
+                            float units_per_meter, std::array<float, 3>* out_position,
+                            std::array<float, 9>* out_rotation, bool remove_camera_pitch,
+                            bool apply_camera_anchor) const;
+  // Video thread: after the anchor values change.
+  void PublishCameraAnchorView();
+  CameraAnchorView GetCameraAnchorView() const;
+  // GetEffectiveUnitsPerMeter for the pacing thread, from the published anchor.
+  float GetPublishedUnitsPerMeter() const;
   void ComputeViewPose(const Common::VR::OpenXRPoseState& aim,
                        Common::VR::OpenXRPoseState* out_pose,
                        bool remove_camera_pitch = true) const;
@@ -716,6 +735,8 @@ private:
   int m_camera_anchor_latches_behind = 0;
   int m_camera_anchor_latches_rebased = 0;
   u64 m_pose_generation = 0;  // Video thread only; see GetPoseGeneration.
+  mutable std::mutex m_camera_anchor_view_mutex;
+  CameraAnchorView m_camera_anchor_view;
   // LatchGameCameraPitch: read on the video thread, used on the pacing thread too.
   std::atomic<float> m_game_camera_pitch{0.0f};
 
